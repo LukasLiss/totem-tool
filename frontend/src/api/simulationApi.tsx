@@ -36,6 +36,8 @@ export type SimulationOverrides = {
   arrival_distributions?: Record<number, Record<string, Record<string, number>>>;
   cooldowns?: CooldownDistribution;
   allocation_strategy?: AllocationStrategy;
+  // Only the type calendars the user edited: an edited type calendar replaces
+  // the mined shift patterns for that type (every instance follows it).
   type_calendars?: Record<string, CalendarProbability>;
   resource_calendars?: Record<string, CalendarProbability>;
 };
@@ -183,6 +185,16 @@ export type VariantDetail = {
 // Resource Calendar: weekday -> hour[] (24 floats)
 export type CalendarProbability = Record<string, number[]>;
 
+// A shift pattern mined for a resource type: the calendar shared by a cluster of
+// its resources, the within-cluster spread per slot, and the share of the type's
+// resources following it. Simulated instances draw their calendar from these.
+export type ShiftPattern = {
+  probability: CalendarProbability;
+  spread: CalendarProbability;
+  share: number;
+  member_ids: string[];
+};
+
 export type SimulationDetailsResponse = {
   variants: VariantDetail[];
   num_variants: number;
@@ -190,6 +202,7 @@ export type SimulationDetailsResponse = {
   cooldown_distribution: CooldownDistribution;
   allocation_strategy: AllocationStrategy;
   type_calendars: Record<string, CalendarProbability>;
+  shift_patterns?: Record<string, ShiftPattern[]>;
   resource_calendars: Record<string, CalendarProbability>;
   log_start_unix: number | null;
   log_duration_days: number | null;

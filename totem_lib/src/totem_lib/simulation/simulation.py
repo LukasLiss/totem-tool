@@ -19,8 +19,10 @@ from totem_lib.simulation.utils.resource_allocation_strategy import (
     calculate_resource_allocation_strategy,
 )
 from totem_lib.simulation.utils.resource_calendar import (
+    assign_shift_calendars,
     availability_probability,
-    discover_resource_calendars,
+    discover_shift_patterns,
+    type_calendar_from_patterns,
 )
 from totem_lib.simulation.utils.resource_constraints import (
     generate_resource_constraints,
@@ -721,6 +723,7 @@ class OCProcessAreaSimulationModel:
         activity_delays=None,
         type_calendars=None,
         resource_calendars=None,
+        shift_patterns=None,
         fallback_constraints=None,
     ):
         self.playout_strategy = playout_strategy
@@ -734,6 +737,7 @@ class OCProcessAreaSimulationModel:
         self.activity_delays = activity_delays or {}
         self.type_calendars = type_calendars or {}
         self.resource_calendars = resource_calendars or {}
+        self.shift_patterns = shift_patterns or {}
 
     def run(
         self,
@@ -752,25 +756,57 @@ class OCProcessAreaSimulationModel:
             progress_callback=progress_callback,
         )
 
+    @staticmethod
+    def discover_resource_availability(ocel, resource_types, activities):
+        """Mines calendars, shift patterns and cooldowns for the resource types.
+
+        Individual calendars are mined per resource object and clustered into
+        shift patterns per type; the type calendar is the share-weighted mean of
+        those patterns. Cooldown gaps are discounted against the calendar of the
+        resource that produced them, so the samples are calendar-free occupation
+        time.
+
+        Args:
+            ocel: Unfiltered ObjectCentricEventLog.
+            resource_types: Object types treated as resources.
+            activities: Activities whose cooldowns are mined.
+
+        Returns:
+            ``(type_calendars, shift_patterns, calendars, cooldown_dist)`` where
+            ``calendars`` is the flat lookup ``{resource id | type: matrix}`` used
+            for discounting.
+        """
+        type_calendars = {}
+        shift_patterns = {}
+        calendars = {}
+        if resource_types:
+            individual, patterns = discover_shift_patterns(
+                ocel, resource_types, ocel.obj_type_map
+            )
+            for rtype, pats in patterns.items():
+                shift_patterns[rtype] = [pat.to_dict() for pat in pats]
+                mean = type_calendar_from_patterns(pats)
+                if mean is not None:
+                    type_calendars[rtype] = mean
+            calendars = dict(type_calendars)
+            for members in individual.values():
+                for rid, cal in members.items():
+                    calendars[rid] = cal
+        cooldown_dist = resource_cooldown_distribution(
+            ocel, resource_types, activities, calendars=calendars
+        )
+        return type_calendars, shift_patterns, calendars, cooldown_dist
+
     @classmethod
     def for_simple_simulation(cls, ocel, process_area):
 
         # Resource object types are an explicit input on the process area
         resource_types = process_area.resource_types
 
-        # Discover resource availability calendars
-        type_calendars = {}
-        if resource_types:
-            type_calendars = {
-                rtype: cal.probability
-                for rtype, cal in discover_resource_calendars(
-                    ocel, resource_types, ocel.obj_type_map
-                ).items()
-            }
-
-        # Calculate Resource Cooldown Distribution including the resource calendars
-        resource_cooldown_dist = resource_cooldown_distribution(
-            ocel, resource_types, process_area.activities, calendars=type_calendars
+        type_calendars, shift_patterns, calendars, resource_cooldown_dist = (
+            cls.discover_resource_availability(
+                ocel, resource_types, process_area.activities
+            )
         )
 
         # Filter event log on Process Area
@@ -792,7 +828,7 @@ class OCProcessAreaSimulationModel:
 
         # Calculate Resource Allocation Strategy
         resource_allocation_strategy = calculate_resource_allocation_strategy(
-            filtered_ocel, resource_cooldown_dist, ocel.obj_type_map, type_calendars
+            filtered_ocel, resource_cooldown_dist, ocel.obj_type_map, calendars
         )
 
         # Calculate needed resources per activity.
@@ -818,6 +854,7 @@ class OCProcessAreaSimulationModel:
             source_log_start_unix,
             activity_delays=activity_delays,
             type_calendars=type_calendars,
+            shift_patterns=shift_patterns,
             fallback_constraints=fallback_constraints,
         )
 
@@ -826,19 +863,10 @@ class OCProcessAreaSimulationModel:
         # Resource object types are an explicit input on the process area
         resource_types = process_area.resource_types
 
-        # Discover resource availability calendars
-        type_calendars = {}
-        if resource_types:
-            type_calendars = {
-                rtype: cal.probability
-                for rtype, cal in discover_resource_calendars(
-                    ocel, resource_types, ocel.obj_type_map
-                ).items()
-            }
-
-        # Calculate Resource Cooldown Distribution
-        resource_cooldown_dist = resource_cooldown_distribution(
-            ocel, resource_types, process_area.activities, calendars=type_calendars
+        type_calendars, shift_patterns, calendars, resource_cooldown_dist = (
+            cls.discover_resource_availability(
+                ocel, resource_types, process_area.activities
+            )
         )
 
         # Filter event log on Process Area
@@ -875,7 +903,7 @@ class OCProcessAreaSimulationModel:
 
         # Calculate Resource Allocation Strategy
         resource_allocation_strategy = calculate_resource_allocation_strategy(
-            filtered_ocel, resource_cooldown_dist, ocel.obj_type_map, type_calendars
+            filtered_ocel, resource_cooldown_dist, ocel.obj_type_map, calendars
         )
 
         # Per-structure needed resources per activity.
@@ -901,6 +929,7 @@ class OCProcessAreaSimulationModel:
             source_log_start_unix,
             activity_delays=activity_delays,
             type_calendars=type_calendars,
+            shift_patterns=shift_patterns,
             fallback_constraints=fallback_constraints,
         )
 
@@ -988,6 +1017,21 @@ def _expand_resource_pool(resource_pool):
         res_type: list(rids) for res_type, rids in resource_pool_expanded.items()
     }
     return resource_pool_expanded, resource_id_type_map, resource_queues
+
+
+def _build_calendar_gate(simulation_model, resource_pool_expanded):
+    """The calendar gate for a run: shift patterns realized per instance.
+
+    Every instance of a type with mined shift patterns draws its own calendar
+    from them; explicit per-instance calendars on the model (user overrides)
+    take precedence, and a type without patterns falls back to its type
+    calendar inside the gate.
+    """
+    instance_calendars = assign_shift_calendars(
+        resource_pool_expanded, simulation_model.shift_patterns
+    )
+    instance_calendars.update(simulation_model.resource_calendars)
+    return _CalendarGate(simulation_model.type_calendars, instance_calendars)
 
 
 def _release_elapsed_cooldowns(
@@ -1276,10 +1320,6 @@ class VariantPlayoutStrategy:
         )
         simulation_config = simulation_model.simulation_config
 
-        # Calendar-based resource availability gating
-        calendar_gate = _CalendarGate(
-            simulation_model.type_calendars, simulation_model.resource_calendars
-        )
         base_ts = int(start_datetime.timestamp())
 
         activity_delays = simulation_model.activity_delays or {}
@@ -1298,6 +1338,7 @@ class VariantPlayoutStrategy:
         resource_pool_expanded, resource_id_type_map, resource_queues = (
             _expand_resource_pool(resource_pool)
         )
+        calendar_gate = _build_calendar_gate(simulation_model, resource_pool_expanded)
 
         blocked_resources = set()  # Resources currently blocked (on cooldown)
         active_executions = []
@@ -1634,9 +1675,6 @@ class StateSpacePlayoutStrategy:
         # Resource demand per structure variant: {structure_variant: {activity: ...}}.
         resource_distribution = simulation_model.needed_resources_per_activity or {}
         simulation_config = simulation_model.simulation_config
-        calendar_gate = _CalendarGate(
-            simulation_model.type_calendars, simulation_model.resource_calendars
-        )
         base_ts = int(start_datetime.timestamp())
         activity_delays = simulation_model.activity_delays or {}
         model_durations = bool(
@@ -1653,6 +1691,7 @@ class StateSpacePlayoutStrategy:
         resource_pool_expanded, resource_id_type_map, resource_queues = (
             _expand_resource_pool(resource_pool)
         )
+        calendar_gate = _build_calendar_gate(simulation_model, resource_pool_expanded)
 
         # Per-structure violation budget: a structure's expected activity
         # occurrences (Monte-Carlo) × its resource demand. Mirrors the variant

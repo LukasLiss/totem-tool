@@ -115,9 +115,13 @@ def test_for_advanced_simulation_runs_end_to_end():
 def test_advanced_cooldowns_and_calendars_keyed_by_resource_type():
     """Cooldowns and calendars are discovered for the resource types passed in
     (Worker), not for the process area's object types (audit H1). A Worker-keyed
-    cooldown is what actually gates the resource in the playout."""
+    cooldown is what actually gates the resource in the playout.
+
+    The log spans several weeks on purpose: calendar discovery withholds a
+    calendar from resources whose activity is too thin to show a weekly rhythm.
+    """
     model = OCProcessAreaSimulationModel.for_advanced_simulation(
-        _raw_order_log(), _process_area()
+        _raw_order_log(n_cases=90), _process_area()
     )
 
     # Every activity's cooldown is keyed by the resource type, never by Order/Item.

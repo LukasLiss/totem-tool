@@ -29,6 +29,7 @@ import {
   SimulationProgress,
   VariantConstraints,
   CalendarProbability,
+  ShiftPattern,
   CooldownDistribution,
   AllocationStrategy,
   PaperEvaluationResult,
@@ -38,6 +39,7 @@ import { ArrivalDistributionEditor } from "@/components/simulation/ArrivalDistri
 import {
   ResourceCalendarEditor,
   CalendarOverrideGroup,
+  calendarsEqual,
 } from "@/components/simulation/ResourceCalendarEditor";
 import { ConstraintsEditorPanel } from "@/components/simulation/ConstraintsEditor";
 import { CooldownEditor } from "@/components/simulation/CooldownEditor";
@@ -291,6 +293,7 @@ export const SimulationDashboard: React.FC = () => {
   // chosen sets of individual resources.
   const [typeCalendars, setTypeCalendars] = useState<Record<string, CalendarProbability>>({});
   const [discoveredTypeCalendars, setDiscoveredTypeCalendars] = useState<Record<string, CalendarProbability>>({});
+  const [shiftPatterns, setShiftPatterns] = useState<Record<string, ShiftPattern[]>>({});
   const [calendarOverrides, setCalendarOverrides] = useState<CalendarOverrideGroup[]>([]);
 
   // Cooldowns and allocation strategy
@@ -543,6 +546,7 @@ export const SimulationDashboard: React.FC = () => {
 
       // Store raw discovered type calendars for reference display (heatmap background)
       setDiscoveredTypeCalendars(data.type_calendars || {});
+      setShiftPatterns(data.shift_patterns || {});
 
       // Initialize the editable calendars from the discovered probabilities:
       // Types without any discovered data fall back to a plain Mon–Fri 08:00–17:00 default.
@@ -666,6 +670,12 @@ export const SimulationDashboard: React.FC = () => {
       details.variants.forEach((v) => {
         arrivalDistributions[v.id] = v.arrival_distribution.avg_arrivals_per_hour || {};
       });
+      // Only type calendars the user changed are sent: an untouched type keeps
+      // its mined shift patterns, an edited one pins every instance to the edit.
+      const editedTypeCalendars: Record<string, CalendarProbability> = {};
+      Object.entries(typeCalendars).forEach(([rt, cal]) => {
+        if (!calendarsEqual(cal, discoveredTypeCalendars[rt])) editedTypeCalendars[rt] = cal;
+      });
       // Expand the custom calendar groups into a per-resource-instance map keyed
       // by simulated resource id (e.g. "Worker_1"), which the engine gates on.
       const resourceCalendars: Record<string, CalendarProbability> = {};
@@ -692,7 +702,7 @@ export const SimulationDashboard: React.FC = () => {
         arrival_distributions: arrivalDistributions,
         cooldowns,
         allocation_strategy: allocationStrategy,
-        type_calendars: typeCalendars,
+        type_calendars: editedTypeCalendars,
         resource_calendars: resourceCalendars,
       };
     }
@@ -1237,6 +1247,7 @@ export const SimulationDashboard: React.FC = () => {
               resourcePool={resourcePool}
               typeCalendars={typeCalendars}
               discoveredTypeCalendars={discoveredTypeCalendars}
+              shiftPatterns={shiftPatterns}
               overrides={calendarOverrides}
               onTypeCalendarUpdate={(resourceType, weekday, hours) => {
                 setTypeCalendars((prev) => ({

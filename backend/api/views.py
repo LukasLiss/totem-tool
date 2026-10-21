@@ -34,9 +34,11 @@ from .simulation_cooldowns import apply_cooldown_selection, serialize_cooldowns
 from totem_lib.simulation.utils.process_area import ProcessArea
 from totem_lib.simulation.utils.basic_simulation_statistics import variant_arrival_distribution as compute_variant_arrival_distribution, resource_distribution_of_variants
 from totem_lib.simulation.utils.resource_constraints import generate_resource_constraints
-from totem_lib.simulation.utils.resource_calendar import discover_resource_calendars
+from totem_lib.simulation.utils.resource_calendar import (
+    discover_shift_patterns,
+    type_calendar_from_patterns,
+)
 from totem_lib.simulation.utils.resource_allocation_strategy import calculate_resource_allocation_strategy
-from totem_lib.simulation.utils.resource_cooldown import resource_cooldown_distribution as compute_resource_cooldown
 from totem_lib.variants.ocvariants import find_object_variants_connected_component
 from totem_lib.variants.state_space_executions import find_object_structure_variants
 import networkx as nx
@@ -2427,8 +2429,8 @@ _SIM_DETAILS_STEPS = [
     "Filtering event log by process area",
     "Mining variants and arrival distributions",
     "Discovering resource constraints",
-    "Discovering resource calendars",
-    "Computing resource cooldowns and allocation strategy",
+    "Discovering resource calendars, shift patterns and cooldowns",
+    "Computing resource allocation strategy",
 ]
 
 
@@ -2509,9 +2511,17 @@ def _apply_simulation_overrides(simulation_model, overrides):
     if allocation is not None:
         simulation_model.resource_allocation_strategy = allocation
 
+    # The frontend sends a type calendar only when the user edited it. An edited
+    # type calendar replaces the mined shift mixture for that type: every
+    # instance of the type follows the edited calendar.
     type_calendars = overrides.get("type_calendars")
-    if type_calendars is not None:
-        simulation_model.type_calendars = type_calendars
+    if type_calendars:
+        simulation_model.type_calendars = {
+            **simulation_model.type_calendars,
+            **type_calendars,
+        }
+        for rtype in type_calendars:
+            simulation_model.shift_patterns.pop(rtype, None)
 
     resource_calendars = overrides.get("resource_calendars")
     if resource_calendars is not None:
@@ -3057,7 +3067,8 @@ def get_process_areas(request):
 def get_simulation_details(request):
     """
     Pre-compute all simulation details: variants, arrival distribution, resource distribution,
-    constraints, cooldowns, allocation strategy, and resource calendars.
+    constraints, cooldowns, allocation strategy, resource calendars and the
+    shift patterns mined per resource type.
 
     Expected JSON body:
     {
@@ -3197,33 +3208,21 @@ def get_simulation_details(request):
                 "uses_fallback": uses_fallback,
             })
 
-        # Compute resource calendars first — the cooldown discovery below uses
-        # them to discount each resource's off hours from its occupation times.
+        # Mine calendars (individual -> shift patterns -> type mean) first: the
+        # cooldown discovery below discounts each resource's off hours from its
+        # occupation times against that resource's own calendar.
         _report_progress(progress_id, _SIM_DETAILS_STEPS, 4)
-        serialized_type_calendars = {}
-        if resource_types:
-            try:
-                type_cals = discover_resource_calendars(
-                    ocel, resource_types, ocel.obj_type_map
-                )
-                for rtype, cal in type_cals.items():
-                    serialized_type_calendars[rtype] = cal.probability
-            except Exception as e:
-                print(f"[SimDetails] Calendar discovery failed (non-critical): {e}")
-
-        # Compute resource cooldown distribution over the resource types (the
-        # object types that become resources), on the unfiltered log, discounting
-        # each resource's calendar off hours so cooldowns measure genuine
-        # occupation rather than absence.
-        _report_progress(progress_id, _SIM_DETAILS_STEPS, 5)
-        cooldown_dist = compute_resource_cooldown(
-            ocel, resource_types, activities, calendars=serialized_type_calendars
+        serialized_type_calendars, shift_patterns, calendars, cooldown_dist = (
+            OCProcessAreaSimulationModel.discover_resource_availability(
+                ocel, resource_types, activities
+            )
         )
         serialized_cooldowns = serialize_cooldowns(cooldown_dist)
 
         # Compute resource allocation strategy
+        _report_progress(progress_id, _SIM_DETAILS_STEPS, 5)
         allocation_strategy = calculate_resource_allocation_strategy(
-            filtered_ocel, cooldown_dist, ocel.obj_type_map
+            filtered_ocel, cooldown_dist, ocel.obj_type_map, calendars
         )
 
         # Time window of the *filtered* log
@@ -3243,6 +3242,7 @@ def get_simulation_details(request):
             "cooldown_distribution": serialized_cooldowns,
             "allocation_strategy": allocation_strategy,
             "type_calendars": serialized_type_calendars,
+            "shift_patterns": shift_patterns,
             "resource_calendars": {},
             "log_start_unix": filtered_start_unix,
             "log_duration_days": filtered_duration_days,
@@ -3266,7 +3266,8 @@ def get_resource_calendars(request):
         "resource_types": ["ResourceType1", "ResourceType2"]
     }
 
-    Returns per-type calendars as probability matrices (weekday x hour).
+    Returns per-type calendars as probability matrices (weekday x hour) and the
+    shift patterns they are the mean of.
     """
     file_id = request.data.get("file_id")
     resource_types = request.data.get("resource_types", [])
@@ -3292,18 +3293,18 @@ def get_resource_calendars(request):
             return Response({"error": f"Failed to load OCEL: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     try:
-        # Discover per-type calendars
-        type_calendars = discover_resource_calendars(
-            ocel, resource_types, ocel.obj_type_map
-        )
-
-        # Serialize type calendars
+        _, patterns = discover_shift_patterns(ocel, resource_types, ocel.obj_type_map)
         serialized_type_calendars = {}
-        for rtype, cal in type_calendars.items():
-            serialized_type_calendars[rtype] = cal.probability
+        shift_patterns = {}
+        for rtype, pats in patterns.items():
+            shift_patterns[rtype] = [pat.to_dict() for pat in pats]
+            mean = type_calendar_from_patterns(pats)
+            if mean is not None:
+                serialized_type_calendars[rtype] = mean
 
         return Response({
             "type_calendars": serialized_type_calendars,
+            "shift_patterns": shift_patterns,
             "resource_calendars": {},
         }, status=status.HTTP_200_OK)
 

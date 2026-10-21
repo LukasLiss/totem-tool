@@ -11,7 +11,7 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import { CalendarProbability } from "@/api/simulationApi";
+import { CalendarProbability, ShiftPattern } from "@/api/simulationApi";
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
@@ -34,6 +34,8 @@ type Props = {
   typeCalendars: Record<string, CalendarProbability>;
   /** Discovered probability calendars per type (heatmap background / reset target). */
   discoveredTypeCalendars?: Record<string, CalendarProbability>;
+  /** Shift patterns mined per type; simulated instances draw their calendar from these. */
+  shiftPatterns?: Record<string, ShiftPattern[]>;
   /** User-defined per-resource-set calendar overrides. */
   overrides: CalendarOverrideGroup[];
   onTypeCalendarUpdate: (resourceType: string, weekday: string, hours: number[]) => void;
@@ -85,6 +87,33 @@ function countHours(hours: number[]): number {
   return hours.reduce((acc, v) => acc + (v > 0 ? 1 : 0), 0);
 }
 
+/** True when both calendars hold the same 24 values for every weekday. */
+export function calendarsEqual(a?: CalendarProbability, b?: CalendarProbability): boolean {
+  if (!a || !b) return false;
+  return WEEKDAYS.every((d) => arraysEqual(a[d], b[d]));
+}
+
+/**
+ * Compact description of a pattern's working hours: weekdays with the same
+ * on-hours (probability >= 0.5) are grouped, e.g. "Mon–Fri 8–12 · Sat 8–10".
+ */
+function describePattern(cal: CalendarProbability): string {
+  const dayLabels = WEEKDAYS.map((d) => d.slice(0, 3));
+  const perDay = WEEKDAYS.map((d) => formatSegments((cal[d] || []).map((v) => (v >= 0.5 ? 1 : 0))));
+  const parts: string[] = [];
+  let i = 0;
+  while (i < perDay.length) {
+    let j = i;
+    while (j + 1 < perDay.length && perDay[j + 1] === perDay[i]) j++;
+    if (perDay[i]) {
+      const label = i === j ? dayLabels[i] : `${dayLabels[i]}–${dayLabels[j]}`;
+      parts.push(`${label} ${perDay[i]}`);
+    }
+    i = j + 1;
+  }
+  return parts.length ? parts.join(" · ") : "no regular hours";
+}
+
 function arraysEqual(a?: number[], b?: number[]): boolean {
   if (!a || !b || a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
@@ -111,6 +140,7 @@ export const ResourceCalendarEditor: React.FC<Props> = ({
   resourcePool,
   typeCalendars,
   discoveredTypeCalendars,
+  shiftPatterns,
   overrides,
   onTypeCalendarUpdate,
   setOverrides,
@@ -123,6 +153,8 @@ export const ResourceCalendarEditor: React.FC<Props> = ({
   const currentCalendar = selectedType ? typeCalendars[selectedType] : null;
   const discoveredCalendar = selectedType ? discoveredTypeCalendars?.[selectedType] : undefined;
   const hasDiscovered = !!discoveredCalendar && hasNonTrivialData(discoveredCalendar);
+  const patterns = selectedType ? shiftPatterns?.[selectedType] || [] : [];
+  const typeEdited = !!currentCalendar && hasDiscovered && !calendarsEqual(currentCalendar, discoveredCalendar);
 
   // All resource instances of the pool, grouped by type (e.g. Worker_1 … Worker_N).
   const instancesByType = resourceTypes.map((t) => ({
@@ -163,12 +195,12 @@ export const ResourceCalendarEditor: React.FC<Props> = ({
       <CardHeader><CardTitle>Resource Calendar</CardTitle></CardHeader>
       <CardContent className="space-y-4">
         <p className="text-xs text-muted-foreground">
-          By default every resource of a type follows its <strong>type calendar</strong>. The colored
-          background shows the <strong>discovered per-hour availability</strong> from the event log — an
-          untouched calendar keeps these probabilities and the simulation uses them directly. Click or
-          drag across the hours to pin fixed working times (always available); reset (↺) restores the
-          discovered probabilities. To give specific resources a different schedule, add a custom
-          calendar below.
+          The colored background shows the <strong>discovered availability</strong> of a resource type —
+          the share of its resources present per hour. Underneath, the log's resources are grouped into{" "}
+          <strong>shift patterns</strong>; an untouched type lets every simulated resource draw its own
+          calendar from these patterns in proportion to their shares. Click or drag across the hours to pin
+          fixed working times for <em>all</em> resources of the type instead; reset (↺) returns to the
+          patterns. To give specific resources a different schedule, add a custom calendar below.
         </p>
 
         {/* Resource Type selector */}
@@ -204,6 +236,30 @@ export const ResourceCalendarEditor: React.FC<Props> = ({
               discovered={discoveredCalendar}
               onChange={(weekday, hours) => onTypeCalendarUpdate(selectedType, weekday, hours)}
             />
+            {patterns.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-[10px] text-muted-foreground">
+                  {typeEdited
+                    ? `Edited: all ${selectedType} resources follow the pinned hours above. Reset a day to return to the mined patterns.`
+                    : `Mined shift patterns (${patterns.length}) — each simulated ${selectedType} draws one:`}
+                </p>
+                {!typeEdited && (
+                  <div className="space-y-0.5">
+                    {patterns.map((p, i) => (
+                      <div key={i} className="flex items-center gap-2 text-[10px]">
+                        <Badge variant="secondary" className="text-[10px] w-12 justify-center">
+                          {Math.round(p.share * 100)}%
+                        </Badge>
+                        <span className="font-medium">{describePattern(p.probability)}</span>
+                        <span className="text-muted-foreground">
+                          {p.member_ids.length} resource{p.member_ids.length === 1 ? "" : "s"}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
