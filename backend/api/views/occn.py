@@ -10,6 +10,7 @@ from rest_framework.response import Response
 
 from totem_lib import discover_occn, extract_occn_input, serialize_occn
 
+from ..jobs import JobCancelled, cancelled_response, job_scope
 from ..models import EventLog
 from ._ocel_db import _filter_shadow, _with_ocel_db
 from ._filters import _parse_filter_params
@@ -24,12 +25,15 @@ _occn_cache_lock = threading.Lock()
 _occn_inflight = {}
 
 
-def _get_or_discover_base_occn(user_file, object_type_filter):
+def _get_or_discover_base_occn(user_file, object_type_filter, job=None):
     """Return the threshold-0 base OCCN for a log, via `_occn_base_cache`.
 
     Single-flight per cache key: concurrent callers for the same
     (file, object types) wait on the primary discovery instead of mining the
     same net twice. Returns None when discovery failed to produce a net.
+
+    ``job`` (see ``api.jobs``) receives the progress of the discovery and can
+    cancel it; a waiting secondary caller only checks for cancellation.
     """
     parameters = (
         {"object_types": object_type_filter} if object_type_filter else None
@@ -57,16 +61,27 @@ def _get_or_discover_base_occn(user_file, object_type_filter):
                     is_primary = True
 
         if not is_primary and base_occn is None and event is not None:
-            event.wait(timeout=120)
+            if job is not None:
+                job.report(None, "Waiting for a running discovery")
+            deadline = 120.0
+            while deadline > 0 and not event.wait(timeout=0.5):
+                deadline -= 0.5
+                if job is not None:
+                    job.check()
             with _occn_cache_lock:
                 base_occn = _occn_base_cache.get(cache_key)
 
         if is_primary:
             try:
-                with _with_ocel_db(user_file) as db:
+                with _with_ocel_db(user_file, job) as db:
+                    if job is not None:
+                        job.report(None, "Reading events and relations")
                     occn_input = extract_occn_input(db)
                 base_occn = discover_occn(
-                    occn_input, relativeOccuranceThreshold=0.0, parameters=parameters
+                    occn_input,
+                    relativeOccuranceThreshold=0.0,
+                    parameters=parameters,
+                    progress=job.report if job is not None else None,
                 )
                 with _occn_cache_lock:
                     _occn_base_cache[cache_key] = base_occn
@@ -136,33 +151,42 @@ def OCCNViewSet(request):
         fp = _parse_filter_params(request)
         has_event_filter = any(k in fp for k in ("after", "before", "activities"))
 
-        if has_event_filter:
-            # Filter active — skip the shared cache and mine a fresh net over
-            # the filtered log; cached nets are keyed only by file/object types.
-            fp_no_types = {k: v for k, v in fp.items() if k != "object_types"}
-            parameters = (
-                {"object_types": object_type_filter} if object_type_filter else None
+        with job_scope(request, "Object-centric causal net") as job:
+            if has_event_filter:
+                # Filter active — skip the shared cache and mine a fresh net over
+                # the filtered log; cached nets are keyed only by file/object types.
+                fp_no_types = {k: v for k, v in fp.items() if k != "object_types"}
+                parameters = (
+                    {"object_types": object_type_filter} if object_type_filter else None
+                )
+                with _with_ocel_db(user_file, job) as db:
+                    job.report(None, "Applying filters")
+                    with _filter_shadow(db, fp_no_types):
+                        job.report(None, "Reading events and relations")
+                        occn_input = extract_occn_input(db)
+                base_occn = discover_occn(
+                    occn_input,
+                    relativeOccuranceThreshold=0.0,
+                    parameters=parameters,
+                    progress=job.report,
+                )
+            else:
+                base_occn = _get_or_discover_base_occn(user_file, object_type_filter, job)
+
+            if base_occn is None:
+                return Response({"error": "Failed to discover OCCN"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            job.report(None, "Applying threshold")
+            occn = (
+                base_occn.apply_relative_occurrence_threshold(threshold)
+                if threshold > 0
+                else base_occn
             )
-            with _with_ocel_db(user_file) as db:
-                with _filter_shadow(db, fp_no_types):
-                    occn_input = extract_occn_input(db)
-            base_occn = discover_occn(
-                occn_input, relativeOccuranceThreshold=0.0, parameters=parameters
-            )
-        else:
-            base_occn = _get_or_discover_base_occn(user_file, object_type_filter)
 
-        if base_occn is None:
-            return Response({"error": "Failed to discover OCCN"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        occn = (
-            base_occn.apply_relative_occurrence_threshold(threshold)
-            if threshold > 0
-            else base_occn
-        )
-
-        result = serialize_occn(occn)
+            result = serialize_occn(occn)
         return Response(result, status=status.HTTP_200_OK)
 
+    except JobCancelled:
+        return cancelled_response()
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

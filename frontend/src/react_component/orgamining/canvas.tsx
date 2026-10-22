@@ -78,6 +78,10 @@ const PANEL_SHELL: React.CSSProperties = {
  * `narrow` sets the initial state only — once the user has clicked, their
  * choice wins and a later resize will not overrule it. Without that, dragging
  * a tile across the breakpoint would keep reopening a panel the user closed.
+ *
+ * `plainHeading` swaps the small-caps title for the plain header of the
+ * toolbar popovers (centrality, download): sentence case, no icon, a divider
+ * below. The icon still marks the collapsed chip.
  */
 export function FloatingPanel({
   title,
@@ -86,6 +90,7 @@ export function FloatingPanel({
   children,
   style,
   collapsedLabel,
+  plainHeading = false,
 }: {
   title: string;
   icon?: React.ReactNode;
@@ -94,6 +99,7 @@ export function FloatingPanel({
   style?: React.CSSProperties;
   /** Chip text while collapsed, e.g. "4 object types". Omit for an icon-only chip. */
   collapsedLabel?: string;
+  plainHeading?: boolean;
 }) {
   // Without either an icon or a label the chip would be an empty button.
   const chipLabel = collapsedLabel ?? (icon ? null : title);
@@ -144,6 +150,35 @@ export function FloatingPanel({
           </>
         )}
       </button>
+    );
+  }
+
+  if (plainHeading) {
+    return (
+      <div
+        {...stop}
+        style={{
+          ...PANEL_SHELL,
+          maxHeight: "min(75%, 380px)",
+          overflowY: "auto",
+          minWidth: 132,
+          ...style,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px 8px", borderBottom: "1px solid #F1F5F9" }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: "#0F172A" }}>{title}</span>
+          <button
+            type="button"
+            onClick={toggle}
+            title={`Hide ${title}`}
+            aria-label={`Hide ${title}`}
+            style={{ background: "none", border: "none", cursor: "pointer", padding: 2, color: "#64748b", display: "flex", alignItems: "center" }}
+          >
+            <X style={{ width: 14, height: 14 }} />
+          </button>
+        </div>
+        <div style={{ padding: "10px 14px" }}>{children}</div>
+      </div>
     );
   }
 

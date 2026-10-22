@@ -5,6 +5,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
+from .. import jobs
 from ..models import Project, UserSettings
 
 
@@ -117,3 +118,25 @@ def user_settings(request):
             settings_obj.save(update_fields=["bypass_cache"])
 
     return Response({"bypass_cache": settings_obj.bypass_cache})
+
+
+# ---------------------------------------------------------------------------
+# Cancellable computations (see api/jobs.py)
+# ---------------------------------------------------------------------------
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def jobs_status(request):
+    """Progress of the jobs named in ``?ids=a,b,c`` (own jobs only)."""
+    raw = request.query_params.get("ids", "")
+    ids = [i.strip() for i in raw.split(",") if i.strip()][:50]
+    return Response(jobs.status_of(ids, request.user.pk), status=status.HTTP_200_OK)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def job_cancel(request, job_id):
+    """Stop the computation behind a job id (own jobs only)."""
+    if not jobs.valid_job_id(job_id):
+        return Response({"error": "Invalid job id"}, status=status.HTTP_400_BAD_REQUEST)
+    return Response(jobs.cancel(job_id, request.user.pk), status=status.HTTP_200_OK)

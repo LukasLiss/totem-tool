@@ -21,6 +21,8 @@ import {
 import axios from 'axios';
 import { API_BASE_URL } from '@/config/api';
 import { useFilterVersion, getEffectiveFilterConfig } from '@/store/filterStore';
+import { isCancelledError } from '@/store/computationStore';
+import ComputationStatus from '@/components/ComputationStatus';
 import { Button } from '@/components/ui/button';
 import { VisualizerEmptyState } from '@/components/ui/VisualizerEmptyState';
 import {
@@ -530,27 +532,39 @@ function TotemMinerVisualizer({
   const effectiveReloadSignal = reloadSignal ?? 0;
 
   // ── Fetch ────────────────────────────────────────────────────────────────────
+  const abortRef = useRef<AbortController | null>(null);
   const fetchData = useCallback(async () => {
     if (!eventLogId) { setRawData(null); return; }
     const filterConfig = getEffectiveFilterConfig(localFilterParamsRef.current, filterEnabled);
     if (filterConfig._noResults) { setRawData(null); return; }
+    // A superseded request is aborted so the backend stops computing it.
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     setLoading(true);
     setError(null);
     try {
       const { data } = await axios.get<TotemApiResponse>(
         `${backendBaseUrl}/api/files/${eventLogId}/discover_totem/`,
-        { params: filterConfig.params, _skipGlobalFilter: filterConfig._skipGlobalFilter },
+        { params: filterConfig.params, _skipGlobalFilter: filterConfig._skipGlobalFilter, signal: controller.signal },
       );
+      if (abortRef.current !== controller) return;
       setRawData(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load TOTeM data');
+      if (abortRef.current !== controller) return;
+      setError(
+        isCancelledError(err)
+          ? 'Computation cancelled'
+          : err instanceof Error ? err.message : 'Failed to load TOTeM data',
+      );
       setRawData(null);
     } finally {
-      setLoading(false);
+      if (abortRef.current === controller) setLoading(false);
     }
   }, [backendBaseUrl, eventLogId, filterEnabled, effectiveFilterVersion, localFilterParams]);
 
   useEffect(() => { fetchData(); }, [fetchData, effectiveReloadSignal]);
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   // ── Container size ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -1224,10 +1238,16 @@ function TotemMinerVisualizer({
       {/* Loading */}
       {(loading || !stableSvgSize) && (
         <div style={{ position: 'absolute', inset: 0, zIndex: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.65)', backdropFilter: 'blur(4px)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, borderRadius: 8, border: '1px solid #e2e8f0', background: 'white', padding: '10px 20px', boxShadow: '0 2px 12px rgba(0,0,0,0.08)' }}>
-            <div style={{ width: 16, height: 16, borderRadius: '50%', border: '2.5px solid #2563eb', borderTopColor: 'transparent', animation: 'totem-spin 0.8s linear infinite' }} />
-            <span style={{ fontSize: 13, fontWeight: 500, color: '#475569' }}>Discovering TOTeM model…</span>
-          </div>
+          <ComputationStatus
+            fileId={eventLogId}
+            urlIncludes="/discover_totem/"
+            fallback={(
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, borderRadius: 8, border: '1px solid #e2e8f0', background: 'white', padding: '10px 20px', boxShadow: '0 2px 12px rgba(0,0,0,0.08)' }}>
+                <div style={{ width: 16, height: 16, borderRadius: '50%', border: '2.5px solid #2563eb', borderTopColor: 'transparent', animation: 'totem-spin 0.8s linear infinite' }} />
+                <span style={{ fontSize: 13, fontWeight: 500, color: '#475569' }}>Discovering TOTeM model…</span>
+              </div>
+            )}
+          />
         </div>
       )}
 

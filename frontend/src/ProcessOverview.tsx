@@ -17,6 +17,7 @@ import { EditorView } from "./editors/EditorView";
 import { PlayoutView } from "./playout/PlayoutView";
 import Grid from './components/grid';
 import FilterChipStack from "@/components/FilterChipStack";
+import ComputationPanel from "@/components/ComputationPanel";
 import { FilterStackProvider } from "@/contexts/FilterStackContext";
 
 export function ProcessOverview() {
@@ -66,6 +67,7 @@ export function ProcessOverview() {
           <div className="flex-1">
             {renderContent()}
           </div>
+          <ComputationPanel />
         </FilterStackProvider>
       </SidebarInset>
     </SidebarProvider>

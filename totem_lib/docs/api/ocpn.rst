@@ -9,4 +9,5 @@ Discover object-centric Petri nets (OCPN) and compare them.
    :toctree: generated
 
    discover_ocpn_db
+   OCPN
    ocpns_are_similar

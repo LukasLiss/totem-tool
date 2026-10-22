@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
 import axios from 'axios';
 import { useFilterVersion, getEffectiveFilterConfig } from '@/store/filterStore';
+import { isCancelledError } from '@/store/computationStore';
 import {
   ReactFlow,
   useReactFlow,
@@ -16,7 +17,9 @@ import {
 import '@xyflow/react/dist/style.css';
 import type { ElkEdgeSection } from 'elkjs/lib/elk-api';
 
-import { calculateNodeRanks, getLayoutedElements } from '../utils/NaiveOCDFGLayouting';
+import { getLayoutedElements } from '../utils/NaiveOCDFGLayouting';
+import { isLayoutAbort } from '../utils/elk';
+import OcdfgLayoutStatusCard, { AUTO_LAYOUT_MAX_ARCS, type OcdfgLayoutState } from './OcdfgLayoutStatusCard';
 import { mapTypesToColors } from '../utils/objectColors';
 import NewOcdfgEdge from './NewOcdfgEdge';
 import OcdfgTerminalNode from './OcdfgTerminalNode';
@@ -36,6 +39,14 @@ import { toast } from 'sonner';
 const DEFAULT_THICKNESS_MIN = 0.5;
 const DEFAULT_THICKNESS_MAX = 2;
 const DETAIL_FIT_PADDING = 0.12;
+// The small text buttons in the legend header (All, None, Collapse).
+const LEGEND_HEADER_BUTTON_STYLE = {
+  border: 'none',
+  background: 'transparent',
+  color: '#64748B',
+  fontSize: 12,
+  cursor: 'pointer',
+} as const;
 
 const VARIANT_PRESETS = {
   full: {
@@ -267,6 +278,16 @@ function NewOCDFGVariantsVisualizer({
   const [typeVisibility, setTypeVisibility] = useState<Record<string, boolean>>({});
 
   const [dfgData, setDfgData] = useState<OcdfgGraph | null>(null);
+  // The ELK layout of the current graph; a large graph waits for a request.
+  const [layoutState, setLayoutState] = useState<OcdfgLayoutState>('idle');
+  const [layoutSize, setLayoutSize] = useState({ nodes: 0, arcs: 0 });
+  // The graph data the user asked to lay out despite its size, the data the
+  // drawn graph was laid out from, the running layout (for Cancel), and a
+  // counter that starts the layout once more.
+  const approvedLayoutRef = useRef<OcdfgGraph | null>(null);
+  const drawnDataRef = useRef<OcdfgGraph | null>(null);
+  const layoutControllerRef = useRef<AbortController | null>(null);
+  const [layoutRun, setLayoutRun] = useState(0);
   const [rawNodes, setRawNodes] = useState<Node[]>([]);
   const [rawEdges, setRawEdges] = useState<Edge[]>([]);
   const [baseNodes, setBaseNodes] = useState<Node[]>([]);
@@ -619,9 +640,9 @@ function NewOCDFGVariantsVisualizer({
           });
         }
       })
-      .catch(() => {
+      .catch((err) => {
         if (!cancelled) {
-          toast.error('OC-DFG variants could not be loaded');
+          if (!isCancelledError(err)) toast.error('OC-DFG variants could not be loaded');
           setDfgData({ nodes: [], links: [] });
         }
       });
@@ -847,13 +868,25 @@ function NewOCDFGVariantsVisualizer({
       } as Edge;
     });
 
+    // Which object types the graph has at all, as the first layout of the full
+    // graph would report it (a layout keeps every node and edge). Taken from
+    // the data rather than from that first layout: when types are switched
+    // off while a long first layout runs, that layout is stopped, and the
+    // switched-off types would stay unavailable — greyed out for good.
+    initialAvailabilityRef.current = computeTypeAvailability(initialNodes, initialEdges, Object.keys(colors));
+
     setRawNodes(initialNodes);
     setRawEdges(initialEdges);
   }, [dfgData, variantPreset, fallbackNodeWidth, nodePadding, fontSize, terminalSize, typeColorOverrides]);
 
   useEffect(() => {
     if (!dfgData) return;
-    if (rawNodes.length === 0 || rawEdges.length === 0) { setBaseNodes([]); setBaseEdges([]); return; }
+    if (rawNodes.length === 0 || rawEdges.length === 0) {
+      setBaseNodes([]);
+      setBaseEdges([]);
+      setLayoutState('idle');
+      return;
+    }
 
     const activeTypes = Object.entries(typeVisibility)
       .filter(([, visible]) => visible !== false)
@@ -863,6 +896,7 @@ function NewOCDFGVariantsVisualizer({
     if (activeTypes.length === 0) {
       setBaseNodes([]);
       setBaseEdges([]);
+      setLayoutState('idle');
       return;
     }
 
@@ -891,18 +925,28 @@ function NewOCDFGVariantsVisualizer({
       return visibleByType && connectedNodeIds.has(node.id);
     });
 
+    setLayoutSize({ nodes: filteredNodes.length, arcs: filteredEdges.length });
+    if (filteredEdges.length > AUTO_LAYOUT_MAX_ARCS && approvedLayoutRef.current !== dfgData) {
+      // A graph still drawn from other data (another log or filter) must not
+      // stay under the card as if it were this one.
+      if (drawnDataRef.current !== dfgData) {
+        setBaseNodes([]);
+        setBaseEdges([]);
+      }
+      setLayoutState('held');
+      return;
+    }
 
-    const naiveNodes = dfgData.nodes;
-    const naiveLinks = dfgData.links.map(l => ({
-      source: l.source,
-      target: l.target,
-      weight: l.weight,
-      objtypes: [l.key ?? l.objtype],
-    }));
-
-    const ranks = calculateNodeRanks(naiveNodes, naiveLinks);
-
-    getLayoutedElements(filteredNodes, filteredEdges, ranks, layoutDirection).then(({ nodes: layoutedNodes, edges: layoutedEdges }) => {
+    // A layout is often superseded while it runs (several inputs of this
+    // effect change together, the trace slider moves). Stop it and let only
+    // the newest one write its result.
+    let stale = false;
+    const layoutController = new AbortController();
+    layoutControllerRef.current = layoutController;
+    setLayoutState('running');
+    getLayoutedElements(filteredNodes, filteredEdges, layoutDirection, layoutController.signal).then(({ nodes: layoutedNodes, edges: layoutedEdges }) => {
+      if (stale) return;
+      setLayoutState('idle');
       const processedEdges = layoutedEdges.map(e => {
         const polyline = extractElkPolyline(e);
         return {
@@ -920,6 +964,7 @@ function NewOCDFGVariantsVisualizer({
       const shifted = shiftForLegend(directedNodes, directedEdges);
       const spacedNodes = addLegendSpacer(shifted.nodes);
 
+      drawnDataRef.current = dfgData;
       setBaseNodes(spacedNodes);
       setBaseEdges(shifted.edges);
 
@@ -947,7 +992,13 @@ function NewOCDFGVariantsVisualizer({
       if (autoFitView) {
         window.requestAnimationFrame(() => fitViewWithOffset());
       }
-    }).catch(() => toast.error('OC-DFG layout failed'));
+    }).catch((err) => {
+      if (stale || isLayoutAbort(err)) return;
+      setLayoutState('failed');
+      console.error(`OC-DFG layout failed (${filteredNodes.length} nodes, ${filteredEdges.length} arcs)`, err);
+      toast.error('OC-DFG layout failed');
+    });
+    return () => { stale = true; layoutController.abort(); };
   }, [
     typeVisibility,
     traceLimit,
@@ -962,7 +1013,25 @@ function NewOCDFGVariantsVisualizer({
     autoFitView,
     shiftForLegend,
     addLegendSpacer,
+    layoutRun,
   ]);
+
+  const cancelLayout = useCallback(() => {
+    // A large graph then waits for a new request instead of starting again on
+    // the next input change; a small one lays out again on its own.
+    approvedLayoutRef.current = null;
+    layoutControllerRef.current?.abort();
+    if (drawnDataRef.current !== dfgData) {
+      setBaseNodes([]);
+      setBaseEdges([]);
+    }
+    setLayoutState('cancelled');
+  }, [dfgData]);
+
+  const startLayout = useCallback(() => {
+    approvedLayoutRef.current = dfgData;
+    setLayoutRun((run) => run + 1);
+  }, [dfgData]);
 
   useEffect(() => {
     if (baseNodes.length === 0) {
@@ -1040,6 +1109,18 @@ function NewOCDFGVariantsVisualizer({
     setTypeVisibility(prev => ({ ...prev, [type]: checked }));
   };
 
+  // "All" / "None" in the legend. Like the single switches, greyed-out types
+  // (no arc in this graph) are not switched on.
+  const setAllTypesVisible = (visible: boolean) => {
+    setTypeVisibility(prev => {
+      const next = { ...prev };
+      Object.keys(typeColors).forEach((type) => {
+        if (!visible || typeAvailability[type] === true) next[type] = visible;
+      });
+      return next;
+    });
+  };
+
   const interactionsDisabled = interactionLocked || autoInteractionLocked;
 
   const noEventLog = data == null && !fileId;
@@ -1085,6 +1166,19 @@ function NewOCDFGVariantsVisualizer({
         <VisualizerEmptyState
           label="Object-Centric DFG"
           message="Select an event log to discover its directly-follows graph."
+        />
+      )}
+
+      {!noEventLog && (
+        <OcdfgLayoutStatusCard
+          state={layoutState}
+          nodes={layoutSize.nodes}
+          arcs={layoutSize.arcs}
+          hint={hideChrome ? undefined : 'Hide object types or lower the variant sliders in the legend for a smaller graph.'}
+          compact={containerSize.width < 420 || containerSize.height < 220}
+          graphShown={baseNodes.length > 0}
+          onCancel={cancelLayout}
+          onStart={startLayout}
         />
       )}
 
@@ -1159,19 +1253,25 @@ function NewOCDFGVariantsVisualizer({
                 >
                   Object Types
                 </span>
-                <button
-                  type="button"
-                  onClick={() => setLegendCollapsed((prev) => !prev)}
-                  style={{
-                    border: 'none',
-                    background: 'transparent',
-                    color: '#64748B',
-                    fontSize: 12,
-                    cursor: 'pointer',
-                  }}
-                >
-                  {legendCollapsed ? 'Expand' : 'Collapse'}
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  {!legendCollapsed && (
+                    <>
+                      <button type="button" onClick={() => setAllTypesVisible(true)} style={LEGEND_HEADER_BUTTON_STYLE}>
+                        All
+                      </button>
+                      <button type="button" onClick={() => setAllTypesVisible(false)} style={LEGEND_HEADER_BUTTON_STYLE}>
+                        None
+                      </button>
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setLegendCollapsed((prev) => !prev)}
+                    style={LEGEND_HEADER_BUTTON_STYLE}
+                  >
+                    {legendCollapsed ? 'Expand' : 'Collapse'}
+                  </button>
+                </div>
               </div>
               {!legendCollapsed && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>

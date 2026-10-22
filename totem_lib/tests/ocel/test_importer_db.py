@@ -71,3 +71,11 @@ def test_failed_import_removes_the_database_it_created(tmp_path):
 
     assert not target.exists()
     assert not Path(f"{target}.wal").exists()
+
+
+def test_import_accepts_a_path_object():
+    db = import_ocel_db(SOURCE)
+    try:
+        assert db.query("SELECT COUNT(*) AS n FROM events")["n"][0] == 22
+    finally:
+        db.close()

@@ -107,6 +107,9 @@ Subclasses (each adds component-specific config fields):
 | `POST /api/playout/` | `playout` | `IsAuthenticated` |
 | `POST /api/playout/export-ocel/` | `playout_export_ocel` | `IsAuthenticated` |
 | `DELETE /api/delete-data/` | `delete_user_data` | `IsAuthenticated` |
+| `GET /api/jobs/?ids=a,b` | `jobs_status` | `IsAuthenticated` — progress of cancellable computations (see §5) |
+| `POST /api/jobs/<job_id>/cancel/` | `job_cancel` | `IsAuthenticated` |
+| `GET /api/files/<pk>/suggested_time_window/?max_events=` | `EventLogViewSet.suggested_time_window` | `IsAuthenticated` — time range of the first N events (large-log auto filter) |
 
 ---
 
@@ -174,6 +177,8 @@ with _with_ocel_db(user_file) as db:
 - `_get_or_load_ocel_db` uses double-checked locking for first load.
 - The lock `_with_ocel_db` takes first is the per-file `_OCEL_DB_LOCKS[pk]` (an RLock that outlives the connection object); `db.lock` is taken inside it. `_rewrite_ocel_db_file(user_file, mutate)` uses that to close the read-only registry connection, let `mutate(path)` write to the DuckDB file (e.g. `write_event_columns_to_file`) and reopen — DuckDB refuses a read-write open while a read-only handle exists in the process.
 - Helpers: `_object_types(db)` (sorted distinct types), `_optional_int(value)`, `_layout_shim(db)` (SimpleNamespace with `obj_type_map` for `calculate_layout`).
+- **Cancellable computations** (`api/jobs.py`): wrap the algorithm in `with job_scope(request, "Label") as job:` and pass the job on — `_with_ocel_db(user_file, job)` interrupts the DuckDB statement when the client cancels, and `job.report` is the `progress=` callback of the totem_lib algorithms (`totem_lib.progress`). Catch `JobCancelled` before the generic `except Exception` and return `cancelled_response()` (HTTP 499, `{"code": "cancelled"}`). The client sends the job id in `X-Totem-Job-Id` (allowed in `CORS_ALLOW_HEADERS`); `GET /api/jobs/?ids=` and `POST /api/jobs/<id>/cancel/` read and stop it. Full description: `docs/LARGE_LOGS.md`.
+- Load-time metadata that must never wait for the lock lives beside the connection: `_OCEL_OBJECT_TYPES_REGISTRY` (object types with counts) and `_OCEL_TIME_WINDOW_REGISTRY` (first `LARGE_LOG_EVENT_LIMIT` events' time range, served by `suggested_time_window`).
 
 ### OCCN caching
 - `discover_occn` is expensive; cache threshold-0 base nets keyed `(file_id, object_types_tuple)` in `_occn_base_cache` (OrderedDict, max 4 entries, LRU via `move_to_end`), guarded by `_occn_cache_lock`. Apply `apply_relative_occurrence_threshold(t)` per request.
@@ -209,6 +214,7 @@ Custom function-based views in the `api/views/` package format error responses w
 | 400 | Missing/invalid query params (`Missing ?file_id`), validation failure, bad enums, malformed body, ambiguous input |
 | 404 | Object not found **or access denied** (never leak existence) |
 | 408 | Variant computation `TimeoutError` (includes `code: "timeout"`, `timeout_s`, `hint`) |
+| 499 | Computation cancelled by the client through `/api/jobs/<id>/cancel/` (`code: "cancelled"`) |
 | 500 | Unexpected computation failure (`f"...: {e}"`); caught broadly around `totem_lib` calls |
 | 204 | Successful DELETE (DRF default) |
 | 201 | Successful POST create |

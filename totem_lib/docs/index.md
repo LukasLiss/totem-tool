@@ -11,6 +11,9 @@ process models.
   causal nets (OCCN)
 - **Variants and conformance**: object-centric variants, replay fitness,
   precision and playout
+- **Organizational mining**: handover of work between resources and resource
+  profiles
+- **Visualization**: draw every model with Graphviz, also inside Jupyter
 
 ## Where to start
 

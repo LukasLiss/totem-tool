@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import { useCluster, type ClusterInfo } from "@/contexts/ClusterContext";
 import { useFilterVersion } from "@/store/filterStore";
-import { fetchObjectTypes } from "@/react_component/variants/variantsApi";
+import { fetchObjectTypeCounts } from "@/react_component/variants/variantsApi";
 import {
   DEFAULT_HANDOVER_SETTINGS,
   NORMALIZATION_LABELS,
@@ -12,7 +12,7 @@ import {
 } from "@/react_component/orgamining/settings";
 import TooltipBox from "@/react_component/ResourceTooltip";
 import { toast } from "sonner";
-import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Download, Info, Loader2, MinusIcon, Network, Pause, Play, PlusIcon, ScanIcon, Search, SlidersHorizontal, Square, Timer, Users, Waypoints, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Download, Info, Loader2, MinusIcon, Network, Pause, Play, PlusIcon, Repeat, ScanIcon, Search, Settings2, SlidersHorizontal, Square, Timer, Users, Waypoints, X } from "lucide-react";
 import {
   forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, forceRadial,
   type SimulationNodeDatum, type SimulationLinkDatum,
@@ -25,12 +25,15 @@ import { Label } from "@/components/ui/label";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
+import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   CanvasMessage,
@@ -54,7 +57,7 @@ export type HandoverEdge = {
   target: string;
   businessobject_type: string;
   weight: number;
-  raw_weight: number;
+  count: number;
   avg_time: number | null;
   min_time: number | null;
   max_time: number | null;
@@ -336,6 +339,92 @@ const ARROW_H   = 18;  // arrow height perpendicular to path, user space
 const BASE_CURVE = 38;
 
 const _SUPS = "⁰¹²³⁴⁵⁶⁷⁸⁹";
+/**
+ * Animation panel size: content width and chart height. The defaults are the
+ * minimum; 242 + panel padding and border = 272, the centrality panel's width.
+ */
+type AnimPanelSize = { width: number; chartHeight: number };
+const ANIM_PANEL_MIN: AnimPanelSize = { width: 242, chartHeight: 56 };
+const ANIM_PANEL_MAX: AnimPanelSize = { width: 720, chartHeight: 420 };
+const ANIM_PANEL_SIZE_KEY = "ochandover.animationPanelSize";
+const ANIM_PANEL_TOP = 54;
+/** Space kept free below the panel: the control pill, like the toolbar popovers (bottom: 68). */
+const ANIM_PANEL_PILL_CLEARANCE = 68;
+
+const clampAnimPanelSize = (size: AnimPanelSize): AnimPanelSize => ({
+  width: Math.min(ANIM_PANEL_MAX.width, Math.max(ANIM_PANEL_MIN.width, size.width)),
+  chartHeight: Math.min(ANIM_PANEL_MAX.chartHeight, Math.max(ANIM_PANEL_MIN.chartHeight, size.chartHeight)),
+});
+
+/** The size this viewer left the panel at; storage may be unavailable. */
+function loadAnimPanelSize(): AnimPanelSize {
+  try {
+    const raw = localStorage.getItem(ANIM_PANEL_SIZE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed?.width === "number" && typeof parsed?.chartHeight === "number") {
+        return clampAnimPanelSize(parsed);
+      }
+    }
+  } catch { /* fall back to the default */ }
+  return ANIM_PANEL_MIN;
+}
+
+/**
+ * Drag grip in the animation panel's bottom-left corner. The panel is pinned
+ * top right, so dragging left widens it and dragging down makes the chart
+ * taller, until the panel reaches the control pill. The size is stored when
+ * the drag ends.
+ */
+function AnimPanelResizeGrip({ size, onResize }: { size: AnimPanelSize; onResize: (size: AnimPanelSize) => void }) {
+  const drag = useRef<{ x: number; y: number; start: AnimPanelSize; last: AnimPanelSize; maxChart: number } | null>(null);
+  const endDrag = () => {
+    const d = drag.current;
+    drag.current = null;
+    if (!d) return;
+    try { localStorage.setItem(ANIM_PANEL_SIZE_KEY, JSON.stringify(d.last)); } catch { /* not persisted */ }
+  };
+  return (
+    <div
+      role="separator"
+      aria-label="Resize animation panel"
+      title="Drag to resize"
+      className="absolute left-0 bottom-0 h-3.5 w-3.5 cursor-nesw-resize touch-none text-muted-foreground/60 hover:text-muted-foreground"
+      onPointerDown={e => {
+        e.preventDefault(); // no text selection while dragging
+        e.currentTarget.setPointerCapture(e.pointerId);
+        // The grip sits in the panel, the panel in the canvas: the chart may
+        // grow by whatever room is left between the panel and the pill.
+        const panel = e.currentTarget.offsetParent as HTMLElement | null;
+        const canvas = panel?.offsetParent as HTMLElement | null;
+        const room = panel && canvas
+          ? canvas.clientHeight - ANIM_PANEL_TOP - ANIM_PANEL_PILL_CLEARANCE - panel.scrollHeight
+          : Infinity;
+        drag.current = { x: e.clientX, y: e.clientY, start: size, last: size, maxChart: size.chartHeight + Math.max(0, room) };
+      }}
+      onPointerMove={e => {
+        const d = drag.current;
+        if (!d) return;
+        d.last = clampAnimPanelSize({
+          width: d.start.width + (d.x - e.clientX),
+          chartHeight: Math.min(d.maxChart, d.start.chartHeight + (e.clientY - d.y)),
+        });
+        onResize(d.last);
+      }}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
+    >
+      <svg viewBox="0 0 14 14" className="h-full w-full" aria-hidden>
+        <path d="M3 4 L10 11 M3 8 L6 11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      </svg>
+    </div>
+  );
+}
+
+/** Borderless icon button of the animation panel's playback row. */
+const ANIM_ICON_BUTTON =
+  "flex items-center justify-center h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors";
+
 function fmtSpeed(s: number): string {
   if (s === 1) return "1×";
   const exp = Math.log10(s);
@@ -364,6 +453,7 @@ export default function OCHandoverExplorer({
   // Settings are read once; a host that changes them re-mounts the explorer.
   const [initial] = useState<HandoverSettings>(() => ({ ...DEFAULT_HANDOVER_SETTINGS, ...initialSettings }));
   const [objectTypes, setObjectTypes] = useState<string[]>([]);
+  const [objectTypeCounts, setObjectTypeCounts] = useState<Record<string, number>>({});
   const [resourceTypes, setResourceTypes] = useState<Set<string>>(new Set(initial.resourceTypes));
   const [boTypes, setBoTypes] = useState<Set<string>>(new Set(initial.businessObjectTypes));
   const [data, setData] = useState<HandoverData | null>(null);
@@ -389,6 +479,9 @@ export default function OCHandoverExplorer({
   const { clusterInfo } = useCluster();
   const [useClusters, setUseClusters] = useState(false);
   const [clusterByOt, setClusterByOt] = useState(initial.clusterByOt);
+  // Grouping into profiling clusters switches cluster-by-object-type off; this
+  // remembers its state so switching the clusters off again restores it.
+  const clusterByOtBeforeUnitsRef = useRef(false);
   // Effects that reset state when a setting changes must not fire for the
   // preselected values on mount; this ref is flipped by the last effect below.
   const isFirstRender = useRef(true);
@@ -405,6 +498,8 @@ export default function OCHandoverExplorer({
   const [animIsPlaying, setAnimIsPlaying] = useState(false);
   const [animSliderTime, setAnimSliderTime] = useState(0);
   const [animPlaySpeed, setAnimPlaySpeed] = useState(100);
+  const [animLoop, setAnimLoop] = useState(false);
+  const [animPanelSize, setAnimPanelSize] = useState(loadAnimPanelSize);
   const [connectorMode, setConnectorMode] = useState<"fade" | "persist" | "none">("persist");
   const animPlayRef = useRef<(() => void) | null>(null);
   const animPauseRef = useRef<(() => void) | null>(null);
@@ -449,6 +544,7 @@ export default function OCHandoverExplorer({
   // Phase 1: load object types when fileId changes
   useEffect(() => {
     setObjectTypes([]);
+    setObjectTypeCounts({});
     setResourceTypes(new Set(initial.resourceTypes));
     setBoTypes(new Set(initial.businessObjectTypes));
     setData(null);
@@ -463,9 +559,11 @@ export default function OCHandoverExplorer({
     (async () => {
       if (fileIdRef.current !== currentFileId) return;
       try {
-        const types = await fetchObjectTypes(currentFileId);
+        const typeCounts = await fetchObjectTypeCounts(currentFileId);
         if (fileIdRef.current !== currentFileId || cancelled) return;
+        const types = typeCounts.map(e => e.name);
         setObjectTypes(types);
+        setObjectTypeCounts(Object.fromEntries(typeCounts.map(e => [e.name, e.count])));
         // Preselected types that no longer exist in this log are dropped.
         const known = new Set(types);
         setResourceTypes(prev => new Set([...prev].filter(t => known.has(t))));
@@ -802,6 +900,20 @@ export default function OCHandoverExplorer({
     setSelectedMlpaLevel(null);
   };
 
+  // Bulk versions of the toggles above, keeping the same mutual exclusion.
+  const setManyResourceTypes = (types: string[], on: boolean) => {
+    setResourceTypes(prev => { const n = new Set(prev); types.forEach(t => (on ? n.add(t) : n.delete(t))); return n; });
+    if (on) setBoTypes(prev => { const n = new Set(prev); types.forEach(t => n.delete(t)); return n; });
+    setSelectedMlpaLevel(null);
+  };
+
+  const setManyBoTypes = (types: string[], on: boolean) => {
+    const editable = types.filter(t => !clusterResourceTypes.has(t));
+    setBoTypes(prev => { const n = new Set(prev); editable.forEach(t => (on ? n.add(t) : n.delete(t))); return n; });
+    if (on) setResourceTypes(prev => { const n = new Set(prev); editable.forEach(t => n.delete(t)); return n; });
+    setSelectedMlpaLevel(null);
+  };
+
   const typeColorMap = useMemo(() => mapTypesToColors(objectTypes), [objectTypes]);
 
   const handleSort = (col: SortCol) => {
@@ -823,7 +935,7 @@ export default function OCHandoverExplorer({
       if (sortCol === "source") cmp = a.source.localeCompare(b.source);
       else if (sortCol === "target") cmp = a.target.localeCompare(b.target);
       else if (sortCol === "bo_type") cmp = a.businessobject_type.localeCompare(b.businessobject_type);
-      else if (sortCol === "count") cmp = a.raw_weight - b.raw_weight;
+      else if (sortCol === "count") cmp = a.count - b.count;
       else if (sortCol === "avg_time" || sortCol === "min_time" || sortCol === "max_time") {
         const av = timed(a[sortCol]);
         const bv = timed(b[sortCol]);
@@ -892,7 +1004,7 @@ export default function OCHandoverExplorer({
                   {edge.businessobject_type}
                 </span>
               </td>
-              <td className="px-3 py-2 tabular-nums">{edge.raw_weight}</td>
+              <td className="px-3 py-2 tabular-nums">{edge.count}</td>
               <td className="px-3 py-2">
                 <div className="flex items-center gap-2">
                   {/* The minimum stops a narrow column shrinking the track to
@@ -1023,6 +1135,7 @@ export default function OCHandoverExplorer({
                 fileName={fileName}
                 flowsData={flowsData}
                 playSpeed={animPlaySpeed}
+                loop={animLoop}
                 connectorMode={connectorMode}
                 onAnimStateChange={(s) => { setAnimIsPlaying(s.isPlaying); setAnimSliderTime(s.sliderTime); }}
                 playRef={animPlayRef}
@@ -1068,10 +1181,12 @@ export default function OCHandoverExplorer({
                         // stuck grouped when the profiling result changes.
                         if (useClusters) {
                           setUseClusters(false);
+                          setClusterByOt(clusterByOtBeforeUnitsRef.current);
                           handleCompute();
                           return;
                         }
                         if (groupingIssue) { toast.error(groupingIssue); return; }
+                        clusterByOtBeforeUnitsRef.current = clusterByOt;
                         setUseClusters(true);
                         setClusterByOt(false);
                         handleCompute();
@@ -1112,68 +1227,35 @@ export default function OCHandoverExplorer({
                   title="Animation"
                   icon={<Play style={{ width: 13, height: 13, color: "#64748b" }} />}
                   narrow
-                  style={{ position: "absolute", top: 54, right: 12, zIndex: 13 }}
+                  plainHeading
+                  style={{
+                    position: "absolute", top: ANIM_PANEL_TOP, right: 12, zIndex: 13,
+                    maxHeight: `calc(100% - ${ANIM_PANEL_TOP + ANIM_PANEL_PILL_CLEARANCE}px)`,
+                  }}
                 >
-                  <div className="flex flex-col gap-2" style={{ width: 220 }}>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant={flowsData ? "secondary" : "outline"}
-                      disabled={flowsStatus === "loading"}
-                      onClick={flowsData
-                        ? () => { setFlowsData(null); setFlowsStatus("idle"); }
-                        : fetchFlows}
-                    >
-                      {flowsStatus === "loading"
-                        ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        : flowsData
-                          ? <><Square className="h-3.5 w-3.5" /> Stop</>
+                  <div className="flex flex-col gap-2" style={{ width: animPanelSize.width }}>
+                    {!flowsData && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={flowsStatus === "loading"}
+                        onClick={fetchFlows}
+                      >
+                        {flowsStatus === "loading"
+                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
                           : <><Play className="h-3.5 w-3.5" /> Animate</>}
-                    </Button>
+                      </Button>
+                    )}
                     {flowsData && (
                       <>
-                        <div className="flex items-center gap-2">
-                          <Button
-                            type="button"
-                            size="icon"
-                            variant="outline"
-                            className="h-8 w-8 shrink-0"
-                            onClick={animIsPlaying ? () => animPauseRef.current?.() : () => animPlayRef.current?.()}
-                            title={animIsPlaying ? "Pause" : "Play"}
-                          >
-                            {animIsPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
-                          </Button>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <button className="flex items-center text-xs border rounded px-2 h-8 hover:bg-accent shrink-0 tabular-nums">
-                                <span className="flex-1 text-center">{fmtSpeed(animPlaySpeed)}</span>
-                                <ChevronDown className="h-3 w-3 shrink-0" />
-                              </button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="start">
-                              <DropdownMenuRadioGroup value={String(animPlaySpeed)} onValueChange={v => setAnimPlaySpeed(Number(v))}>
-                                {_SPEED_OPTIONS.map(s => (
-                                  <DropdownMenuRadioItem key={s} value={String(s)}>{s}×</DropdownMenuRadioItem>
-                                ))}
-                              </DropdownMenuRadioGroup>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <button className="flex items-center text-xs border rounded px-2 h-8 hover:bg-accent shrink-0">
-                                <span className="flex-1 text-center capitalize">{connectorMode}</span>
-                                <ChevronDown className="h-3 w-3 shrink-0" />
-                              </button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="start">
-                              <DropdownMenuRadioGroup value={connectorMode} onValueChange={v => setConnectorMode(v as "fade" | "persist" | "none")}>
-                                <DropdownMenuRadioItem value="fade">Fade</DropdownMenuRadioItem>
-                                <DropdownMenuRadioItem value="persist">Persist</DropdownMenuRadioItem>
-                                <DropdownMenuRadioItem value="none">None</DropdownMenuRadioItem>
-                              </DropdownMenuRadioGroup>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </div>
+                        <ActivityChart
+                          flowsData={flowsData}
+                          time={animSliderTime}
+                          typeColorMap={typeColorMap}
+                          onScrub={t => animScrubRef.current?.(t)}
+                          height={animPanelSize.chartHeight}
+                        />
                         <Slider
                           min={flowsData.timeline.start}
                           max={flowsData.timeline.end}
@@ -1181,16 +1263,87 @@ export default function OCHandoverExplorer({
                           value={[animSliderTime]}
                           onValueChange={([v]) => animScrubRef.current?.(v)}
                         />
-                        <div className="text-[11px] text-muted-foreground tabular-nums">
-                          {new Date(animSliderTime * 1000).toLocaleDateString([], { month: "short", day: "2-digit", year: "2-digit" })}
-                          {" "}
-                          {new Date(animSliderTime * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                          {" · "}
-                          {flowsData.flows.length.toLocaleString()} flows
+                        {/* Playback row below the slider, so the slider keeps the chart's full width.
+                            Equal side columns keep the timestamp centred in the panel. */}
+                        <div className="grid grid-cols-[1fr_auto_1fr] items-center -mx-1.5">
+                          <div className="flex items-center gap-0.5">
+                            <button
+                              type="button"
+                              className={ANIM_ICON_BUTTON}
+                              onClick={animIsPlaying ? () => animPauseRef.current?.() : () => animPlayRef.current?.()}
+                              title={animIsPlaying ? "Pause" : "Play"}
+                            >
+                              {animIsPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+                            </button>
+                            <button
+                              type="button"
+                              className={cn(ANIM_ICON_BUTTON, animLoop && "text-blue-600 hover:text-blue-700")}
+                              onClick={() => setAnimLoop(l => !l)}
+                              title={animLoop ? "Loop on" : "Loop off"}
+                              aria-pressed={animLoop}
+                            >
+                              <Repeat className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                          <span className="px-1 text-[11px] text-muted-foreground tabular-nums whitespace-nowrap">
+                            {new Date(animSliderTime * 1000).toLocaleDateString([], { month: "short", day: "2-digit", year: "2-digit" })}
+                            {" "}
+                            {new Date(animSliderTime * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                          </span>
+                          <div className="flex items-center justify-end gap-0.5">
+                            <button
+                              type="button"
+                              className={ANIM_ICON_BUTTON}
+                              onClick={() => { setFlowsData(null); setFlowsStatus("idle"); }}
+                              title="Stop"
+                            >
+                              <Square className="h-3.5 w-3.5" />
+                            </button>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <button
+                                  type="button"
+                                  className={ANIM_ICON_BUTTON}
+                                  title={`Playback settings · ${fmtSpeed(animPlaySpeed)}, ${connectorMode}`}
+                                >
+                                  <Settings2 className="h-3.5 w-3.5" />
+                                </button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuLabel className="text-xs">Playback options</DropdownMenuLabel>
+                                <DropdownMenuSeparator />
+                                {/* Speed and connectors side by side; the long speed list scrolls */}
+                                <div className="flex">
+                                  <div>
+                                    <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Speed</DropdownMenuLabel>
+                                    <DropdownMenuRadioGroup
+                                      value={String(animPlaySpeed)}
+                                      onValueChange={v => setAnimPlaySpeed(Number(v))}
+                                      className="max-h-24 overflow-y-auto"
+                                    >
+                                      {_SPEED_OPTIONS.map(s => (
+                                        <DropdownMenuRadioItem key={s} value={String(s)}>{s}×</DropdownMenuRadioItem>
+                                      ))}
+                                    </DropdownMenuRadioGroup>
+                                  </div>
+                                  <div className="w-px bg-border mx-1 my-1" />
+                                  <div>
+                                    <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Connectors</DropdownMenuLabel>
+                                    <DropdownMenuRadioGroup value={connectorMode} onValueChange={v => setConnectorMode(v as "fade" | "persist" | "none")}>
+                                      <DropdownMenuRadioItem value="fade">Fade</DropdownMenuRadioItem>
+                                      <DropdownMenuRadioItem value="persist">Persist</DropdownMenuRadioItem>
+                                      <DropdownMenuRadioItem value="none">None</DropdownMenuRadioItem>
+                                    </DropdownMenuRadioGroup>
+                                  </div>
+                                </div>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
                         </div>
                       </>
                     )}
                   </div>
+                  {flowsData && <AnimPanelResizeGrip size={animPanelSize} onResize={setAnimPanelSize} />}
                 </FloatingPanel>
               )}
             </>
@@ -1444,12 +1597,14 @@ export default function OCHandoverExplorer({
 
         {fileId && objectTypes.length > 0 && (
           <div className="flex gap-4 flex-wrap justify-center">
-            <TypeSelector title="Resource types" types={objectTypes} selected={resourceTypes} onToggle={toggleResourceType} disabled={useClusters && !!clusterInfo} />
+            <TypeSelector title="Resource types" types={objectTypes} selected={resourceTypes} onToggle={toggleResourceType} onSetMany={setManyResourceTypes} counts={objectTypeCounts} disabled={useClusters && !!clusterInfo} />
             <TypeSelector
               title="Business object types"
               types={objectTypes}
               selected={boTypes}
               onToggle={toggleBoType}
+              onSetMany={setManyBoTypes}
+              counts={objectTypeCounts}
               lockedTypes={clusterResourceTypes}
               lockedHint="Used as a resource type by the organizational units"
             />
@@ -1463,7 +1618,16 @@ export default function OCHandoverExplorer({
               <Switch
                 id="use-clusters"
                 checked={useClusters && !!clusterInfo}
-                onCheckedChange={v => { setUseClusters(v); if (v) { setClusterByOt(false); setSelectedMlpaLevel(null); } }}
+                onCheckedChange={v => {
+                  if (v) {
+                    clusterByOtBeforeUnitsRef.current = clusterByOt;
+                    setClusterByOt(false);
+                    setSelectedMlpaLevel(null);
+                  } else {
+                    setClusterByOt(clusterByOtBeforeUnitsRef.current);
+                  }
+                  setUseClusters(v);
+                }}
                 disabled={!clusterInfo}
               />
               <Label htmlFor="use-clusters" className="text-sm cursor-pointer">
@@ -1662,6 +1826,7 @@ export default function OCHandoverExplorer({
                     fileName={fileName}
                     flowsData={flowsData}
                     playSpeed={animPlaySpeed}
+                    loop={animLoop}
                     connectorMode={connectorMode}
                     onAnimStateChange={(s) => { setAnimIsPlaying(s.isPlaying); setAnimSliderTime(s.sliderTime); }}
                     playRef={animPlayRef}
@@ -1712,32 +1877,71 @@ function fmtDuration(seconds: number | null | undefined): string {
 
 /* ── TypeSelector ───────────────────────────────────────────── */
 function TypeSelector({
-  title, types, selected, onToggle, disabled = false, lockedTypes, lockedHint,
+  title, types, selected, onToggle, onSetMany, counts, disabled = false, lockedTypes, lockedHint,
 }: {
   title: string;
   types: string[];
   selected: Set<string>;
   onToggle: (t: string) => void;
+  /** Selects (`on`) or clears every given type in one update. */
+  onSetMany: (types: string[], on: boolean) => void;
+  /** Number of objects per type, shown after the name. */
+  counts: Record<string, number>;
   disabled?: boolean;
   /** Individual types that cannot be toggled while the rest stay editable. */
   lockedTypes?: Set<string>;
   /** Why those types are locked, shown on hover. */
   lockedHint?: string;
 }) {
+  const [query, setQuery] = useState("");
+  const needle = query.trim().toLowerCase();
+  const visible = needle ? types.filter(t => t.toLowerCase().includes(needle)) : types;
+  // All / None only touch the types currently shown and not locked.
+  const bulkTargets = disabled ? [] : visible.filter(t => !(lockedTypes?.has(t) ?? false));
+  const nSelected = types.filter(t => selected.has(t)).length;
+
   return (
-    <div className={`border rounded-md p-3 min-w-[180px] ${disabled ? "opacity-60" : ""}`}>
+    <div className={`border rounded-md p-3 w-[300px] max-w-full ${disabled ? "opacity-60" : ""}`}>
       <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">{title}</p>
-      <div className="space-y-1.5">
-        {types.map(t => {
+      <div className="relative mb-2">
+        <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder="Search…"
+          aria-label={`Search ${title.toLowerCase()}`}
+          className="h-8 pl-7 text-sm"
+        />
+      </div>
+      <div className="mb-2 flex items-center justify-between text-xs">
+        <span className="text-muted-foreground">{nSelected} of {types.length}</span>
+        <div className="flex gap-1">
+          <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-xs" disabled={bulkTargets.length === 0} onClick={() => onSetMany(bulkTargets, true)}>
+            All
+          </Button>
+          <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-xs" disabled={bulkTargets.length === 0} onClick={() => onSetMany(bulkTargets, false)}>
+            None
+          </Button>
+        </div>
+      </div>
+      <div className="h-56 overflow-y-auto space-y-1.5 pr-1">
+        {visible.length === 0 && <p className="text-sm text-muted-foreground">No matches</p>}
+        {visible.map(t => {
           const locked = disabled || (lockedTypes?.has(t) ?? false);
           return (
             <div key={t} className="flex items-center gap-2" title={!disabled && lockedTypes?.has(t) ? lockedHint : undefined}>
               <Switch id={`${title}-${t}`} checked={selected.has(t)} onCheckedChange={() => onToggle(t)} disabled={locked} />
               <Label
                 htmlFor={`${title}-${t}`}
-                className={`text-sm ${locked ? "cursor-default" : "cursor-pointer"}${!disabled && locked ? " opacity-50" : ""}`}
+                className={`flex min-w-0 flex-1 items-baseline gap-3 text-sm leading-5 ${locked ? "cursor-default" : "cursor-pointer"}${!disabled && locked ? " opacity-50" : ""}`}
               >
-                {t}
+                {/* Long names are cut off; the count keeps its own column on the right. */}
+                <span className="min-w-0 truncate" title={!disabled && lockedTypes?.has(t) ? undefined : t}>{t}</span>
+                {counts[t] !== undefined && (
+                  <span className="ml-auto shrink-0 whitespace-nowrap text-xs font-normal tabular-nums text-muted-foreground">
+                    {counts[t].toLocaleString()}
+                  </span>
+                )}
               </Label>
             </div>
           );
@@ -1834,6 +2038,413 @@ function EventLogTable({
             ))}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+/* ── Activity timeline ──────────────────────────────────────── */
+const ACTIVITY_W = 1000;           // viewBox width; the SVG is stretched to the panel
+const ACTIVITY_H = 56;             // default chart height; the panel can be resized taller
+const ACTIVITY_MAX_STEPS = 2000;   // above this, a step curve is binned
+const ACTIVITY_BINS = 240;
+const ACTIVITY_SAMPLES = 480;      // sample points of the time-in-transit curve
+const RATE_MAX_WINDOWS = 120;      // the rate uses the shortest window giving at most this many
+const RATE_WINDOWS: { seconds: number; label: string }[] = [
+  { seconds: 60, label: "1 min" },
+  { seconds: 5 * 60, label: "5 min" },
+  { seconds: 15 * 60, label: "15 min" },
+  { seconds: 3600, label: "1 h" },
+  { seconds: 6 * 3600, label: "6 h" },
+  { seconds: 86400, label: "1 day" },
+  { seconds: 7 * 86400, label: "1 week" },
+  { seconds: 30 * 86400, label: "30 days" },
+  { seconds: 365 * 86400, label: "1 year" },
+];
+const NEUTRAL_CURVE_COLOR = "#64748b";
+const BALANCE_UP_COLOR = "#16a34a";    // more handovers started than completed
+const BALANCE_DOWN_COLOR = "#dc2626";  // more completed than started
+
+type ActivityMetric = "objects" | "rate" | "age";
+const ACTIVITY_METRICS: { value: ActivityMetric; label: string; hint: string }[] = [
+  { value: "objects", label: "Objects in transit", hint: "Distinct objects on any arc, per object type" },
+  { value: "rate", label: "Handover balance", hint: "Handovers started minus completed per time window: above zero work piles up between resources, below zero it drains" },
+  { value: "age", label: "Time in transit", hint: "How long the handovers currently in transit have been travelling, on average" },
+];
+
+/**
+ * A curve point. A step curve holds `v` from `x` until the next point; a line
+ * curve joins points straight, and a NaN `v` breaks it; a bar runs from `x` to
+ * the next point's `x` (the last to the chart's end) between zero and `v`.
+ */
+type CurvePoint = { x: number; v: number };
+type ActivitySeries = {
+  kind: "step" | "line" | "bars";
+  /**
+   * `negColor` marks a signed line: it colours negative bars and the legend
+   * dot of a negative value, and a zero value gets a grey dot.
+   */
+  lines: { key: string; label: string; color: string; negColor?: string; points: CurvePoint[] }[];
+  /** Each line's value at `time`, for the legend. */
+  valueAt: (time: number) => Record<string, number>;
+  format: (v: number) => string;
+  /** Appended to the peak, e.g. "/ h" for a rate. */
+  unit?: string;
+  /** Shown bottom left, e.g. the bin size. */
+  footnote?: string;
+};
+
+const activityXOf = (timeline: FlowsData["timeline"]) => {
+  const span = Math.max(timeline.end - timeline.start, 1e-9);
+  return (time: number) => Math.min(1, Math.max(0, (time - timeline.start) / span)) * ACTIVITY_W;
+};
+const ACTIVITY_BIN_W = ACTIVITY_W / ACTIVITY_BINS;
+const activityBinOf = (x: number) => Math.min(ACTIVITY_BINS - 1, Math.floor(x / ACTIVITY_BIN_W));
+const fmtCount = (v: number) => v.toLocaleString();
+const legendDotColor = (line: { color: string; negColor?: string }, v: number) =>
+  !line.negColor ? line.color : v > 0 ? line.color : v < 0 ? line.negColor : NEUTRAL_CURVE_COLOR;
+/** Chart y of `v` on a scale from `trough` (bottom) to `peak` (top) in a chart `height` tall. */
+const activityY = (v: number, peak: number, trough: number, height: number) =>
+  2 + ((peak - v) / (peak - trough > 0 ? peak - trough : 1)) * (height - 3);
+const fmtSigned = (v: number) => (v > 0 ? `+${v.toLocaleString()}` : v < 0 ? `−${(-v).toLocaleString()}` : "0");
+
+/**
+ * Distinct business objects in transit per object type over the timeline.
+ *
+ * An object is in transit while any flow carrying it is on screen — the same
+ * `start_time <= t < start_time + duration` window computeDotFrame uses — so
+ * an object on two overlapping arcs counts once.
+ *
+ * Each curve is exact unless it changes more than ACTIVITY_MAX_STEPS times;
+ * then it is binned, keeping each bin's maximum so short spikes survive.
+ */
+function computeObjectSeries(
+  flows: FlowEvent[],
+  timeline: FlowsData["timeline"],
+  typeColorMap: Record<string, string>,
+): ActivitySeries {
+  const xOf = activityXOf(timeline);
+
+  const eventsByType = new Map<string, { time: number; delta: 1 | -1; id: string }[]>();
+  for (const flow of flows) {
+    let events = eventsByType.get(flow.bo_type);
+    if (!events) { events = []; eventsByType.set(flow.bo_type, events); }
+    for (const id of flow.bo_ids) {
+      events.push({ time: flow.start_time, delta: 1, id });
+      events.push({ time: flow.start_time + flow.duration, delta: -1, id });
+    }
+  }
+
+  // Fixed type order from the colour map, so a type keeps its place across reloads
+  const order = Object.keys(typeColorMap);
+  const rank = (t: string) => { const i = order.indexOf(t); return i === -1 ? Infinity : i; };
+  const types = [...eventsByType.keys()].sort((a, b) => rank(a) - rank(b));
+
+  const lines: ActivitySeries["lines"] = [];
+  for (const type of types) {
+    const events = eventsByType.get(type)!;
+    events.sort((a, b) => a.time - b.time);
+    const refs = new Map<string, number>(); // object id → flows currently carrying it
+    const changes: { time: number; v: number }[] = [];
+    let current = 0;
+    for (let i = 0; i < events.length; i++) {
+      const ev = events[i];
+      const n = (refs.get(ev.id) ?? 0) + ev.delta;
+      if (n === 0) refs.delete(ev.id); else refs.set(ev.id, n);
+      if (ev.delta === 1 && n === 1) current++;
+      else if (ev.delta === -1 && n === 0) current--;
+      // Record once all events at this instant are applied, so a handover
+      // ending exactly where the next starts doesn't show a dip.
+      const last = i === events.length - 1 || events[i + 1].time !== ev.time;
+      if (last && (changes.length === 0 || changes[changes.length - 1].v !== current)) {
+        changes.push({ time: ev.time, v: current });
+      }
+    }
+
+    let points: CurvePoint[];
+    if (changes.length <= ACTIVITY_MAX_STEPS) {
+      points = changes.map(c => ({ x: xOf(c.time), v: c.v }));
+    } else {
+      const out = new Array<number>(ACTIVITY_BINS).fill(0);
+      for (let i = 0; i < changes.length; i++) {
+        // changes[i].v holds until the next change, touching every bin in between
+        const b0 = activityBinOf(xOf(changes[i].time));
+        const b1 = i + 1 < changes.length ? activityBinOf(xOf(changes[i + 1].time)) : b0;
+        for (let k = b0; k <= b1; k++) if (changes[i].v > out[k]) out[k] = changes[i].v;
+      }
+      points = out.map((v, k) => ({ x: k * ACTIVITY_BIN_W, v }));
+    }
+    lines.push({ key: type, label: type, color: typeColorMap[type] ?? "#94a3b8", points });
+  }
+
+  return { kind: "step", lines, valueAt: time => objectsAt(flows, time), format: fmtCount };
+}
+
+/** Exact distinct-object count per object type at one instant. */
+function objectsAt(flows: FlowEvent[], time: number): Record<string, number> {
+  const ids = new Map<string, Set<string>>();
+  for (const flow of flows) {
+    if (flow.start_time > time || time >= flow.start_time + flow.duration) continue;
+    let set = ids.get(flow.bo_type);
+    if (!set) { set = new Set(); ids.set(flow.bo_type, set); }
+    for (const id of flow.bo_ids) set.add(id);
+  }
+  return Object.fromEntries([...ids].map(([type, set]) => [type, set.size]));
+}
+
+/**
+ * Handovers started (the dot leaves) minus completed (the dot arrives) per
+ * time window, as bars around zero. Summed from the start, the bars give the
+ * number of handovers in transit.
+ *
+ * The window is the shortest of RATE_WINDOWS that splits the timeline into at
+ * most RATE_MAX_WINDOWS windows, counted from the timeline's start.
+ */
+function computeBalanceSeries(flows: FlowEvent[], timeline: FlowsData["timeline"]): ActivitySeries {
+  const xOf = activityXOf(timeline);
+  const span = Math.max(timeline.end - timeline.start, 1e-9);
+  const win = RATE_WINDOWS.find(w => span / w.seconds <= RATE_MAX_WINDOWS) ?? RATE_WINDOWS[RATE_WINDOWS.length - 1];
+  const count = Math.max(1, Math.ceil(span / win.seconds));
+  const indexOf = (time: number) =>
+    Math.min(count - 1, Math.max(0, Math.floor((time - timeline.start) / win.seconds)));
+
+  const net = new Array<number>(count).fill(0);
+  for (const flow of flows) {
+    net[indexOf(flow.start_time)]++;
+    net[indexOf(flow.start_time + flow.duration)]--;
+  }
+
+  return {
+    kind: "bars",
+    lines: [{
+      key: "net",
+      label: `Started minus completed per ${win.label}`,
+      color: BALANCE_UP_COLOR,
+      negColor: BALANCE_DOWN_COLOR,
+      points: net.map((v, k) => ({ x: xOf(timeline.start + k * win.seconds), v })),
+    }],
+    valueAt: time => ({ net: net[indexOf(time)] }),
+    format: fmtSigned,
+    footnote: `${win.label} intervals`,
+  };
+}
+
+/**
+ * Average time the handovers in transit have been travelling, sampled at
+ * ACTIVITY_SAMPLES points. It rises while work waits and drops when old
+ * handovers arrive; the line breaks where nothing is in transit.
+ */
+function computeAgeSeries(flows: FlowEvent[], timeline: FlowsData["timeline"]): ActivitySeries {
+  const xOf = activityXOf(timeline);
+  const span = Math.max(timeline.end - timeline.start, 1e-9);
+
+  // Start times relative to the timeline keep the running sum precise
+  const events: { time: number; delta: 1 | -1; rel: number }[] = [];
+  for (const flow of flows) {
+    const rel = flow.start_time - timeline.start;
+    events.push({ time: flow.start_time, delta: 1, rel });
+    events.push({ time: flow.start_time + flow.duration, delta: -1, rel });
+  }
+  events.sort((a, b) => a.time - b.time);
+
+  const points: CurvePoint[] = [];
+  let active = 0, sumRel = 0, next = 0;
+  for (let j = 0; j < ACTIVITY_SAMPLES; j++) {
+    const t = timeline.start + span * j / (ACTIVITY_SAMPLES - 1);
+    // A flow is in transit for start <= t < end, so everything at or before t applies
+    while (next < events.length && events[next].time <= t) {
+      active += events[next].delta;
+      sumRel += events[next].delta * events[next].rel;
+      next++;
+    }
+    const v = active > 0 ? (t - timeline.start) - sumRel / active : NaN;
+    points.push({ x: xOf(t), v });
+  }
+
+  return {
+    kind: "line",
+    lines: [{ key: "age", label: "Average time in transit", color: NEUTRAL_CURVE_COLOR, points }],
+    valueAt: time => ({ age: ageAt(flows, time) }),
+    format: v => (Number.isFinite(v) ? fmtDuration(v) : "—"),
+  };
+}
+
+/** Exact average time in transit at one instant; NaN when nothing is in transit. */
+function ageAt(flows: FlowEvent[], time: number): number {
+  let active = 0, sum = 0;
+  for (const flow of flows) {
+    if (flow.start_time > time || time >= flow.start_time + flow.duration) continue;
+    active++;
+    sum += time - flow.start_time;
+  }
+  return active > 0 ? sum / active : NaN;
+}
+
+/**
+ * Curves of the selected activity metric, drawn above the animation
+ * slider. Clicking or dragging on it scrubs, like the slider.
+ *
+ * The caller insets it by the slider thumb's half-width, the range the thumb
+ * centre travels, so a time sits at the same x in both.
+ */
+function ActivityChart({
+  flowsData,
+  time,
+  typeColorMap,
+  onScrub,
+  height = ACTIVITY_H,
+}: {
+  flowsData: FlowsData;
+  time: number;
+  typeColorMap: Record<string, string>;
+  onScrub: (time: number) => void;
+  height?: number;
+}) {
+  const [metric, setMetric] = useState<ActivityMetric>("objects");
+  const metricInfo = ACTIVITY_METRICS.find(m => m.value === metric)!;
+  const series = useMemo(() => {
+    if (metric === "rate") return computeBalanceSeries(flowsData.flows, flowsData.timeline);
+    if (metric === "age") return computeAgeSeries(flowsData.flows, flowsData.timeline);
+    return computeObjectSeries(flowsData.flows, flowsData.timeline, typeColorMap);
+  }, [flowsData, metric, typeColorMap]);
+  const values = useMemo(() => series.valueAt(time), [series, time]);
+
+  // Clicking a legend entry shows only that line, rescaled to its own peak
+  const [solo, setSolo] = useState<string | null>(null);
+  const visible = useMemo(
+    () => (series.lines.some(l => l.key === solo) ? series.lines.filter(l => l.key === solo) : series.lines),
+    [series, solo],
+  );
+  // Scale from the lowest to the highest visible value, always including zero
+  const { peak, trough } = useMemo(() => {
+    let hi = 0, lo = 0;
+    for (const line of visible) for (const p of line.points) {
+      if (p.v > hi) hi = p.v;
+      if (p.v < lo) lo = p.v;
+    }
+    return { peak: hi, trough: lo };
+  }, [visible]);
+
+  const paths = useMemo(() => {
+    const y = (v: number) => activityY(v, peak, trough, height).toFixed(2);
+    return visible.map(({ points }) => {
+      if (series.kind === "bars") {
+        let up = "", down = "";
+        points.forEach((p, i) => {
+          if (p.v === 0) return;
+          const x0 = p.x.toFixed(2), x1 = (points[i + 1]?.x ?? ACTIVITY_W).toFixed(2);
+          const rect = `M${x0} ${y(0)}H${x1}V${y(p.v)}H${x0}Z`;
+          if (p.v > 0) up += rect; else down += rect;
+        });
+        return { up, down };
+      }
+      if (series.kind === "step") {
+        return { line: `M0 ${y(0)}` + points.map(p => `H${p.x.toFixed(2)}V${y(p.v)}`).join("") + `H${ACTIVITY_W}` };
+      }
+      let d = "", pen = false;
+      for (const p of points) {
+        if (!Number.isFinite(p.v)) { pen = false; continue; }
+        d += `${pen ? "L" : "M"}${p.x.toFixed(2)} ${y(p.v)}`;
+        pen = true;
+      }
+      return { line: d };
+    });
+  }, [series, visible, peak, trough, height]);
+
+  const { start, end } = flowsData.timeline;
+  const span = Math.max(end - start, 1e-9);
+  const scrubFromPointer = (e: React.PointerEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    onScrub(start + frac * span);
+  };
+  const playheadPct = Math.min(100, Math.max(0, (time - start) / span * 100));
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button className="flex items-center gap-0.5 hover:text-foreground transition-colors" title={metricInfo.hint}>
+              <span>{metricInfo.label}</span>
+              <ChevronDown className="h-3 w-3 shrink-0" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuRadioGroup value={metric} onValueChange={v => { setMetric(v as ActivityMetric); setSolo(null); }}>
+              {ACTIVITY_METRICS.map(m => (
+                <DropdownMenuRadioItem key={m.value} value={m.value}>{m.label}</DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <span className="tabular-nums">
+          {series.kind === "bars"
+            ? `peak ${fmtSigned(peak)} / ${fmtSigned(trough)}`
+            : `peak ${series.format(peak)}${series.unit ? ` ${series.unit}` : ""}`}
+        </span>
+      </div>
+      <div className="px-2">
+        <div
+          className="relative cursor-pointer touch-none"
+          style={{ height }}
+          onPointerDown={e => { e.preventDefault(); e.currentTarget.setPointerCapture(e.pointerId); scrubFromPointer(e); }}
+          onPointerMove={e => { if (e.currentTarget.hasPointerCapture(e.pointerId)) scrubFromPointer(e); }}
+        >
+          <svg
+            className="absolute inset-0 h-full w-full overflow-visible"
+            viewBox={`0 0 ${ACTIVITY_W} ${height}`}
+            preserveAspectRatio="none"
+          >
+            {visible.map((line, i) => (series.kind === "bars"
+              ? (
+                <g key={line.key}>
+                  <path d={paths[i].up} fill={line.color} />
+                  <path d={paths[i].down} fill={line.negColor ?? line.color} />
+                </g>
+              ) : (
+                <path
+                  key={line.key}
+                  d={paths[i].line}
+                  fill="none"
+                  stroke={line.color}
+                  strokeWidth={1.5}
+                  strokeLinejoin="round"
+                  vectorEffect="non-scaling-stroke"
+                />
+              )
+            ))}
+            {/* Zero line, on top so it stays visible through bars */}
+            <line
+              x1={0} x2={ACTIVITY_W} y1={activityY(0, peak, trough, height)} y2={activityY(0, peak, trough, height)}
+              className="text-border" stroke="currentColor" vectorEffect="non-scaling-stroke"
+            />
+          </svg>
+          <div
+            className="absolute top-0 bottom-0 w-px bg-foreground/40 pointer-events-none"
+            style={{ left: `${playheadPct}%` }}
+          />
+        </div>
+      </div>
+      <div className="flex items-start gap-2 text-[11px]">
+        {series.footnote && <span className="text-muted-foreground whitespace-nowrap">{series.footnote}</span>}
+        <div className="ml-auto flex flex-wrap justify-end gap-x-3 gap-y-0.5">
+          {series.lines.map(line => (
+            <button
+              key={line.key}
+              type="button"
+              className={`flex items-center gap-1 transition-opacity${visible.includes(line) ? "" : " opacity-40"}`}
+              title={solo === line.key ? `${line.label} · click to show all` : `${line.label} · click to show only this`}
+              onClick={() => setSolo(s => (s === line.key ? null : line.key))}
+            >
+              <span
+                className="w-2 h-2 rounded-full shrink-0"
+                style={{ backgroundColor: legendDotColor(line, values[line.key] ?? 0) }}
+              />
+              <span className="tabular-nums">{series.format(values[line.key] ?? 0)}</span>
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -2095,6 +2706,7 @@ function HandoverGraph({
   fileName,
   flowsData,
   playSpeed: playSpeedProp = 100,
+  loop: loopProp = false,
   connectorMode: connectorModeProp = "fade" as const,
   onAnimStateChange,
   playRef,
@@ -2121,6 +2733,8 @@ function HandoverGraph({
   fileName?: string;
   flowsData?: FlowsData | null;
   playSpeed?: number;
+  /** Restart from the timeline's start instead of stopping at its end. */
+  loop?: boolean;
   connectorMode?: "fade" | "persist" | "none";
   onAnimStateChange?: (s: { isPlaying: boolean; sliderTime: number }) => void;
   playRef?: React.RefObject<(() => void) | null>;
@@ -2195,6 +2809,8 @@ function HandoverGraph({
   const [sliderTime, setSliderTime] = useState(0);
   const playSpeedRef = useRef(100);
   useEffect(() => { playSpeedRef.current = playSpeedProp; }, [playSpeedProp]);
+  const loopRef = useRef(loopProp);
+  useEffect(() => { loopRef.current = loopProp; }, [loopProp]);
   const connectorModeRef = useRef<"fade" | "persist" | "none">(connectorModeProp);
   useEffect(() => { connectorModeRef.current = connectorModeProp; }, [connectorModeProp]);
   const playheadTimeRef = useRef(0);
@@ -2456,6 +3072,10 @@ function HandoverGraph({
       if (frameCountRef.current === 0) setSliderTime(newTime);
       if (newTime < fd.timeline.end) {
         animFrameRef.current = requestAnimationFrame(tick);
+      } else if (loopRef.current) {
+        playheadTimeRef.current = fd.timeline.start;
+        setSliderTime(fd.timeline.start);
+        animFrameRef.current = requestAnimationFrame(tick);
       } else {
         setIsPlaying(false);
         setSliderTime(newTime);
@@ -2600,8 +3220,8 @@ function HandoverGraph({
     const degree: Record<string, number> = {};
     nodes.forEach(n => { degree[n.id] = 0; });
     edges.forEach(e => {
-      degree[e.source] = (degree[e.source] ?? 0) + e.raw_weight;
-      degree[e.target] = (degree[e.target] ?? 0) + e.raw_weight;
+      degree[e.source] = (degree[e.source] ?? 0) + e.count;
+      degree[e.target] = (degree[e.target] ?? 0) + e.count;
     });
     const maxDeg = Math.max(...Object.values(degree), 1);
 
@@ -2928,7 +3548,7 @@ function HandoverGraph({
           result.push({
             key: `${pairKey}-${edge.businessobject_type}-${idx}`,
             d: `M ${startX} ${startY} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${endX} ${endY}`,
-            color, strokeWidth, markerId, count: edge.raw_weight, weight: edge.weight,
+            color, strokeWidth, markerId, count: edge.count, weight: edge.weight,
             avg_time: edge.avg_time, min_time: edge.min_time, max_time: edge.max_time,
             businessobject_type: edge.businessobject_type, source: srcId, target: tgtId,
           });
@@ -2991,7 +3611,7 @@ function HandoverGraph({
           d = `M ${sx} ${sy} Q ${cx} ${cy} ${ex} ${ey}`;
         }
 
-        result.push({ key: `${pairKey}-${edge.businessobject_type}-${idx}`, d, color, strokeWidth, markerId, count: edge.raw_weight, weight: edge.weight, avg_time: edge.avg_time, min_time: edge.min_time, max_time: edge.max_time, businessobject_type: edge.businessobject_type, source: srcId, target: tgtId });
+        result.push({ key: `${pairKey}-${edge.businessobject_type}-${idx}`, d, color, strokeWidth, markerId, count: edge.count, weight: edge.weight, avg_time: edge.avg_time, min_time: edge.min_time, max_time: edge.max_time, businessobject_type: edge.businessobject_type, source: srcId, target: tgtId });
       });
     });
 
@@ -4489,11 +5109,11 @@ function NodeDetailView({
 
   const arrowId = (bt: string) => `detail-arrow-${bt.replace(/[^a-zA-Z0-9]/g, "_")}`;
 
-  const allEdgesTotal = [...outEdges, ...inEdges, ...selfEdges].reduce((s, e) => s + e.raw_weight, 0);
+  const allEdgesTotal = [...outEdges, ...inEdges, ...selfEdges].reduce((s, e) => s + e.count, 0);
 
   const getW = (edge: HandoverEdge) => {
     if (!egoNorm) return edge.weight;
-    return allEdgesTotal > 0 ? edge.raw_weight / allEdgesTotal : 0;
+    return allEdgesTotal > 0 ? edge.count / allEdgesTotal : 0;
   };
 
   const displayWeights = egoNorm
@@ -4524,7 +5144,7 @@ function NodeDetailView({
       color: typeColorMap[edge.businessobject_type] ?? "#94a3b8",
       strokeWidth: strokeFor(getW(edge)),
       markerId: arrowId(edge.businessobject_type),
-      count: edge.raw_weight,
+      count: edge.count,
       weight: getW(edge),
       avg_time: edge.avg_time,
       min_time: edge.min_time,
@@ -4568,7 +5188,7 @@ function NodeDetailView({
       color: typeColorMap[edge.businessobject_type] ?? "#94a3b8",
       strokeWidth: strokeFor(getW(edge)),
       markerId: arrowId(edge.businessobject_type),
-      count: edge.raw_weight,
+      count: edge.count,
       weight: getW(edge),
       avg_time: edge.avg_time,
       min_time: edge.min_time,

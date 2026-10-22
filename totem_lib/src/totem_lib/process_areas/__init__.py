@@ -30,6 +30,7 @@ from .discovery import (
     build_process_view,
     discover_process_areas,
     process_areas_from_aggregates,
+    ProcessAreas,
 )
 from .discovery_db import discover_process_areas_db
 from .indicators import (
@@ -62,4 +63,5 @@ __all__ = [
     "process_areas_from_aggregates",
     "prepare",
     "prepare_db",
+    "ProcessAreas",
 ]

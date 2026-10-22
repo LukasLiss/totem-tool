@@ -56,16 +56,22 @@ from ..serializers import (
     TotemConformanceRequestSerializer,
 )
 from ..cache_utils import get_cached_result, set_cached_result
+from ..jobs import JobCancelled, cancelled_response, job_scope
 from ..query_refs import QueryReferenceError, resolve_query_references
+from totem_lib.progress import Progress
 from ._ocel_db import (
+    LARGE_LOG_EVENT_LIMIT,
     _OCEL_DB_REGISTRY,
     _OCEL_DB_REGISTRY_LOCK,
     _OCEL_OBJECT_TYPES_REGISTRY,
+    _OCEL_TIME_WINDOW_REGISTRY,
     _activities_with_counts,
     _build_ocel_db_from_path,
     _close_ocel_db,
     _filter_shadow,
     _get_ocel_object_types,
+    _get_ocel_time_window,
+    _log_time_window,
     _object_types,
     _object_types_with_counts,
     _with_ocel_db,
@@ -94,6 +100,9 @@ MAX_TIMEOUT_S = 300.0
 
 # Upper bound on rows returned by the ad-hoc SQL endpoint.
 EXECUTE_QUERY_MAX_ROWS = 10_000
+
+# `LARGE_LOG_EVENT_LIMIT` (imported from `_ocel_db`): logs with more events
+# get a global time-range filter proposed (see `suggested_time_window`).
 
 # Tables the SQL editor's schema browser lists. Mirrors
 # totem_lib/src/totem_lib/ocel/ocel_duckdb.py:create_ocel_schema. Attribute
@@ -203,8 +212,11 @@ def _claim_storage_name(storage, name, max_length=None):
         return candidate, path
 
 
-def _convert_upload_to_duckdb(upload):
+def _convert_upload_to_duckdb(upload, progress=None):
     """Convert an uploaded OCEL file to DuckDB beside it; return the new name.
+
+    ``progress`` is handed to ``import_ocel_db`` (a ``callback(fraction,
+    message)``), so the client can follow — and cancel — the conversion.
 
     The target must not simply be the upload's name with a `.duckdb`
     extension: Django de-duplicated the upload's name only against files
@@ -216,7 +228,9 @@ def _convert_upload_to_duckdb(upload):
     work_dir = tempfile.mkdtemp(prefix=".convert-", dir=os.path.dirname(upload.path))
     try:
         work_path = os.path.join(work_dir, "log.duckdb")
-        import_ocel_db(upload.path, db_path=work_path, strict_mode=False).close()
+        import_ocel_db(
+            upload.path, db_path=work_path, strict_mode=False, progress=progress
+        ).close()
         root, _ = os.path.splitext(upload.name)
         name, path = _claim_storage_name(
             upload.storage, root + ".duckdb", max_length=upload.field.max_length
@@ -352,7 +366,12 @@ class EventLogViewSet(viewsets.ModelViewSet):
         if upload_path.lower().endswith(".duckdb"):
             return
         try:
-            converted_name = _convert_upload_to_duckdb(event_log.file)
+            converted_name = _convert_upload_to_duckdb(
+                event_log.file, progress=getattr(self, "_import_progress", None)
+            )
+        except JobCancelled:
+            _discard_upload(event_log)
+            raise
         except Exception as e:
             _discard_upload(event_log)
             if isinstance(e, OCELValidationException):
@@ -369,17 +388,28 @@ class EventLogViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         
         try:
-            self.perform_create(serializer)
-            user_file = serializer.instance
-            
-            db = _build_ocel_db_from_path(user_file.file.path, strict_mode=False)
-            with _OCEL_DB_REGISTRY_LOCK:
-                pk = int(user_file.pk)
-                _OCEL_DB_REGISTRY[pk] = db
-                _OCEL_OBJECT_TYPES_REGISTRY[pk] = tuple(
-                    (row["name"], row["count"])
-                    for row in _object_types_with_counts(db)
-                )
+            with job_scope(request, "Importing event log") as job:
+                job.report(0.0, "Converting to DuckDB")
+                self._import_progress = job.report
+                try:
+                    self.perform_create(serializer)
+                finally:
+                    self._import_progress = None
+                user_file = serializer.instance
+
+                job.report(None, "Opening database")
+                db = _build_ocel_db_from_path(user_file.file.path, strict_mode=False)
+                with _OCEL_DB_REGISTRY_LOCK:
+                    pk = int(user_file.pk)
+                    _OCEL_DB_REGISTRY[pk] = db
+                    _OCEL_OBJECT_TYPES_REGISTRY[pk] = tuple(
+                        (row["name"], row["count"])
+                        for row in _object_types_with_counts(db)
+                    )
+                    _OCEL_TIME_WINDOW_REGISTRY[pk] = _log_time_window(db, LARGE_LOG_EVENT_LIMIT)
+        except JobCancelled:
+            _discard_upload(serializer.instance)
+            return cancelled_response()
         except serializers.ValidationError as e:
             return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
         except OCELValidationException as e:
@@ -415,8 +445,11 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 return Response(cached, status=status.HTTP_200_OK)
 
         try:
-            with _with_ocel_db(user_file) as db:
+            with job_scope(request, "Event count") as job, _with_ocel_db(user_file, job) as db:
+                job.report(None, "Counting events")
                 processed, _ = _filtered_event_counts(fp, db)
+        except JobCancelled:
+            return cancelled_response()
         except Exception as e:
             return Response(
                 {"error": f"Failed to process file: {e}"},
@@ -487,7 +520,8 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
         try:
-            with _with_ocel_db(user_file) as db:
+            with job_scope(request, "Event distribution") as job, _with_ocel_db(user_file, job) as db:
+                job.report(None, "Bucketing events")
                 span = db.conn.execute(
                     "SELECT MIN(timestamp_unix), MAX(timestamp_unix) FROM events"
                 ).fetchone()
@@ -525,6 +559,8 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 ).fetchall()
 
             distribution = [{"period": r[0], "count": r[1]} for r in rows]
+        except JobCancelled:
+            return cancelled_response()
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -549,8 +585,11 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response({"error": f"Invalid filters: {e}"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            with _with_ocel_db(user_file) as db:
+            with job_scope(request, "Applying filter") as job, _with_ocel_db(user_file, job) as db:
+                job.report(None, "Counting filtered events and objects")
                 _, stats = apply_filter_stack(db, filter_stack, stats_only=True)
+        except JobCancelled:
+            return cancelled_response()
         except Exception as e:
             return Response({"error": f"Failed to apply filters: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -582,10 +621,11 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 if cached is not None:
                     return Response(cached, status=status.HTTP_200_OK)
 
-            with _with_ocel_db(user_file) as db:
+            with job_scope(request, "TOTeM discovery") as job, _with_ocel_db(user_file, job) as db:
+                job.report(None, "Applying filters")
                 with _filter_shadow(db, fp):
                     # Run with tau=0.0 so the frontend can filter the full relation set.
-                    totem = totemDiscovery_db(db, tau=0.0)
+                    totem = totemDiscovery_db(db, tau=0.0, progress=job.report)
             serialized = totem_to_dict(totem)
             
             # Augment with relations_stats for frontend tau filtering
@@ -623,6 +663,8 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
             set_cached_result(user_file, "discover_totem", serialized, filter_cache_params)
             return Response(serialized, status=status.HTTP_200_OK)
+        except JobCancelled:
+            return cancelled_response()
         except Exception as e:
             return Response(
                 {"error": f"An error occurred during Totem discovery: {e}"},
@@ -682,9 +724,12 @@ class EventLogViewSet(viewsets.ModelViewSet):
             # Conformance runs against the same view of the log the rest of
             # the tool shows: honor an active global filter.
             fp = _parse_filter_params(request)
-            with _with_ocel_db(user_file) as db:
+            with job_scope(request, "TOTeM conformance") as job, _with_ocel_db(user_file, job) as db:
+                job.report(None, "Applying filters")
                 with _filter_shadow(db, fp):
-                    result = conformance_of_totem(totem, db)
+                    result = conformance_of_totem(totem, db, progress=job.report)
+        except JobCancelled:
+            return cancelled_response()
         except Exception as exc:
             return Response(
                 {"error": f"Failed to calculate TOTeM conformance: {exc}"},
@@ -803,30 +848,40 @@ class EventLogViewSet(viewsets.ModelViewSet):
         execution_column = validated.get("execution_column")
         max_states = validated["max_states"]
         try:
-            fp = _parse_filter_params(request)
-            with _with_ocel_db(user_file) as db:
-                with _filter_shadow(db, fp):
-                    error = self._replay_unit_request_error(db, validated)
-                    if error is not None:
-                        return error
-                    replay_units = self._extract_replay_units(db, validated, occn)
-        except Exception as exc:
-            return Response(
-                {"error": f"Failed to extract OCCN replay units: {exc}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+            with job_scope(request, "OCCN conformance") as job:
+                try:
+                    fp = _parse_filter_params(request)
+                    with _with_ocel_db(user_file, job) as db:
+                        job.report(None, "Extracting replay units")
+                        with _filter_shadow(db, fp):
+                            error = self._replay_unit_request_error(db, validated)
+                            if error is not None:
+                                return error
+                            replay_units = self._extract_replay_units(db, validated, occn)
+                except JobCancelled:
+                    raise
+                except Exception as exc:
+                    return Response(
+                        {"error": f"Failed to extract OCCN replay units: {exc}"},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
 
-        try:
-            result = occn_replay_fitness(
-                occn,
-                replay_units,
-                max_states=max_states,
-            )
-        except Exception as exc:
-            return Response(
-                {"error": f"Failed to calculate OCCN conformance: {exc}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+                try:
+                    job.report(None, "Replaying executions")
+                    result = occn_replay_fitness(
+                        occn,
+                        replay_units,
+                        max_states=max_states,
+                    )
+                except JobCancelled:
+                    raise
+                except Exception as exc:
+                    return Response(
+                        {"error": f"Failed to calculate OCCN conformance: {exc}"},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
+        except JobCancelled:
+            return cancelled_response()
 
         return Response(
             {
@@ -969,17 +1024,23 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 if cached is not None:
                     return Response(cached, status=status.HTTP_200_OK)
 
-            with _with_ocel_db(user_file) as db:
-                with _filter_shadow(db, fp):
-                    totem = totemDiscovery_db(db)
-            # mlpaDiscovery operates on the Totem object (no DB access),
-            # so it can run outside the per-file lock.
-            process_view = mlpaDiscovery(totem)
-            serialized = _serialize_mlpa(process_view, totem)
+            with job_scope(request, "Process areas (MLPA)") as job:
+                progress = Progress(job.report)
+                with _with_ocel_db(user_file, job) as db:
+                    job.report(None, "Applying filters")
+                    with _filter_shadow(db, fp):
+                        totem = totemDiscovery_db(db, progress=progress.sub(0.0, 0.85))
+                # mlpaDiscovery operates on the Totem object (no DB access),
+                # so it can run outside the per-file lock.
+                progress.report(0.9, "Layering object types")
+                process_view = mlpaDiscovery(totem)
+                serialized = _serialize_mlpa(process_view, totem)
 
             if not is_filtered:
                 set_cached_result(user_file, "discover_mlpa", serialized)
             return Response(serialized, status=status.HTTP_200_OK)
+        except JobCancelled:
+            return cancelled_response()
         except Exception as e:
             return Response(
                 {"error": f"An error occurred during Totem and MLPA discovery: {e}"},
@@ -1041,26 +1102,32 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 get_cached_result(user_file, "discover_totem_raw") if use_tier_cache else None
             )
 
-            if aggregates is None or totem_data is None:
-                with _with_ocel_db(user_file) as db:
-                    with _filter_shadow(db, fp):
-                        if aggregates is None:
-                            aggregates = prepare_db(db)
-                            if use_tier_cache:
-                                set_cached_result(user_file, "process_area_prep", aggregates)
-                        if totem_data is None:
-                            totem_data = totem_to_dict(totemDiscovery_db(db))
-                            if use_tier_cache:
-                                set_cached_result(
-                                    user_file, "discover_totem_raw", totem_data
+            with job_scope(request, "Process areas") as job:
+                progress = Progress(job.report)
+                if aggregates is None or totem_data is None:
+                    with _with_ocel_db(user_file, job) as db:
+                        job.report(None, "Applying filters")
+                        with _filter_shadow(db, fp):
+                            if aggregates is None:
+                                aggregates = prepare_db(db, progress=progress.sub(0.0, 0.4))
+                                if use_tier_cache:
+                                    set_cached_result(user_file, "process_area_prep", aggregates)
+                            if totem_data is None:
+                                totem_data = totem_to_dict(
+                                    totemDiscovery_db(db, progress=progress.sub(0.4, 0.8))
                                 )
+                                if use_tier_cache:
+                                    set_cached_result(
+                                        user_file, "discover_totem_raw", totem_data
+                                    )
 
-            process_view = process_areas_from_aggregates(
-                aggregates,
-                weights=params["weights"],
-                alpha=params["alpha"],
-                beta=params["beta"],
-            )
+                progress.report(0.85, "Solving the layering")
+                process_view = process_areas_from_aggregates(
+                    aggregates,
+                    weights=params["weights"],
+                    alpha=params["alpha"],
+                    beta=params["beta"],
+                )
 
             serialized = {
                 "layers": _serialize_process_layers(process_view),
@@ -1074,6 +1141,8 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 user_file, "discover_process_areas", serialized, cache_params
             )
             return Response(serialized, status=status.HTTP_200_OK)
+        except JobCancelled:
+            return cancelled_response()
         except Exception as e:
             return Response(
                 {"error": f"An error occurred during process area discovery: {e}"},
@@ -1130,14 +1199,18 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response(cached_result, status=status.HTTP_200_OK)
 
         try:
-            with _with_ocel_db(user_file) as db:
+            with job_scope(request, "Petri net discovery") as job, _with_ocel_db(user_file, job) as db:
+                job.report(None, "Applying filters")
                 with _filter_shadow(db, fp):
                     model = discover_ocpn_db(
                         db,
                         object_types=object_type_filter,
                         timeout_s=timeout_s,
                         name=os.path.splitext(os.path.basename(user_file.file.name))[0],
+                        progress=job.report,
                     )
+        except JobCancelled:
+            return cancelled_response()
         except TimeoutError as e:
             return Response(
                 {
@@ -1447,7 +1520,8 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 if cached is not None:
                     return Response(cached, status=status.HTTP_200_OK)
 
-            with _with_ocel_db(user_file) as db:
+            with job_scope(request, "Log statistics") as job, _with_ocel_db(user_file, job) as db:
+                job.report(None, "Counting events and objects")
                 num_events, num_unique_activities = _filtered_event_counts(fp, db)
                 num_objects, num_object_types = _filtered_object_counts(fp, db)
                 earliest_timestamp, newest_timestamp = _filtered_timestamp_range(fp, db)
@@ -1462,11 +1536,57 @@ class EventLogViewSet(viewsets.ModelViewSet):
             }
             set_cached_result(user_file, "statistics", result, filter_cache_params)
             return Response(result, status=status.HTTP_200_OK)
+        except JobCancelled:
+            return cancelled_response()
         except Exception as e:
             return Response(
                 {"error": f"Failed to compute statistics: {e}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+    @action(detail=True, methods=["get"])
+    def suggested_time_window(self, request, pk=None):
+        """Time range covering the first ``max_events`` events of the log.
+
+        The frontend uses it to pre-select a global time-range filter for
+        logs too large to analyse at once (default limit:
+        ``LARGE_LOG_EVENT_LIMIT``). ``needed`` is false when the whole log
+        already fits; ``before`` is inclusive, so ``selected_events`` can
+        exceed ``max_events`` when several events share the boundary second.
+        """
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response(
+                {"error": "File not found"}, status=status.HTTP_404_NOT_FOUND
+            )
+
+        try:
+            max_events = int(request.query_params.get("max_events", LARGE_LOG_EVENT_LIMIT))
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "max_events must be an integer"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        max_events = max(1, min(max_events, 10_000_000))
+
+        try:
+            if max_events == LARGE_LOG_EVENT_LIMIT:
+                # Computed when the log was loaded: answers immediately even
+                # while an algorithm holds the per-file lock.
+                result = _get_ocel_time_window(user_file)
+            else:
+                with job_scope(request, "Choosing time window") as job, _with_ocel_db(user_file, job) as db:
+                    result = _log_time_window(db, max_events)
+        except JobCancelled:
+            return cancelled_response()
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to compute time window: {e}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(result, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])
     def oc_dotted_chart(self, request, pk=None):
@@ -1504,7 +1624,8 @@ class EventLogViewSet(viewsets.ModelViewSet):
         fp_non_time = {k: v for k, v in fp.items() if k not in ("after", "before")}
 
         try:
-            with _with_ocel_db(user_file) as db:
+            with job_scope(request, "Dotted chart") as job, _with_ocel_db(user_file, job) as db:
+                job.report(None, "Sampling events")
                 with _filter_shadow(db, fp_non_time):
                     result = get_oc_dotted_chart_data(
                         db,
@@ -1521,6 +1642,8 @@ class EventLogViewSet(viewsets.ModelViewSet):
                         max_points=max_points,
                         sample_seed=sample_seed,
                     )
+        except JobCancelled:
+            return cancelled_response()
         except Exception as e:
             return Response(
                 {"error": f"Failed to load OC dotted chart data: {e}"},

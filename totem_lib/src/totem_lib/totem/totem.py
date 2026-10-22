@@ -4,6 +4,7 @@ from datetime import datetime
 from pulp import *
 
 from ..solver import solve
+from ..visualization import ProcessAreas, VisualizableMixin, totem_to_graphviz
 import graphviz
 import os
 from pathlib import Path
@@ -52,7 +53,7 @@ GV_EDGE_FONTSIZE = "8"
 TR_EDGE_ATTR = {"arrowtail": "none", "dir": "both", "decorate": "false"}
 
 
-class Totem:
+class Totem(VisualizableMixin):
     """
     A class to represent the temporal graph and related information mined from an Object Centric Event Log using the totemDiscovery algorithm.
     """
@@ -99,83 +100,29 @@ class Totem:
     #                        event_cardinalities=event_cardinalities,
     #                        temporal_relations=temporal_relations)
 
+    def to_graphviz(self, ot_colors: dict | None = None, **kwargs) -> graphviz.Digraph:
+        """Draws the discovered TOTeM model as a Graphviz Digraph."""
+        return totem_to_graphviz(self, ot_colors, **kwargs)
+
     def visualize(
-        self, output_dir: Path, output_file: str, ot_to_hex_color: dict
+        self, output_dir: Path | str, output_file: str, ot_to_hex_color: dict | None = None
     ) -> None:
         """
-        Draws the discovered TOTeM model using graphviz.
+        Draws the discovered TOTeM model using graphviz and saves it to a file.
         This method is adapted from the implementation by Löseke et al.
 
         Parameters:
-            output_dir (Path): Directory to save the output PDF.
+            output_dir (Path | str): Directory to save the output PDF.
             output_file (str): Filename for the output PDF.
-            ot_to_hex_color (dict): A mapping of object types to their hex color codes.
+            ot_to_hex_color (dict | None): A mapping of object types to their hex color codes.
         """
-        # --- Corrected Data Transformation Step ---
-        # 1. Extract nodes directly from the tempgraph
-        nodes = self.tempgraph.get("nodes", set())
-
-        # 2. Reconstruct the edges dictionary from your tempgraph structure
-        edges = {}
-        # Iterate over relation types ('P', 'I', 'D', etc.) in the tempgraph
-        for relation_type, relation_set in self.tempgraph.items():
-            if relation_type == "nodes":
-                continue  # Skip the nodes entry
-            # Iterate over each pair of object types for the current relation
-            if isinstance(relation_set, set):
-                for ot_a, ot_b in relation_set:
-                    edges[(ot_a, ot_b)] = {"TR": relation_type}
-
-        # --- Visualization Logic ---
-        G = graphviz.Digraph(
-            graph_attr={
-                # 'label': f'Filter parameter: tau = {tau}',
-                "fontname": GV_FONT,
-                "fontsize": GV_GRAPH_FONTSIZE,
-                "margin": "0.1,0.1",
-                "overlap": "false",
-                "rankdir": "LR",
-            }
-        )
-
-        for ot in nodes:
-            color = ot_to_hex_color.get(ot, "#000000")  # Default to black if not in map
-            G.node(
-                ot,
-                label=ot,
-                shape="box",
-                fontname=GV_FONT,
-                fontsize=GV_NODE_FONTSIZE,
-                color=color,
-            )
-
-        for (ot_a, ot_b), edge_dict in edges.items():
-            tr_relation = edge_dict.get("TR")
-            # prepare label with cardinalities
-            card_info = self.cardinalities.get((ot_a, ot_b), {})
-            lc = card_info.get("LC", "")
-            ec = card_info.get("EC", "")
-
-            edge_label = f"{lc}\n({ec})"
-            arrowhead_shape = YOUR_TR_TO_EDGE_ARROWHEAD.get(tr_relation, "none")
-
-            G.edge(
-                ot_a,
-                ot_b,
-                label=edge_label,
-                fontname=GV_FONT,
-                fontsize=GV_EDGE_FONTSIZE,
-                arrowhead=arrowhead_shape,
-                **TR_EDGE_ATTR,
-            )
-
-        os.makedirs(output_dir, exist_ok=True)
-        temp_file_path = output_dir + "/tmp_graph"
-        # TODO: handle exceptions if graphviz is not installed
-        # TODO: handle bug when output_file is not a .pdf
+        G = self.to_graphviz(ot_to_hex_color)
+        out_dir = str(output_dir)
+        os.makedirs(out_dir, exist_ok=True)
+        temp_file_path = os.path.join(out_dir, "tmp_graph")
         G.render(filename=str(temp_file_path), cleanup=True, format="pdf")
-        os.replace(f"{temp_file_path}.pdf", output_dir + "/" + output_file)
-        print(f"Graph successfully saved to {output_dir + '/' + output_file}")
+        os.replace(f"{temp_file_path}.pdf", os.path.join(out_dir, str(output_file)))
+        print(f"Graph successfully saved to {os.path.join(out_dir, str(output_file))}")
 
 
 # Help functions for OCEL2.0
@@ -805,7 +752,7 @@ def mlpaDiscovery(totem: Totem):
     print(resulting_process_view)
     print("")
 
-    resulting_process_view_with_events = {}
+    resulting_process_view_with_events = ProcessAreas()
     # starting from the lowest to the highest level assign the eventtypes to the object groups
     remaining_ev_types = set(list(all_event_types))
     for l in sorted_levels:

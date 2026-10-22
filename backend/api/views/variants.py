@@ -12,6 +12,7 @@ from rest_framework.response import Response
 
 from totem_lib.variants import find_variants
 
+from ..jobs import JobCancelled, cancelled_response, job_scope
 from ..models import EventLog
 from ..cache_utils import get_cached_result, set_cached_result
 from ..variant_params import (
@@ -103,7 +104,8 @@ def variants(request):
             return Response(cached, status=status.HTTP_200_OK)
 
     try:
-        with _with_ocel_db(user_file) as db:
+        with job_scope(request, "Variants") as job, _with_ocel_db(user_file, job) as db:
+            job.report(None, "Applying filters")
             with _filter_shadow(db, fp):
                 # Resolve the parameters *inside* the shadow: the filter may
                 # have removed the type the client last asked for, and falling
@@ -132,10 +134,13 @@ def variants(request):
                     iso=iso,
                     timeout_s=timeout_s,
                     verbose=False,
+                    progress=job.report,
                 )
                 # `calculate_layout` only reads `ocel.obj_type_map` — give it a
                 # tiny shim backed by a SELECT against the DuckDB.
                 layout_ocel = _layout_shim(db)
+    except JobCancelled:
+        return cancelled_response()
     except TimeoutError as e:
         return Response(
             {

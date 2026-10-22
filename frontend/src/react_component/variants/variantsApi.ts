@@ -1,4 +1,5 @@
 import axios from "axios";
+import { isCancelledError } from "@/store/computationStore";
 import { getEffectiveFilterConfig } from "@/store/filterStore";
 import type { ProcessAreaSnapshot, ProcessAreasSnapshot } from "@/store/processAreaStore";
 
@@ -13,11 +14,16 @@ import type {
 
 export type NamedCount = { name: string; count: number };
 
-export async function fetchObjectTypes(fileId: number): Promise<string[]> {
+/** Object types with the number of objects of each type, sorted by name. */
+export async function fetchObjectTypeCounts(fileId: number): Promise<NamedCount[]> {
   const { data } = await axios.get<NamedCount[]>(`/api/files/${fileId}/object_types/`, {
     _skipGlobalFilter: true,
   });
-  return data.map((entry) => entry.name).sort((a, b) => a.localeCompare(b));
+  return [...data].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function fetchObjectTypes(fileId: number): Promise<string[]> {
+  return (await fetchObjectTypeCounts(fileId)).map((entry) => entry.name);
 }
 
 export async function fetchActivities(fileId: number): Promise<string[]> {
@@ -158,6 +164,7 @@ export async function fetchProcessAreas(
 
 /** A user-facing message for a failed variants / store request. */
 export function describeRequestError(error: unknown, fallback: string): string {
+  if (isCancelledError(error)) return "Computation cancelled.";
   if (axios.isAxiosError(error)) {
     const data = error.response?.data as { code?: string; timeout_s?: number; hint?: string; error?: string } | undefined;
     if (error.response?.status === 408 && data?.code === "timeout") {

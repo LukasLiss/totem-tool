@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import axios from "axios";
 import { useFilterVersion } from "@/store/filterStore";
+import { isCancelledError } from "@/store/computationStore";
+import ComputationStatus from "@/components/ComputationStatus";
 
 // Helper function to format duration from seconds
 const formatDuration = (seconds: number): string => {
@@ -66,26 +68,34 @@ const LogStatistics: React.FC<LogStatisticsProps> = ({
       return;
     }
 
+    const controller = new AbortController();
     const fetchStats = async () => {
       setLoading(true);
       setError(null);
       try {
-        const { data } = await axios.get(`/api/files/${fileId}/statistics/`);
+        const { data } = await axios.get(`/api/files/${fileId}/statistics/`, { signal: controller.signal });
         setStats(data);
-      } catch {
-        setError('Failed to load statistics');
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        setError(isCancelledError(err) ? 'Computation cancelled' : 'Failed to load statistics');
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     };
     fetchStats();
+    // Leaving the page or changing the filter stops the running computation.
+    return () => controller.abort();
   }, [fileId, filterVersion]);
 
   // Loading state
   if (loading) {
     return (
-      <div className={`flex items-center justify-center h-full ${className}`}>
-        <p className="text-muted-foreground">Loading statistics...</p>
+      <div className={`flex items-center justify-center h-full min-h-[64px] ${className}`}>
+        <ComputationStatus
+          fileId={fileId}
+          urlIncludes="/statistics/"
+          fallback={<p className="text-muted-foreground">Loading statistics...</p>}
+        />
       </div>
     );
   }
