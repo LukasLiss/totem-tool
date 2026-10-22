@@ -1,5 +1,5 @@
-import ELK from 'elkjs/lib/elk.bundled.js';
 import type { Edge, Node } from '@xyflow/react';
+import { elkLayout } from './elk';
 
 export interface DfgNode {
   id: string;
@@ -16,8 +16,6 @@ export interface DfgLink {
   objtype?: string;
   weights?: Record<string, number>;
 }
-
-const elk = new ELK();
 
 /**
  * Calculates the rank of each node based on its longest path from a source node.
@@ -88,8 +86,9 @@ export function calculateNodeRanks(nodes: DfgNode[], links: DfgLink[]): Map<stri
 export function getLayoutedElements(
   nodes: Node[],
   edges: Edge[],
-  ranks: Map<string, number>,
   layoutDirection: 'TB' | 'LR' = 'TB',
+  /** Aborting stops the layout and rejects with an `AbortError`. */
+  signal?: AbortSignal,
 ): Promise<{ nodes: Node[]; edges: Edge[] }> {
   // Configure ELK for a layered layout
   const elkOptions = {
@@ -114,8 +113,7 @@ export function getLayoutedElements(
     })),
   };
 
-  return elk
-    .layout(graph)
+  return elkLayout(graph, signal)
     .then(g => {
       const sectionsByEdgeId = new Map((g.edges ?? []).map(edge => [
         edge.id,

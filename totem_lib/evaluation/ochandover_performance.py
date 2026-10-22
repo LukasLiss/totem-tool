@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import polars as pl
 
 from totem_lib.ocel.importer import import_ocel
-from totem_lib.ochandover.ochandover import OCHANDOVER
+from totem_lib.orgamining.handover import HandoverGraph
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -270,7 +270,7 @@ def _timed_handover(
 
         # ── Parallel filter (part of EOG phase) ───────────────────────────
         if parallel_threshold is not None:
-            footprint = OCHANDOVER.compute_footprint(ocel, bo_types)
+            footprint = HandoverGraph.compute_footprint(ocel, bo_types)
 
             parallel_set: set[tuple[str, str, str]] = set()
             for row in footprint.filter(
@@ -374,13 +374,13 @@ def _timed_handover(
         _event_ts_dict = {r["_eventId"]: r["_timestampUnix"] for r in event_ts.to_dicts()}
 
         t1 = time.perf_counter()
-        _bo_type_map, _raw = OCHANDOVER._bfs_bridges(eog_arcs, _resource_event_set, None)
+        _bo_type_map, _raw = HandoverGraph._bfs_bridges(eog_arcs, _resource_event_set, None)
         t_bfs = time.perf_counter() - t1
         n_raw = len(_raw)
 
         # ── Phase 3: Expansion (3-tuple → 5-tuple + filtering) ────────────
         t2 = time.perf_counter()
-        _p1, _canonical = OCHANDOVER._canonical_from_raw(_raw, _event_resources_dict, _event_ts_dict)
+        _p1, _canonical = HandoverGraph._canonical_from_raw(_raw, _event_resources_dict, _event_ts_dict)
         n_five_tuples = len(_p1)
         n_canonicals = len(_canonical)
         avg_gap = round(sum(_canonical.values()) / n_canonicals, 2) if _canonical else 0.0

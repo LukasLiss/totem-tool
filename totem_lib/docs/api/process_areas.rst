@@ -16,3 +16,4 @@ the parameters and both algorithms.
    mlpaDiscovery
    discover_process_areas
    discover_process_areas_db
+   ProcessAreas

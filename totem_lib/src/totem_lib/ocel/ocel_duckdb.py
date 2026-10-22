@@ -12,9 +12,11 @@ def create_ocel_schema(
     conn: duckdb.DuckDBPyConnection,
     event_attr_cols: List[str],
     obj_attr_cols: List[str],
+    create_indexes: bool = True,
 ) -> None:
     """
-    Create all OCEL tables and indexes in an existing DuckDB connection.
+    Create all OCEL tables (and, by default, indexes) in an existing DuckDB
+    connection.
 
     Extracted as a module-level function so both OcelDuckDB (constructed from
     an ObjectCentricEventLog) and import_ocel_db (streaming importer) can share
@@ -22,6 +24,10 @@ def create_ocel_schema(
 
     All attribute columns are typed VARCHAR; cast to numeric types in queries
     when needed (e.g. cost::DOUBLE).
+
+    Bulk loaders pass ``create_indexes=False`` and call
+    :func:`create_ocel_indexes` once the data is in place: building an index
+    over a populated table is far cheaper than maintaining it row by row.
     """
     event_attr_defs = "".join(f',\n    "{c}" VARCHAR' for c in event_attr_cols)
     obj_attr_defs = "".join(f',\n    "{c}" VARCHAR' for c in obj_attr_cols)
@@ -69,6 +75,15 @@ def create_ocel_schema(
         )
     """)
 
+    if create_indexes:
+        create_ocel_indexes(conn, obj_attr_cols)
+
+
+def create_ocel_indexes(
+    conn: duckdb.DuckDBPyConnection,
+    obj_attr_cols: List[str],
+) -> None:
+    """Create the secondary indexes of the OCEL schema (see create_ocel_schema)."""
     conn.execute("CREATE INDEX idx_event_object_obj ON event_object(obj_id)")
     conn.execute("CREATE INDEX idx_event_object_ev  ON event_object(event_id)")
     conn.execute("CREATE INDEX idx_objects_type     ON objects(obj_type)")

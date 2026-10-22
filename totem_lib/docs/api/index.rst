@@ -16,3 +16,5 @@ entry points on the event logs page, which live in ``totem_lib.ocel``.
    occn
    variants
    playout
+   organizational_mining
+   visualization

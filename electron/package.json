@@ -13,6 +13,7 @@
   "build": {
     "appId": "com.totem.tool",
     "productName": "TOTeM-Tool",
+    "afterSign": "build/notarize.js",
     "directories": {
       "output": "dist"
     },
@@ -47,7 +48,7 @@
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
-      "notarize": true,
+      "notarize": false,
       "signIgnore": [
         "\\.sqlite3?$",
         "\\.zip$",
@@ -80,6 +81,7 @@
   },
   "license": "MIT",
   "devDependencies": {
+    "@electron/notarize": "2.5.0",
     "electron": "^37.2.3",
     "electron-builder": "^26.0.12",
     "electron-packager": "^17.1.2"

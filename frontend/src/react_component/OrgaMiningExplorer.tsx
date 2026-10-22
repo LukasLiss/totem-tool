@@ -4,8 +4,9 @@ import TooltipBox from "@/react_component/ResourceTooltip";
 import { pieSlicePath } from "@/react_component/orgamining/geometry";
 import { useCluster, type TypeNMap } from "@/contexts/ClusterContext";
 import { useFilterVersion } from "@/store/filterStore";
-import { fetchObjectTypes } from "@/react_component/variants/variantsApi";
+import { fetchObjectTypeCounts } from "@/react_component/variants/variantsApi";
 import {
+  BUSINESS_OBJECT_FEATURE_GROUPS,
   DEFAULT_PROFILING_SETTINGS,
   type ProfilingClusterMethod,
   type ProfilingDistanceMetric,
@@ -14,12 +15,13 @@ import {
 } from "@/react_component/orgamining/settings";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { mapTypesToColors } from "@/utils/objectColors";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { ChevronDown, CircleDashed, ScanIcon, Share2 } from "lucide-react";
+import { ChevronDown, CircleDashed, ScanIcon, Search, Share2 } from "lucide-react";
 import {
   CanvasMessage,
   CanvasSelect,
@@ -101,6 +103,8 @@ const NODE_R = 8;
  * the same layout at a different zoom.
  */
 const MDS_CANVAS = { width: 1000, height: 1000 };
+// Screen pixels a press must move before it counts as a zoom drag, not a click.
+const DRAG_THRESHOLD_PX = 4;
 /** Padding around the point cloud in MDS canvas units. */
 const MDS_VIEW_PAD = NODE_R + 26;
 
@@ -129,6 +133,7 @@ export default function OrgaMiningExplorer({
   // Settings are read once; a host that changes them re-mounts the explorer.
   const [initial] = useState<ResourceProfilingSettings>(() => ({ ...DEFAULT_PROFILING_SETTINGS, ...initialSettings }));
   const [objectTypes, setObjectTypes] = useState<string[]>([]);
+  const [objectTypeCounts, setObjectTypeCounts] = useState<Record<string, number>>({});
   const [resourceTypes, setResourceTypes] = useState<Set<string>>(new Set(initial.resourceTypes));
   const [data, setData] = useState<ProfileMatrixData | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
@@ -189,6 +194,7 @@ export default function OrgaMiningExplorer({
   // Load object types when fileId changes
   useEffect(() => {
     setObjectTypes([]);
+    setObjectTypeCounts({});
     setResourceTypes(new Set(initial.resourceTypes));
     setBusinessObjectTypes(new Set(initial.businessObjectTypes));
     setData(null);
@@ -203,9 +209,11 @@ export default function OrgaMiningExplorer({
     (async () => {
       if (fileIdRef.current !== currentFileId) return;
       try {
-        const types = await fetchObjectTypes(currentFileId);
+        const typeCounts = await fetchObjectTypeCounts(currentFileId);
         if (fileIdRef.current !== currentFileId || cancelled) return;
+        const types = typeCounts.map(e => e.name);
         setObjectTypes(types);
+        setObjectTypeCounts(Object.fromEntries(typeCounts.map(e => [e.name, e.count])));
         const known = new Set(types);
         // Preselected types that no longer exist in this log are dropped.
         setResourceTypes(prev => new Set([...prev].filter(t => known.has(t))));
@@ -240,7 +248,9 @@ export default function OrgaMiningExplorer({
     const tooltipOnly = [...tooltipFeatureGroups].filter(g => !featureGroups.has(g));
     if (tooltipOnly.length > 0) params.tooltip_feature_groups = tooltipOnly.join(",");
 
-    if (featureGroups.has("object_collaboration_fractions")) {
+    // Collaboration and portfolio fractions (also as tooltip-only groups) are
+    // computed over the business object types.
+    if ([...featureGroups, ...tooltipFeatureGroups].some(g => (BUSINESS_OBJECT_FEATURE_GROUPS as string[]).includes(g))) {
       // Send only business object types that are not currently resource types.
       const activeBizTypes = [...businessObjectTypes].filter(t => !resourceTypes.has(t));
       if (activeBizTypes.length > 0)
@@ -368,6 +378,8 @@ export default function OrgaMiningExplorer({
 
   const toggleResourceType = (t: string) =>
     setResourceTypes(prev => { const n = new Set(prev); if (n.has(t)) n.delete(t); else n.add(t); return n; });
+  const setManyResourceTypes = (types: string[], on: boolean) =>
+    setResourceTypes(prev => { const n = new Set(prev); types.forEach(t => (on ? n.add(t) : n.delete(t))); return n; });
 
   const typeColorMap = useMemo(() => mapTypesToColors(objectTypes), [objectTypes]);
 
@@ -463,6 +475,8 @@ export default function OrgaMiningExplorer({
               types={objectTypes}
               selected={resourceTypes}
               onToggle={toggleResourceType}
+              onSetMany={setManyResourceTypes}
+              counts={objectTypeCounts}
               colorMap={typeColorMap}
             />
             {/* Feature group selector */}
@@ -540,8 +554,9 @@ export default function OrgaMiningExplorer({
               );
             })()}
 
-            {/* Business object type selector — only when object collaboration is active */}
-            {featureGroups.has("object_collaboration_fractions") && (() => {
+            {/* Business object type selector — only when a business-object feature group
+                (collaboration or portfolio, also as tooltip-only group) is active */}
+            {[...featureGroups, ...tooltipFeatureGroups].some(g => (BUSINESS_OBJECT_FEATURE_GROUPS as string[]).includes(g)) && (() => {
               const nonResourceTypes = objectTypes.filter(t => !resourceTypes.has(t));
               if (nonResourceTypes.length === 0) return null;
               return (
@@ -554,6 +569,12 @@ export default function OrgaMiningExplorer({
                     if (n.has(t)) n.delete(t); else n.add(t);
                     return n;
                   })}
+                  onSetMany={(types, on) => setBusinessObjectTypes(prev => {
+                    const n = new Set(prev);
+                    types.forEach(t => (on ? n.add(t) : n.delete(t)));
+                    return n;
+                  })}
+                  counts={objectTypeCounts}
                   colorMap={typeColorMap}
                 />
               );
@@ -978,6 +999,13 @@ function ResourceGraph({
     Object.fromEntries(data.resources.map((r, i) => [r, data.values[i]])),
   [data.resources, data.values]);
   const dragStart = useRef<{ x: number; y: number } | null>(null);
+  // Screen position where the press started; the press becomes a zoom drag
+  // (and takes pointer capture) once it moves more than DRAG_THRESHOLD_PX.
+  const dragStartClient = useRef<{ x: number; y: number } | null>(null);
+  const dragMoved = useRef(false);
+  // Swallow the click the browser fires after a zoom drag, so it does not
+  // pin a node, open a cluster tooltip or close a pinned one.
+  const suppressClick = useRef(false);
 
   const scheduleHide = () => {
     hideTimerRef.current = setTimeout(
@@ -1037,18 +1065,37 @@ function ResourceGraph({
     };
   };
 
-  const handleMouseDown = (e: React.MouseEvent) => {
+  const cancelDrag = () => {
+    dragStart.current = null;
+    dragStartClient.current = null;
+    rbRef.current?.setAttribute("display", "none");
+  };
+
+  const handlePointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
     if (e.button !== 0) return;
     const { x, y } = toUser(e.clientX, e.clientY);
     dragStart.current = { x, y };
+    dragStartClient.current = { x: e.clientX, y: e.clientY };
+    dragMoved.current = false;
+    suppressClick.current = false;
     // Dismiss any unpinned tooltip the moment a drag begins
     setTooltip(t => (t?.pinned ? t : null));
     const el = rbRef.current;
     if (el) { el.setAttribute("x", String(x)); el.setAttribute("y", String(y)); el.setAttribute("width", "0"); el.setAttribute("height", "0"); el.setAttribute("display", "block"); }
   };
 
-  const handleMouseMove = (e: React.MouseEvent) => {
+  const handlePointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
     if (dragStart.current) {
+      // Once the press really moves it is a zoom drag: capture the pointer so
+      // every further move and the release reach the SVG, even over a node,
+      // a cluster hull, the pinned tooltip, the floating panels or outside
+      // the canvas. Capturing only now keeps a plain click on its target.
+      const start = dragStartClient.current;
+      if (!dragMoved.current && start
+          && Math.hypot(e.clientX - start.x, e.clientY - start.y) > DRAG_THRESHOLD_PX) {
+        dragMoved.current = true;
+        try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* pointer already gone */ }
+      }
       const { x, y } = toUser(e.clientX, e.clientY);
       const rx = Math.min(dragStart.current.x, x), ry = Math.min(dragStart.current.y, y);
       const rw = Math.abs(x - dragStart.current.x), rh = Math.abs(y - dragStart.current.y);
@@ -1083,12 +1130,12 @@ function ResourceGraph({
     }
   };
 
-  const handleMouseUp = (e: React.MouseEvent) => {
+  const handlePointerUp = (e: React.PointerEvent<SVGSVGElement>) => {
     if (!dragStart.current) return;
     const { x, y } = toUser(e.clientX, e.clientY);
     const x0 = dragStart.current.x, y0 = dragStart.current.y;
-    dragStart.current = null;
-    rbRef.current?.setAttribute("display", "none");
+    suppressClick.current = dragMoved.current;
+    cancelDrag();
     let rw = Math.abs(x - x0), rh = Math.abs(y - y0);
     // Minimum selection of 10 screen pixels in each direction
     if (rw * effectiveScale < 10 || rh * effectiveScale < 10) return;
@@ -1284,10 +1331,25 @@ function ResourceGraph({
           height={size.height}
           viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`}
           style={{ cursor: "crosshair", userSelect: "none", display: "block" }}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={e => { if (dragStart.current) handleMouseUp(e); setEdgeTooltip(null); }}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          // A drag that is cancelled by the browser or loses its capture
+          // never zooms. After a normal release dragStart is already null.
+          onPointerCancel={cancelDrag}
+          onLostPointerCapture={() => { if (dragStart.current) cancelDrag(); }}
+          onPointerLeave={() => {
+            // A captured drag keeps running outside the canvas; a press that
+            // leaves before it became a drag is dropped.
+            if (dragStart.current && !dragMoved.current) cancelDrag();
+            setEdgeTooltip(null);
+          }}
+          onClickCapture={e => {
+            if (suppressClick.current) {
+              suppressClick.current = false;
+              e.stopPropagation();
+            }
+          }}
           onClick={() => { setTooltip(t => t?.pinned ? null : t); setHighlightedActivity(null); }}
         >
           {/* Cluster hulls — rendered behind all nodes; hovering/clicking shows cluster tooltip.
@@ -1774,19 +1836,50 @@ function ResourceGraph({
 
 /* ── TypeSelector ───────────────────────────────────────────── */
 function TypeSelector({
-  title, types, selected, onToggle, colorMap,
+  title, types, selected, onToggle, onSetMany, counts, colorMap,
 }: {
   title: string;
   types: string[];
   selected: Set<string>;
   onToggle: (t: string) => void;
+  /** Selects (`on`) or clears every given type in one update. */
+  onSetMany: (types: string[], on: boolean) => void;
+  /** Number of objects per type, shown after the name. */
+  counts: Record<string, number>;
   colorMap: Record<string, string>;
 }) {
+  const [query, setQuery] = useState("");
+  const needle = query.trim().toLowerCase();
+  const visible = needle ? types.filter(t => t.toLowerCase().includes(needle)) : types;
+  const nSelected = types.filter(t => selected.has(t)).length;
+
   return (
-    <div className="border rounded-md p-3 min-w-[180px]">
+    <div className="border rounded-md p-3 w-[300px] max-w-full">
       <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">{title}</p>
-      <div className="space-y-1.5">
-        {types.map(t => (
+      <div className="relative mb-2">
+        <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder="Search…"
+          aria-label={`Search ${title.toLowerCase()}`}
+          className="h-8 pl-7 text-sm"
+        />
+      </div>
+      <div className="mb-2 flex items-center justify-between text-xs">
+        <span className="text-muted-foreground">{nSelected} of {types.length}</span>
+        <div className="flex gap-1">
+          <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-xs" disabled={visible.length === 0} onClick={() => onSetMany(visible, true)}>
+            All
+          </Button>
+          <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-xs" disabled={visible.length === 0} onClick={() => onSetMany(visible, false)}>
+            None
+          </Button>
+        </div>
+      </div>
+      <div className="h-56 overflow-y-auto space-y-1.5 pr-1">
+        {visible.length === 0 && <p className="text-sm text-muted-foreground">No matches</p>}
+        {visible.map(t => (
           <div key={t} className="flex items-center gap-2">
             <Switch
               id={`pm-${title}-${t}`}
@@ -1794,8 +1887,14 @@ function TypeSelector({
               onCheckedChange={() => onToggle(t)}
               style={{ backgroundColor: colorMap[t] ?? "#94a3b8", opacity: selected.has(t) ? 1 : 0.35 }}
             />
-            <Label htmlFor={`pm-${title}-${t}`} className="text-sm cursor-pointer">
-              {t}
+            <Label htmlFor={`pm-${title}-${t}`} className="flex min-w-0 flex-1 items-baseline gap-3 text-sm leading-5 cursor-pointer">
+              {/* Long names are cut off; the count keeps its own column on the right. */}
+              <span className="min-w-0 truncate" title={t}>{t}</span>
+              {counts[t] !== undefined && (
+                <span className="ml-auto shrink-0 whitespace-nowrap text-xs font-normal tabular-nums text-muted-foreground">
+                  {counts[t].toLocaleString()}
+                </span>
+              )}
             </Label>
           </div>
         ))}

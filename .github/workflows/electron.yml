@@ -119,11 +119,38 @@ jobs:
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
-          path: release-artifacts
-          merge-multiple: true
+          path: artifacts
 
-      - name: List artifacts
-        run: ls -la release-artifacts
+      # Both macOS jobs write a latest-mac.yml (the electron-updater feed), so
+      # flattening the artifacts would keep only one. Merge their file lists:
+      # arm64 Macs pick the "arm64" entries, Intel Macs the others. The
+      # top-level path/sha512 stay on the x64 zip (legacy fallback).
+      - name: Collect artifacts and merge latest-mac.yml
+        run: |
+          mkdir release-artifacts
+          find artifacts -type f ! -name latest-mac.yml -exec cp {} release-artifacts/ \;
+          python3 - <<'EOF'
+          from pathlib import Path
+
+          def split(path):
+              parts = {"head": [], "files": [], "tail": []}
+              section = "head"
+              for line in Path(path).read_text().splitlines():
+                  if line == "files:":
+                      section = "files"
+                      continue
+                  if section == "files" and not line.startswith(" "):
+                      section = "tail"
+                  parts[section].append(line)
+              return parts
+
+          x64 = split("artifacts/totem-tool-macos-x64/latest-mac.yml")
+          arm64 = split("artifacts/totem-tool-macos-arm64/latest-mac.yml")
+          merged = x64["head"] + ["files:"] + x64["files"] + arm64["files"] + x64["tail"]
+          Path("release-artifacts/latest-mac.yml").write_text("\n".join(merged) + "\n")
+          EOF
+          ls -la release-artifacts
+          cat release-artifacts/latest-mac.yml
 
       - name: Create / update GitHub Release
         uses: softprops/action-gh-release@v2

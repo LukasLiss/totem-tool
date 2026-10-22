@@ -11,20 +11,23 @@ import { LocalFilterDropdown } from "@/components/ui/LocalFilterDropdown";
 import { ReactFlowProvider } from "@xyflow/react";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import ProcessArea from "@/react_component/ProcessArea";
-import OCCNVisualizer from "@/react_component/OCCNVisualizer";
+import NewOCDFGVisualizer from "@/react_component/NewOCDFGVisualizer";
 import LogStatistics from "@/components/LogStatistics";
 
 /**
  * The Overview page: a first look at the selected event log.
  *
- * Log statistics, the Process Area and the OCCN. Everything else this page
- * used to repeat — OC-DFG variants, the variants explorer and the dotted
- * chart — lives in the Analysis section, where it can be worked with properly.
+ * Log statistics, the Process Area and the object-centric directly-follows
+ * graph. The DFG replaces the causal net that used to be here: it is computed
+ * in SQL and renders within seconds even for large logs, while OCCN discovery
+ * can take minutes and belongs in the Analysis section, where it can be
+ * started deliberately. Everything else this page used to repeat — OC-DFG
+ * variants, the variants explorer and the dotted chart — lives there too.
  */
 export function DevDashboard() {
   const { selectedFile } = useContext(SelectedFileContext);
-  const [occnFilterEnabled, setOccnFilterEnabled] = useState(true);
-  const [occnLocalFilter, setOccnLocalFilter] = useState<Record<string, string>>({});
+  const [dfgFilterEnabled, setDfgFilterEnabled] = useState(true);
+  const [dfgLocalFilter, setDfgLocalFilter] = useState<Record<string, string>>({});
 
   return (
     <div>
@@ -37,23 +40,25 @@ export function DevDashboard() {
           showNumObjectTypes={true}
         />
         <ProcessArea fileId={selectedFile?.id} />
-        <Card className="@container/card">
+        <Card className="@container/card" data-testid="overview-dfg-card">
           <CardHeader className="items-center relative z-10 justify-between">
             <div className="flex items-center gap-2">
-              <CardTitle>Object-Centric Causal Net</CardTitle>
-              <GlobalFilterToggle filterEnabled={occnFilterEnabled} onToggle={() => setOccnFilterEnabled(p => !p)} />
-              <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setOccnLocalFilter} />
+              <CardTitle>Object-Centric Directly-Follows Graph</CardTitle>
+              <GlobalFilterToggle filterEnabled={dfgFilterEnabled} onToggle={() => setDfgFilterEnabled(p => !p)} />
+              <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setDfgLocalFilter} />
             </div>
-            <CardDescription>Causal net with activity bindings and automatic layout</CardDescription>
+            <CardDescription>Directly-follows relations per object type with arc weights and automatic layout</CardDescription>
           </CardHeader>
           <CardContent className="h-[640px] p-0">
             <ReactFlowProvider>
-              <OCCNVisualizer
+              <NewOCDFGVisualizer
                 height="100%"
                 fileId={selectedFile?.id}
-                filterEnabled={occnFilterEnabled}
-                localFilterParams={occnLocalFilter}
-                showTitle={false}
+                showControls={true}
+                initialInteractionLocked={true}
+                layoutDirection="TB"
+                filterEnabled={dfgFilterEnabled}
+                localFilterParams={dfgLocalFilter}
               />
             </ReactFlowProvider>
           </CardContent>

@@ -25,9 +25,9 @@ pip install "git+https://github.com/LukasLiss/totem-tool.git#subdirectory=totem_
 
 ## Graphviz
 
-`Totem.visualize()` draws models with the `dot` program from
-[Graphviz](https://graphviz.org/download/), which pip cannot install. Everything
-else works without it.
+Drawing models, with `plot()` or as a picture in Jupyter, needs the `dot`
+program from [Graphviz](https://graphviz.org/download/), which pip cannot
+install. Everything else works without it.
 
 ## Example data
 

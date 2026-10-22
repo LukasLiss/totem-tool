@@ -33,6 +33,7 @@ import { deleteProject, getUserFiles, renameProject } from "../api/fileApi"
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner"
 import { DashboardContext } from "@/contexts/DashboardContext.tsx";
+import { prepareLargeLogFilter } from "@/store/applyGlobalFilter";
 
 /** One row of GET /api/files/ — a project as the switcher knows it. */
 type ProjectFile = {
@@ -173,7 +174,10 @@ export function Switcher() {
             {files.map((project) => (
               <DropdownMenuItem
                 key={project.id}
-                onClick={() => {
+                onClick={async () => {
+                  // Large logs get their time-range filter before the views
+                  // of the new project mount (see prepareLargeLogFilter).
+                  await prepareLargeLogFilter(Number(project.id));
                   setSelectedFile(project);
                   setViewMode({ type: 'overview' });
                 }}

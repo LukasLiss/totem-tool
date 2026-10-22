@@ -3,6 +3,7 @@ import { ChevronDown, ChevronUp, Play, Settings, ZoomIn, ZoomOut } from "lucide-
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import ComputationStatus from "@/components/ComputationStatus";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
@@ -444,12 +445,19 @@ export default function VariantsExplorer({
         ) : null}
 
         {status === "loading" ? (
-          <div className="flex items-center gap-2">
-            <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-            <span className="text-sm">
-              {store.enabled ? "Computing and storing process executions…" : "Loading variants…"}
-            </span>
-          </div>
+          <ComputationStatus
+            fileId={fileId}
+            urlIncludes={["/variants/", "/process_executions/"]}
+            className="mx-0"
+            fallback={(
+              <div className="flex items-center gap-2">
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                <span className="text-sm">
+                  {store.enabled ? "Computing and storing process executions…" : "Loading variants…"}
+                </span>
+              </div>
+            )}
+          />
         ) : null}
 
         {status === "error" ? (

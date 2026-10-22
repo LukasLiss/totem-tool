@@ -10,6 +10,7 @@ from rest_framework.response import Response
 
 from totem_lib.dfg import NewOCDFGDb
 
+from ..jobs import JobCancelled, cancelled_response, job_scope
 from ..models import EventLog
 from ._ocel_db import _filter_shadow, _with_ocel_db
 from ._filters import _parse_filter_params
@@ -76,13 +77,15 @@ def NewOCDFGViewSet(request):
         ) or None
 
     try:
-        with _with_ocel_db(user_file) as db:
-            with _filter_shadow(db, fp_non_types):
-                # Delegate all process-mining logic to totem-lib.
-                # Returns the annotated graph and per-type variant counts for sliders.
-                ocdfg, variant_counts = NewOCDFGDb.from_ocel_db_with_variant_ranks(
-                    db, object_types=object_type_filter
-                )
+        with job_scope(request, "Object-centric DFG") as job:
+            with _with_ocel_db(user_file, job) as db:
+                job.report(None, "Applying filters")
+                with _filter_shadow(db, fp_non_types):
+                    # Delegate all process-mining logic to totem-lib.
+                    # Returns the annotated graph and per-type variant counts for sliders.
+                    ocdfg, variant_counts = NewOCDFGDb.from_ocel_db_with_variant_ranks(
+                        db, object_types=object_type_filter, progress=job.report
+                    )
 
             if len(ocdfg.nodes) == 0:
                 dfg_json = {
@@ -115,6 +118,8 @@ def NewOCDFGViewSet(request):
             status=status.HTTP_200_OK,
         )
 
+    except JobCancelled:
+        return cancelled_response()
     except Exception as e:
         traceback.print_exc()
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
