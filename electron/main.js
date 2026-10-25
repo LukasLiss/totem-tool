@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog } = require('electron');
+const { app, BrowserWindow, dialog, shell } = require('electron');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const http = require('http');
@@ -183,6 +183,16 @@ function startFrontendServer() {
 // Window
 // ---------------------------------------------------------------------------
 
+/** The only schemes a Text Box link may hand to the operating system. */
+function isExternalOpenable(raw) {
+  try {
+    const { protocol } = new URL(raw);
+    return protocol === 'http:' || protocol === 'https:' || protocol === 'mailto:';
+  } catch {
+    return false;
+  }
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -193,6 +203,43 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
     },
+  });
+
+  // Text Box links render with target="_blank" (RichTextRenderer.tsx). Left
+  // alone, Electron honours that by opening a second bare BrowserWindow at
+  // the external site -- no address bar, no back button, and none of the
+  // user's own browser session. Hand qualifying URLs to the OS instead and
+  // never open a window inside the app.
+  //
+  // The scheme is re-checked here even though the backend whitelist and the
+  // renderer have both already done it: shell.openExternal asks the OS to
+  // open whatever the URL names, which on some platforms means a registered
+  // protocol handler. It is the last gate before leaving the sandbox and
+  // does not get to assume its input was cleaned upstream.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (isExternalOpenable(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+
+  // A mailto link carries no target, so it arrives as a navigation of the
+  // window itself rather than through the handler above; so would any link
+  // that lost its target. Following one would strand the user on a website
+  // inside the app frame with no way back short of restarting.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    let target;
+    try {
+      target = new URL(url);
+    } catch {
+      event.preventDefault();
+      return;
+    }
+    // The app serves itself over http://localhost on a port picked at
+    // runtime, so same-origin is compared against the window, never a
+    // hard-coded port.
+    const current = new URL(mainWindow.webContents.getURL());
+    if (target.origin === current.origin) return;
+    event.preventDefault();
+    if (isExternalOpenable(url)) shell.openExternal(url);
   });
 
   mainWindow.loadURL(isDev ? 'http://localhost:3000' : `${frontendOrigin()}/`);

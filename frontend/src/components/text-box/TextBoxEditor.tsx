@@ -14,7 +14,7 @@
  */
 import React from 'react';
 import { EditorContent, useEditor } from '@tiptap/react';
-import { TextBoxToolbar } from './TextBoxToolbar';
+import { type LinkableDashboard, TextBoxToolbar } from './TextBoxToolbar';
 import { TEXT_BOX_EXTENSIONS } from './textBoxExtensions';
 import type { RichTextDoc } from './richText';
 import { type TextBoxFormat, TEXT_BOX_FORMAT_DEFAULTS } from './textBoxFormat';
@@ -27,6 +27,8 @@ export interface TextBoxEditorProps {
   /** A box-level setting changed (background colour, vertical alignment). */
   onFormatChange: (patch: Partial<TextBoxFormat>) => void;
   idPrefix: string;
+  /** Dashboards in this project, for the link popover's picker. */
+  dashboards?: LinkableDashboard[];
 }
 
 export function TextBoxEditor({
@@ -35,6 +37,7 @@ export function TextBoxEditor({
   onDocChange,
   onFormatChange,
   idPrefix,
+  dashboards,
 }: TextBoxEditorProps) {
   const editor = useEditor({
     extensions: TEXT_BOX_EXTENSIONS,
@@ -69,6 +72,7 @@ export function TextBoxEditor({
         format={format}
         onFormatChange={onFormatChange}
         idPrefix={idPrefix}
+        dashboards={dashboards}
       />
       <div
         className="min-h-0 flex-1 p-3"

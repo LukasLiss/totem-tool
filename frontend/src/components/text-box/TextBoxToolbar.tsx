@@ -10,8 +10,8 @@
  * Button state is read back from the editor (`isActive` / `getAttributes`),
  * so what is highlighted is always what the selection actually carries.
  */
-import type React from 'react';
-import { Bold, Italic, Underline } from 'lucide-react';
+import React, { useState } from 'react';
+import { Bold, Italic, Link2, Underline } from 'lucide-react';
 import type { Editor } from '@tiptap/react';
 import { useEditorState } from '@tiptap/react';
 
@@ -33,7 +33,6 @@ import {
   FONT_FAMILY_STACKS,
   FONT_SIZE_MAX,
   FONT_SIZE_MIN,
-  FONT_SIZE_PRESETS,
   TEXT_ALIGN_OPTIONS,
   TEXT_BOX_FORMAT_DEFAULTS,
   TEXT_COLOR_SWATCHES,
@@ -42,6 +41,18 @@ import {
   VERTICAL_ALIGN_OPTIONS,
   isHexColor,
 } from './textBoxFormat';
+import { isMailtoHref, isSafeHref } from './richText';
+
+/** A dashboard a link can point at — the current project's, by name. */
+export type LinkableDashboard = { id: number; name: string };
+
+type LinkKind = 'web' | 'email' | 'dashboard';
+
+const LINK_KIND_LABELS: Record<LinkKind, string> = {
+  web: 'Web',
+  email: 'Email',
+  dashboard: 'Dashboard',
+};
 
 /**
  * Stop a toolbar control from taking focus. Without this the editor blurs on
@@ -135,6 +146,230 @@ function ColorField({
   );
 }
 
+/**
+ * Attach a link to the selected text: a web URL, an email address, or another
+ * dashboard in this project.
+ *
+ * Unlike `ColorField` this popover does **not** suppress its own autofocus —
+ * a URL field has to be typable. The selection survives anyway because the
+ * trigger keeps it on mousedown and every command re-focuses the editor
+ * first, which restores the stored ProseMirror selection. `extendMarkRange`
+ * is what makes editing replace the whole existing link rather than only the
+ * characters that happen to be selected.
+ */
+function LinkField({
+  editor,
+  href,
+  dashboardId,
+  dashboards,
+  canLink,
+}: {
+  editor: Editor;
+  href: string | null;
+  dashboardId: number | null;
+  dashboards: LinkableDashboard[];
+  canLink: boolean;
+}) {
+  const active = Boolean(href) || dashboardId !== null;
+  const inputRef = React.useRef<HTMLInputElement>(null);
+  const [open, setOpen] = useState(false);
+  const [kind, setKind] = useState<LinkKind>('web');
+  const [draft, setDraft] = useState('');
+  const [target, setTarget] = useState<string>('');
+
+  const resolved = kind === 'email' ? `mailto:${draft.trim()}` : draft.trim();
+  const valid =
+    kind === 'dashboard'
+      ? target !== ''
+      : isSafeHref(resolved) && (kind === 'email') === isMailtoHref(resolved);
+
+  // Seed the popover from whatever the caret is already sitting on, so
+  // opening it on an existing link edits that link instead of a blank form.
+  const seed = () => {
+    if (dashboardId !== null) {
+      setKind('dashboard');
+      setTarget(String(dashboardId));
+      setDraft('');
+    } else if (href && isMailtoHref(href)) {
+      setKind('email');
+      setDraft(href.slice('mailto:'.length));
+    } else {
+      setKind('web');
+      setDraft(href ?? '');
+    }
+  };
+
+  // Clear both kinds before setting either, so switching a web link to a
+  // dashboard link (or back) never leaves the old mark underneath.
+  const spanning = () =>
+    editor.chain().focus().extendMarkRange('link').extendMarkRange('dashboardLink');
+
+  const apply = () => {
+    if (!valid) return;
+    if (kind === 'dashboard') {
+      spanning().unsetLink().setDashboardLink({ dashboardId: Number(target) }).run();
+    } else {
+      spanning().unsetDashboardLink().setLink({ href: resolved }).run();
+    }
+    setOpen(false);
+  };
+
+  const remove = () => {
+    spanning().unsetLink().unsetDashboardLink().run();
+    setOpen(false);
+  };
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        if (next) seed();
+        setOpen(next);
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          size="icon"
+          variant={active ? 'secondary' : 'outline'}
+          aria-label="Link"
+          aria-pressed={active}
+          title="Link"
+          disabled={!canLink}
+          className="size-8"
+          onMouseDown={keepSelection}
+        >
+          <Link2 className="size-4" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        className="w-72 space-y-3"
+        align="start"
+        // Radix would otherwise focus the first thing in the popover, which
+        // is the "Web" button — so a user who opens this and starts typing
+        // types into nothing. Put the caret in the URL field instead. The
+        // editor's selection survives the blur either way, because the
+        // trigger keeps it on mousedown and every command re-focuses first.
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          requestAnimationFrame(() => inputRef.current?.select());
+        }}
+      >
+        <div className="flex gap-1">
+          {(Object.keys(LINK_KIND_LABELS) as LinkKind[]).map((option) => (
+            <Button
+              key={option}
+              type="button"
+              size="sm"
+              variant={kind === option ? 'secondary' : 'outline'}
+              aria-pressed={kind === option}
+              className="flex-1 text-xs"
+              onMouseDown={keepSelection}
+              onClick={() => setKind(option)}
+            >
+              {LINK_KIND_LABELS[option]}
+            </Button>
+          ))}
+        </div>
+
+        {kind === 'dashboard' ? (
+          <>
+            <Label className="text-xs">Dashboard</Label>
+            {/*
+              An inline list rather than a <Select>: a Select renders its
+              options in their own portal, and a click out there reads as a
+              click outside this popover, which closed it before the choice
+              could be applied. The list is short and already inside a
+              popover, so there is nothing to gain from a second layer.
+            */}
+            <div
+              role="listbox"
+              aria-label="Dashboard"
+              className="max-h-40 space-y-1 overflow-auto"
+            >
+              {dashboards.map((dashboard) => (
+                <button
+                  key={dashboard.id}
+                  type="button"
+                  role="option"
+                  aria-selected={target === String(dashboard.id)}
+                  onMouseDown={keepSelection}
+                  onClick={() => setTarget(String(dashboard.id))}
+                  className={cn(
+                    'w-full truncate rounded-md px-2 py-1 text-left text-xs',
+                    target === String(dashboard.id)
+                      ? 'bg-secondary text-secondary-foreground'
+                      : 'hover:bg-muted',
+                  )}
+                >
+                  {dashboard.name}
+                </button>
+              ))}
+            </div>
+            {dashboards.length === 0 && (
+              <p className="text-xs text-muted-foreground">
+                This project has no other dashboards yet.
+              </p>
+            )}
+          </>
+        ) : (
+          <>
+            <Label className="text-xs" htmlFor="text-box-link-target">
+              {kind === 'email' ? 'Email address' : 'URL'}
+            </Label>
+            <input
+              ref={inputRef}
+              id="text-box-link-target"
+              type="text"
+              inputMode="url"
+              value={draft}
+              placeholder={kind === 'email' ? 'someone@example.com' : 'https://example.com'}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  apply();
+                }
+              }}
+              className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs"
+            />
+            {draft.trim() !== '' && !valid && (
+              <p className="text-xs text-destructive">
+                {kind === 'email'
+                  ? 'Enter a single email address.'
+                  : 'Only http:// and https:// links are allowed.'}
+              </p>
+            )}
+          </>
+        )}
+
+        <div className="flex justify-end gap-2">
+          {active && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onMouseDown={keepSelection}
+              onClick={remove}
+            >
+              Remove
+            </Button>
+          )}
+          <Button
+            type="button"
+            size="sm"
+            disabled={!valid}
+            onMouseDown={keepSelection}
+            onClick={apply}
+          >
+            Apply
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 export interface TextBoxToolbarProps {
   editor: Editor | null;
   /** Box-level settings: background colour and vertical alignment. */
@@ -142,6 +377,8 @@ export interface TextBoxToolbarProps {
   onFormatChange: (patch: Partial<TextBoxFormat>) => void;
   /** Unique per widget — a dashboard can hold several text boxes. */
   idPrefix: string;
+  /** Dashboards in this project, for the link popover's picker. */
+  dashboards?: LinkableDashboard[];
 }
 
 export function TextBoxToolbar({
@@ -149,9 +386,8 @@ export function TextBoxToolbar({
   format,
   onFormatChange,
   idPrefix,
+  dashboards = [],
 }: TextBoxToolbarProps) {
-  const sizeListId = `${idPrefix}-font-sizes`;
-
   // Re-reads on every selection or document change, so the buttons follow the
   // caret rather than going stale as it moves through differently styled runs.
   const state = useEditorState({
@@ -166,10 +402,21 @@ export function TextBoxToolbar({
       const alignment = TEXT_ALIGN_OPTIONS.map((o) => o.value).find((value) =>
         instance.isActive({ textAlign: value }),
       );
+      const dashboardAttrs = instance.getAttributes('dashboardLink') as {
+        dashboardId?: number;
+      };
       return {
         bold: instance.isActive('bold'),
         italic: instance.isActive('italic'),
         underline: instance.isActive('underline'),
+        href: (instance.getAttributes('link') as { href?: string }).href ?? null,
+        dashboardId: dashboardAttrs.dashboardId ?? null,
+        // Nothing to act on when the caret is collapsed outside a link:
+        // there is no text to turn into one and none to edit.
+        canLink:
+          !instance.state.selection.empty ||
+          instance.isActive('link') ||
+          instance.isActive('dashboardLink'),
         align: alignment ?? TEXT_BOX_FORMAT_DEFAULTS.text_align,
         color: textStyle.color ?? TEXT_BOX_FORMAT_DEFAULTS.text_color,
         fontSize: Number.parseInt(textStyle.fontSize ?? '', 10),
@@ -205,12 +452,6 @@ export function TextBoxToolbar({
         }}
         className="h-8 w-16 rounded-md border border-border bg-background px-2 text-xs"
       />
-      <datalist id={sizeListId}>
-        {FONT_SIZE_PRESETS.map((size) => (
-          <option key={size} value={size} />
-        ))}
-      </datalist>
-
       <Select
         value={state?.fontFamily ?? FONT_FAMILY_STACKS.sans}
         onValueChange={(value) => editor && chain().setFontFamily(value).run()}
@@ -271,6 +512,15 @@ export function TextBoxToolbar({
         >
           <Underline />
         </Button>
+        {editor && (
+          <LinkField
+            editor={editor}
+            href={state?.href ?? null}
+            dashboardId={state?.dashboardId ?? null}
+            dashboards={dashboards}
+            canLink={Boolean(state?.canLink)}
+          />
+        )}
       </div>
 
       <div className="flex items-center gap-1">

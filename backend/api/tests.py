@@ -3523,6 +3523,69 @@ class TextBoxComponentFormattingTests(TestCase):
         self.assertEqual(item["font_size"], 20)
         self.assertEqual(item["line_height"], 2.0)
 
+    def test_links_round_trip_through_save_and_load(self):
+        sibling = Dashboard.objects.create(
+            project=self.project, name="Sibling", order_in_project=1
+        )
+        doc = {
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "site",
+                 "marks": [{"type": "link", "attrs": {"href": "https://example.com"}}]},
+                {"type": "text", "text": "mail",
+                 "marks": [{"type": "link", "attrs": {"href": "mailto:a@b.com"}}]},
+                {"type": "text", "text": "board",
+                 "marks": [{"type": "dashboardLink",
+                            "attrs": {"dashboardId": sibling.pk}}]},
+            ]}],
+        }
+        self.assertEqual(self._save(rich_text=doc).status_code, 200)
+        runs = self._layout()["rich_text"]["content"][0]["content"]
+        self.assertEqual(
+            [run["marks"][0] for run in runs],
+            [
+                {"type": "link", "attrs": {"href": "https://example.com"}},
+                {"type": "link", "attrs": {"href": "mailto:a@b.com"}},
+                {"type": "dashboardLink", "attrs": {"dashboardId": sibling.pk}},
+            ],
+        )
+
+    def test_a_link_to_another_projects_dashboard_is_dropped(self):
+        """The id alone proves nothing — it has to be in *this* project."""
+        foreign_project = Project.objects.create(name="Theirs")
+        foreign = Dashboard.objects.create(
+            project=foreign_project, name="Theirs", order_in_project=0
+        )
+        doc = {
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "peek",
+                 "marks": [{"type": "dashboardLink",
+                            "attrs": {"dashboardId": foreign.pk}}]},
+            ]}],
+        }
+        self.assertEqual(self._save(rich_text=doc).status_code, 200)
+        run = self._layout()["rich_text"]["content"][0]["content"][0]
+        self.assertEqual(run["text"], "peek")
+        self.assertNotIn("marks", run)
+
+    def test_a_hostile_href_is_dropped_without_losing_the_text(self):
+        doc = {
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "click",
+                 "marks": [{"type": "link",
+                            "attrs": {"href": "javascript:alert(1)"}}]},
+            ]}],
+        }
+        self.assertEqual(self._save(rich_text=doc).status_code, 200)
+        item = self._layout()
+        run = item["rich_text"]["content"][0]["content"][0]
+        self.assertEqual(run["text"], "click")
+        self.assertNotIn("marks", run)
+        # The plain-text mirror is derived from the cleaned document.
+        self.assertEqual(item["text"], "click")
+
     def test_rich_text_round_trips_through_save_and_load(self):
         doc = {"type": "doc", "content": [
             {"type": "paragraph", "attrs": {"textAlign": "center"},
@@ -3694,12 +3757,179 @@ class TextBoxRichTextValidationTests(SimpleTestCase):
 
         doc = self._doc(self._para(self._text("hi", [
             {"type": "bold"},
-            {"type": "link", "attrs": {"href": "javascript:alert(1)"}},
             {"type": "evil"},
         ])))
         run = validated_rich_text(doc)["content"][0]["content"][0]
         self.assertEqual(run["text"], "hi")
         self.assertEqual(run["marks"], [{"type": "bold"}])
+
+    def test_a_known_mark_with_a_hostile_value_is_dropped_but_the_text_stays(self):
+        """`link` is a known mark now, so a bad href has to fail on the href.
+
+        Until links shipped this case was covered by `link` simply not being
+        in the whitelist at all; that is no longer what rejects it.
+        """
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(self._para(self._text("hi", [
+            {"type": "bold"},
+            {"type": "link", "attrs": {"href": "javascript:alert(1)"}},
+        ])))
+        run = validated_rich_text(doc)["content"][0]["content"][0]
+        self.assertEqual(run["text"], "hi")
+        self.assertEqual(run["marks"], [{"type": "bold"}])
+
+    def test_accepted_link_targets_survive(self):
+        from .rich_text import validated_rich_text
+
+        for href in (
+            "https://example.com",
+            "http://example.com/a/b?c=d#e",
+            "HTTPS://EXAMPLE.COM",
+            "https://example.com:8443/path",
+            "mailto:someone@example.com",
+            "mailto:first.last+tag@sub.example.co.uk",
+        ):
+            doc = self._doc(self._para(self._text("hi", [
+                {"type": "link", "attrs": {"href": href}},
+            ])))
+            marks = validated_rich_text(doc)["content"][0]["content"][0]["marks"]
+            self.assertEqual(marks, [{"type": "link", "attrs": {"href": href}}], href)
+
+    def test_a_padded_href_is_trimmed(self):
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(self._para(self._text("hi", [
+            {"type": "link", "attrs": {"href": "  https://example.com  "}},
+        ])))
+        marks = validated_rich_text(doc)["content"][0]["content"][0]["marks"]
+        self.assertEqual(marks[0]["attrs"]["href"], "https://example.com")
+
+    def test_hostile_hrefs_are_dropped_and_the_text_survives(self):
+        from .rich_text import validated_rich_text
+
+        hostile = (
+            "javascript:alert(1)",
+            "JavaScript:alert(1)",
+            # A browser strips the newline and then navigates; we must not
+            # be the thing that lets it get that far.
+            "java\nscript:alert(1)",
+            "java\tscript:alert(1)",
+            "https://example.com\x00.evil.example",
+            # Looks like a URL further in, is not one at the front.
+            "javascript:alert(1)//https://example.com",
+            "data:text/html,<script>alert(1)</script>",
+            "vbscript:msgbox(1)",
+            "file:///etc/passwd",
+            "ftp://example.com/x",
+            "tel:+15551234",
+            # Protocol-relative: no scheme token at all.
+            "//evil.example/path",
+            "/dashboards/1",
+            "dashboards/1",
+            # Parses, but goes nowhere.
+            "https://",
+            "https:///path",
+            # The query string is the only way cc/bcc/body can ride along.
+            "mailto:a@b.com?cc=victim@evil.example",
+            "mailto:a@b.com?subject=hi",
+            "mailto:a@b.com,c@d.com",
+            "mailto:notanaddress",
+            "mailto:",
+            "",
+            "   ",
+            "https://example.com/" + ("a" * 3000),
+        )
+        for href in hostile:
+            doc = self._doc(self._para(self._text("hi", [
+                {"type": "link", "attrs": {"href": href}},
+            ])))
+            run = validated_rich_text(doc)["content"][0]["content"][0]
+            self.assertEqual(run["text"], "hi", href)
+            self.assertNotIn("marks", run, href)
+
+    def test_a_non_string_href_is_dropped(self):
+        from .rich_text import validated_rich_text
+
+        for href in ({"a": 1}, ["https://example.com"], 5, True, None):
+            doc = self._doc(self._para(self._text("hi", [
+                {"type": "link", "attrs": {"href": href}},
+            ])))
+            run = validated_rich_text(doc)["content"][0]["content"][0]
+            self.assertNotIn("marks", run, repr(href))
+
+    def test_a_link_stores_its_href_and_nothing_else(self):
+        """target/rel/class/title arrive from the editor and are never kept.
+
+        The renderer sets target and rel itself, so a stored value could only
+        ever be a way to override what it decided.
+        """
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(self._para(self._text("hi", [
+            {"type": "link", "attrs": {
+                "href": "https://example.com",
+                "target": "_self",
+                "rel": "opener",
+                "class": "evil",
+                "title": "x",
+                "onclick": "alert(1)",
+            }},
+        ])))
+        marks = validated_rich_text(doc)["content"][0]["content"][0]["marks"]
+        self.assertEqual(marks, [{"type": "link", "attrs": {"href": "https://example.com"}}])
+
+    def test_a_dashboard_link_survives_only_for_an_allowed_id(self):
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(self._para(self._text("hi", [
+            {"type": "dashboardLink", "attrs": {"dashboardId": 7}},
+        ])))
+        marks = validated_rich_text(doc, {7, 8})["content"][0]["content"][0]["marks"]
+        self.assertEqual(
+            marks, [{"type": "dashboardLink", "attrs": {"dashboardId": 7}}]
+        )
+
+        # Another project's dashboard, and one that no longer exists, look
+        # exactly the same from here: an id that is not on the list.
+        run = validated_rich_text(doc, {8, 9})["content"][0]["content"][0]
+        self.assertEqual(run["text"], "hi")
+        self.assertNotIn("marks", run)
+
+    def test_a_dashboard_link_is_dropped_when_no_project_is_known(self):
+        """The default drops every dashboard link rather than trusting one."""
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(self._para(self._text("hi", [
+            {"type": "dashboardLink", "attrs": {"dashboardId": 7}},
+        ])))
+        run = validated_rich_text(doc)["content"][0]["content"][0]
+        self.assertNotIn("marks", run)
+
+    def test_a_malformed_dashboard_id_is_dropped(self):
+        from .rich_text import validated_rich_text
+
+        for dashboard_id in (True, 0, -1, "7", 1.5, None, {"id": 7}):
+            doc = self._doc(self._para(self._text("hi", [
+                {"type": "dashboardLink", "attrs": {"dashboardId": dashboard_id}},
+            ])))
+            run = validated_rich_text(doc, {0, 1, 7})["content"][0]["content"][0]
+            self.assertNotIn("marks", run, repr(dashboard_id))
+
+    def test_hrefs_count_against_the_document_size_limit(self):
+        """Otherwise hrefs are a way around MAX_TEXT_LENGTH entirely.
+
+        A document may hold thousands of runs; at 2048 characters of href
+        each that is megabytes of payload while the visible text stays tiny.
+        """
+        from .rich_text import validated_rich_text
+
+        href = "https://example.com/" + ("a" * 2000)
+        paragraphs = [
+            self._para(self._text("x", [{"type": "link", "attrs": {"href": href}}]))
+            for _ in range(60)
+        ]
+        self.assertIsNone(validated_rich_text(self._doc(*paragraphs)))
 
     def test_text_style_keeps_only_valid_attributes(self):
         from .rich_text import validated_rich_text

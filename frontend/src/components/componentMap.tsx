@@ -79,6 +79,8 @@ import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
 import { LocalFilterDropdown } from '@/components/ui/LocalFilterDropdown';
 import TextBoxEditor from '@/components/text-box/TextBoxEditor';
 import RichTextRenderer from '@/components/text-box/RichTextRenderer';
+import { useProjectDashboards } from '@/components/text-box/useProjectDashboards';
+import { DashboardContext } from '@/contexts/DashboardContext';
 import {
   conversionPatch,
   docForWidget,
@@ -220,7 +222,29 @@ export interface ComponentProps {
 // shows its settings; view mode renders the same styles on a paragraph.
 // The text is a React text node throughout, never HTML, so there is no
 // markup to sanitise.
-export const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode = false }) => {
+export const TextBoxComponent: React.FC<ComponentProps> = ({
+  node,
+  onUpdate,
+  isEditMode = false,
+  selectedFile,
+}) => {
+  // A text box can link to another dashboard in the same project: the picker
+  // needs their names, and view mode needs their ids to tell a live link from
+  // one whose target has since been deleted. Fetched once per project and
+  // shared across every text box on the board.
+  const { setViewMode } = React.useContext(DashboardContext);
+  const dashboards = useProjectDashboards(selectedFile?.project);
+  const knownDashboardIds = React.useMemo(
+    () => new Set(dashboards.map((dashboard) => dashboard.id)),
+    [dashboards],
+  );
+  // Going through `setViewMode` rather than touching state directly is what
+  // gives the link the dashboard's unsaved-changes guard for free.
+  const openDashboard = React.useCallback(
+    (dashboardId: number) => setViewMode({ type: 'dashboard', id: dashboardId }),
+    [setViewMode],
+  );
+
   // No literal placeholder text: the editor shows a real placeholder, so an
   // empty box stays empty instead of carrying words the user must delete.
   const [text, setText] = React.useState(node.text ?? '');
@@ -302,6 +326,7 @@ export const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isE
             onDocChange={handleDocChange}
             onFormatChange={handleFormatChange}
             idPrefix={`text-box-${node.component_id}`}
+            dashboards={dashboards}
           />
         </Card>
       ) : (
@@ -319,7 +344,11 @@ export const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isE
                   lineHeight: TEXT_BOX_FORMAT_DEFAULTS.line_height,
                 }}
               >
-                <RichTextRenderer doc={doc} />
+                <RichTextRenderer
+                  doc={doc}
+                  onDashboardLink={openDashboard}
+                  knownDashboardIds={knownDashboardIds}
+                />
               </div>
             ) : (
               <p style={{ ...textStyle, whiteSpace: 'pre-wrap', margin: 0 }}>{text}</p>

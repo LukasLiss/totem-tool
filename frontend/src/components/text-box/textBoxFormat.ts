@@ -55,8 +55,6 @@ export const FONT_SIZE_MAX = 200;
 export const LINE_HEIGHT_MIN = 0.5;
 export const LINE_HEIGHT_MAX = 5;
 
-export const FONT_SIZE_PRESETS = [12, 14, 16, 20, 24, 32, 48] as const;
-
 export const FONT_FAMILY_OPTIONS: Array<{ value: TextFontFamily; label: string }> = [
   { value: 'sans', label: 'Sans serif' },
   { value: 'serif', label: 'Serif' },
