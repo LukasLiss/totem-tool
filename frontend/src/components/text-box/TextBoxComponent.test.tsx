@@ -6,6 +6,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { TextBoxComponent } from "@/components/componentMap";
 import type { ComponentProps } from "@/components/componentMap";
 
+// The widget resolves dashboard links against the project's dashboards.
+vi.mock("@/api/dashboardApi", () => ({
+  getDashboards: vi.fn(async () => [{ id: 4, name: "Sibling Board" }]),
+}));
+
 afterEach(cleanup);
 
 /**
@@ -18,7 +23,11 @@ afterEach(cleanup);
  * around the editor: rendering, the box-level controls, and the plumbing
  * back onto the node.
  */
-function renderWidget(initial: Record<string, unknown> = {}, isEditMode = true) {
+function renderWidget(
+  initial: Record<string, unknown> = {},
+  isEditMode = true,
+  extra: Partial<ComponentProps> = {},
+) {
   const node: Record<string, unknown> = {
     component_id: 1,
     component_name: "TextBoxComponent",
@@ -34,6 +43,7 @@ function renderWidget(initial: Record<string, unknown> = {}, isEditMode = true) 
       onUpdate={onUpdate}
       isEditMode={isEditMode}
       dashboardId={1}
+      {...extra}
     />,
   );
   return { node, onUpdate, ...view };
@@ -104,6 +114,74 @@ describe("TextBoxComponent edit mode", () => {
 });
 
 describe("TextBoxComponent view mode", () => {
+  /**
+   * The widget takes navigation as a *prop*, never from `DashboardContext`.
+   *
+   * Every widget is mounted in its own `ReactDOM.createRoot` by
+   * `gridstackprovider`, and React context does not cross a root boundary — a
+   * `useContext` here silently receives the context's default value, whose
+   * `setViewMode` does nothing, so the link rendered and clicked and went
+   * nowhere. This asserts the prop is what gets called.
+   */
+  it("confirms before leaving, naming the destination", async () => {
+    const onOpenDashboard = vi.fn();
+    const { container } = renderWidget(
+      {
+        rich_text: doc(
+          para([run("go there", [{ type: "dashboardLink", attrs: { dashboardId: 4 } }])]),
+        ),
+      },
+      false,
+      { selectedFile: { id: 1, project: 9 }, onOpenDashboard },
+    );
+
+    // The dashboard list is fetched before the link can be known to be live.
+    const link = await screen.findByRole("button", { name: "go there" });
+    expect(container.querySelector("a")).toBeNull();
+    fireEvent.click(link);
+
+    // Clicking asks first — it must not navigate on its own.
+    expect(onOpenDashboard).not.toHaveBeenCalled();
+    expect(await screen.findByText(/Sibling Board/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open dashboard" }));
+    expect(onOpenDashboard).toHaveBeenCalledWith(4);
+  });
+
+  it("stays put when the confirmation is declined", async () => {
+    const onOpenDashboard = vi.fn();
+    renderWidget(
+      {
+        rich_text: doc(
+          para([run("go there", [{ type: "dashboardLink", attrs: { dashboardId: 4 } }])]),
+        ),
+      },
+      false,
+      { selectedFile: { id: 1, project: 9 }, onOpenDashboard },
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "go there" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stay here" }));
+    expect(onOpenDashboard).not.toHaveBeenCalled();
+  });
+
+  it("renders a link to an unknown dashboard as plain text", async () => {
+    const onOpenDashboard = vi.fn();
+    const { container } = renderWidget(
+      {
+        rich_text: doc(
+          // 99 is not in the project's list, i.e. deleted since it was written.
+          para([run("gone", [{ type: "dashboardLink", attrs: { dashboardId: 99 } }])]),
+        ),
+      },
+      false,
+      { selectedFile: { id: 1, project: 9 }, onOpenDashboard },
+    );
+
+    await screen.findByText("gone");
+    expect(container.querySelector("button")).toBeNull();
+  });
+
   it("renders each run with its own formatting", () => {
     const { container } = renderWidget(
       {
