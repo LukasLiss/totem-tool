@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { TEXT_BOX_EXTENSIONS } from "./textBoxExtensions";
 import { FONT_FAMILY_STACKS } from "./textBoxFormat";
-import type { RichTextDoc, RichTextNode } from "./richText";
+import type { RichTextDoc, RichTextMark, RichTextNode } from "./richText";
 
 /**
  * The point of the whole feature: a command must change the *selection*, not
@@ -25,6 +25,18 @@ function makeEditor(text: string) {
     content: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text }] }] },
   });
   return editor;
+}
+
+/**
+ * A mark's attributes, whatever kind of mark it is.
+ *
+ * `RichTextMark` is a union and its attribute-free members (bold, italic, …)
+ * genuinely have no `attrs`, so reading it off the union does not compile.
+ * These tests assert on attributes generically, hence one narrowing helper
+ * rather than a cast at every call site.
+ */
+function attrsOf(mark: RichTextMark): Record<string, unknown> {
+  return (mark as { attrs?: Record<string, unknown> }).attrs ?? {};
 }
 
 /** The runs of the first paragraph, as [text, mark types]. */
@@ -182,7 +194,7 @@ describe("linking a selection", () => {
     e.chain().setLink({ href: "mailto:someone@example.com" }).run();
 
     const run = (e.getJSON() as RichTextDoc).content[0].content![1];
-    expect(run.marks![0].attrs!.href).toBe("mailto:someone@example.com");
+    expect(attrsOf(run.marks![0]).href).toBe("mailto:someone@example.com");
   });
 
   // Tiptap's link mark carries target/rel/class/title in the document JSON,
@@ -194,7 +206,7 @@ describe("linking a selection", () => {
     const e = selectWorld(makeEditor("hello world"));
     e.chain().setLink({ href: "https://example.com" }).run();
 
-    const attrs = (e.getJSON() as RichTextDoc).content[0].content![1].marks![0].attrs!;
+    const attrs = attrsOf((e.getJSON() as RichTextDoc).content[0].content![1].marks![0]);
     expect(attrs.href).toBe("https://example.com");
     expect(Object.keys(attrs).sort()).toContain("target");
   });
@@ -228,7 +240,7 @@ describe("linking a selection", () => {
 
     const run = (e.getJSON() as RichTextDoc).content[0].content![1];
     expect(run.text).toBe("world");
-    expect(run.marks![0].attrs!.href).toBe("https://new.example");
+    expect(attrsOf(run.marks![0]).href).toBe("https://new.example");
   });
 
   it("unsets the whole link from a caret inside it", () => {
@@ -260,6 +272,6 @@ describe("linking a selection", () => {
     e.chain().setDashboardLink({ dashboardId: 12 }).run();
 
     const run = (e.getJSON() as RichTextDoc).content[0].content![1];
-    expect(run.marks![0].attrs).toEqual({ dashboardId: 12 });
+    expect(attrsOf(run.marks![0])).toEqual({ dashboardId: 12 });
   });
 });
