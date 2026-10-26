@@ -79,6 +79,15 @@ import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
 import { LocalFilterDropdown } from '@/components/ui/LocalFilterDropdown';
 import TextBoxEditor from '@/components/text-box/TextBoxEditor';
 import RichTextRenderer from '@/components/text-box/RichTextRenderer';
+import { useProjectDashboards } from '@/components/text-box/useProjectDashboards';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   conversionPatch,
   docForWidget,
@@ -210,7 +219,16 @@ export interface ComponentProps {
   };
   onUpdate?: (updates: Partial<GridStackNode>) => void;
   isEditMode?: boolean; // Now passed globally
-  dashboardId: number;  // Added for API calls
+  dashboardId: number;
+  /**
+   * Switch the app to another dashboard (a Text Box link).
+   *
+   * Passed down rather than read from `DashboardContext` where it is used:
+   * every widget is mounted in its own `ReactDOM.createRoot`, and React
+   * context does not cross a root boundary — a `useContext` inside a widget
+   * gets the context's default value, whose `setViewMode` does nothing.
+   */
+  onOpenDashboard?: (dashboardId: number) => void;  // Added for API calls
   selectedFile?: SelectedFile; // Selected event log file
 }
 
@@ -220,7 +238,29 @@ export interface ComponentProps {
 // shows its settings; view mode renders the same styles on a paragraph.
 // The text is a React text node throughout, never HTML, so there is no
 // markup to sanitise.
-export const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isEditMode = false }) => {
+export const TextBoxComponent: React.FC<ComponentProps> = ({
+  node,
+  onUpdate,
+  isEditMode = false,
+  selectedFile,
+  onOpenDashboard,
+}) => {
+  // A text box can link to another dashboard in the same project: the picker
+  // needs their names, and view mode needs their ids to tell a live link from
+  // one whose target has since been deleted. Fetched once per project and
+  // shared across every text box on the board.
+  const dashboards = useProjectDashboards(selectedFile?.project);
+  const knownDashboardIds = React.useMemo(
+    () => new Set(dashboards.map((dashboard) => dashboard.id)),
+    [dashboards],
+  );
+
+  // Following a dashboard link replaces what the reader is looking at, and
+  // nothing on the page says where the words lead before they are clicked.
+  // Ask first, naming the destination.
+  const [pendingDashboard, setPendingDashboard] = React.useState<number | null>(null);
+  const pendingName = dashboards.find((d) => d.id === pendingDashboard)?.name;
+
   // No literal placeholder text: the editor shows a real placeholder, so an
   // empty box stays empty instead of carrying words the user must delete.
   const [text, setText] = React.useState(node.text ?? '');
@@ -302,6 +342,7 @@ export const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isE
             onDocChange={handleDocChange}
             onFormatChange={handleFormatChange}
             idPrefix={`text-box-${node.component_id}`}
+            dashboards={dashboards}
           />
         </Card>
       ) : (
@@ -319,7 +360,11 @@ export const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isE
                   lineHeight: TEXT_BOX_FORMAT_DEFAULTS.line_height,
                 }}
               >
-                <RichTextRenderer doc={doc} />
+                <RichTextRenderer
+                  doc={doc}
+                  onDashboardLink={setPendingDashboard}
+                  knownDashboardIds={knownDashboardIds}
+                />
               </div>
             ) : (
               <p style={{ ...textStyle, whiteSpace: 'pre-wrap', margin: 0 }}>{text}</p>
@@ -327,6 +372,43 @@ export const TextBoxComponent: React.FC<ComponentProps> = ({ node, onUpdate, isE
           </CardContent>
         </Card>
       )}
+
+      {/*
+        Same Dialog the dashboard uses to confirm discarding layout changes
+        (grid.tsx), so the two read alike. It portals to the body, which is
+        what lets it escape this widget's grid cell and its own React root.
+      */}
+      <Dialog
+        open={pendingDashboard !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDashboard(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Open another dashboard?</DialogTitle>
+            <DialogDescription>
+              {pendingName
+                ? `This link opens "${pendingName}". You will leave the dashboard you are on.`
+                : 'This link opens another dashboard. You will leave the dashboard you are on.'}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPendingDashboard(null)}>
+              Stay here
+            </Button>
+            <Button
+              onClick={() => {
+                const id = pendingDashboard;
+                setPendingDashboard(null);
+                if (id !== null) onOpenDashboard?.(id);
+              }}
+            >
+              Open dashboard
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

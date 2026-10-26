@@ -212,3 +212,14 @@
   border-left: 3px solid currentColor;
   opacity: 0.85;
 }
+
+/* Links inside the Text Box editor (#373 follow-up).
+   View mode is styled inline by RichTextRenderer; these rules are only for
+   what TipTap renders while editing. A dashboard link is a <span> here and a
+   <button> there, so both need the look an anchor gets for free. */
+.tiptap-text-box a,
+.tiptap-text-box .totem-dashboard-link {
+  color: var(--primary);
+  text-decoration: underline;
+  cursor: text;
+}

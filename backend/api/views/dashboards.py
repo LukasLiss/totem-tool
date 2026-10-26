@@ -313,6 +313,17 @@ class DashboardViewSet(viewsets.ModelViewSet):
         # Clear existing components
         dashboard.components.all().delete()
 
+        # A text box may link to another dashboard, and that link is stored as
+        # a bare id. Resolve the ids this project actually contains once, here,
+        # rather than per component: a link to someone else's dashboard -- or
+        # to one that has since been deleted -- is then dropped at save, and
+        # the text it was attached to is kept.
+        allowed_dashboard_ids = set(
+            Dashboard.objects.filter(project_id=dashboard.project_id).values_list(
+                "id", flat=True
+            )
+        )
+
         for item in layout:
             component_name = item["component_name"]
             if component_name == "TextBoxComponent":
@@ -324,7 +335,9 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 # it survives, `text` is derived from it so the plain column
                 # stays in step with what the box actually shows; otherwise we
                 # keep whatever plain text was sent.
-                rich_text = validated_rich_text(item.get("rich_text"))
+                rich_text = validated_rich_text(
+                    item.get("rich_text"), allowed_dashboard_ids
+                )
                 text = (
                     plain_text_from_doc(rich_text)
                     if rich_text is not None

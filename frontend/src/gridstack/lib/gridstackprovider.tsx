@@ -1,4 +1,6 @@
 import React, {
+  useCallback,
+  useContext,
   useRef,
   useEffect,
   useState,
@@ -9,6 +11,7 @@ import { GridStack, GridStackNode, GridStackOptions, GridStackWidget } from "gri
 import { componentMap } from "../../components/componentMapRegistry";
 import type { ComponentProps } from "../../components/componentMap";
 import type { SelectedFile } from "../../contexts/SelectedFileContext";
+import { DashboardContext } from "../../contexts/DashboardContext";
 import { GridContext, GridModeContext, type GridLayoutItem } from "./gridContext";
 import { toast } from "sonner";
 import { textBoxFormatProps } from "../../components/text-box/textBoxFormat";
@@ -57,6 +60,24 @@ export const GridProvider: React.FC<GridProviderProps> = ({
   selectedFile,
   dashboardId = 0,
 }) => {
+  // Every widget is mounted in its own `ReactDOM.createRoot`, and React
+  // context does not cross a root boundary: a `useContext` inside a widget
+  // silently receives the context's *default* value, not the app's. That is
+  // why `selectedFile` and `dashboardId` are handed down as props rather than
+  // read where they are used, and the same applies to navigation — a Text Box
+  // link to another dashboard would otherwise call the default `setViewMode`,
+  // which is a no-op, and clicking it would do nothing at all.
+  //
+  // Held in a ref so `renderCB` always sees the current function without
+  // making the effect below tear down and rebuild itself.
+  const { setViewMode } = useContext(DashboardContext);
+  const setViewModeRef = useRef(setViewMode);
+  setViewModeRef.current = setViewMode;
+  const openDashboard = useCallback(
+    (id: number) => setViewModeRef.current({ type: 'dashboard', id }),
+    [],
+  );
+
   const gridRef = useRef<GridStack | null>(null);
   const [grid, setGrid] = useState<GridStack | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
@@ -103,6 +124,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             isEditMode={isEditMode}
             selectedFile={selectedFile}
             dashboardId={dashboardId}  // Pass dashboardId
+            onOpenDashboard={openDashboard}
             onUpdate={(updates) => {
               Object.assign(w, updates);
               // `el` is the widget's content element. grid.update() writes the
@@ -169,6 +191,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               isEditMode={isEditMode}
               selectedFile={selectedFile}
               dashboardId={dashboardId}
+              onOpenDashboard={openDashboard}
               onUpdate={(updates) => {
                 Object.assign(node, updates);
                 gridRef.current?.update(item as HTMLElement, updates);
@@ -183,7 +206,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         console.warn("GridStack failed to settle min-size updates", err);
       }
     }
-  }, [isEditMode, grid, selectedFile, dashboardId]);
+    // `openDashboard` is stable (useCallback with no deps, reading a ref), so
+    // listing it satisfies the lint rule without ever re-running this.
+  }, [isEditMode, grid, selectedFile, dashboardId, openDashboard]);
 
   // Implement addWidget to add new widgets with generated component_id
   const addWidget = (content: string = "", componentName: string = "TextBoxComponent") => {

@@ -27,12 +27,84 @@ function isAllowedFontFamily(value: unknown): value is string {
   return typeof value === 'string' && RICH_FONT_FAMILY_VALUES.includes(value);
 }
 
+/**
+ * The accepted link targets, mirroring `_clean_href` in `api/rich_text.py` —
+ * change one and you must change the other.
+ *
+ * Anchored at the start, so a hostile scheme cannot hide in front of a
+ * legitimate-looking tail (`javascript:alert(1)//https://x`), and requiring
+ * the literal scheme is what rejects protocol-relative `//evil.com`. Control
+ * characters are rejected rather than stripped, because a browser strips them
+ * itself and would then navigate somewhere other than what the text showed.
+ */
+const HTTP_SCHEME_RE = /^https?:\/\//i;
+const MAILTO_SCHEME_RE = /^mailto:/i;
+const EMAIL_RE = /^[^\s@,;:<>()[\]\\"]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$/;
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
+const MAX_HREF_LENGTH = 2048;
+
+/** True for a bare http(s) URL or a lone mailto address, and nothing else. */
+export function isSafeHref(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const href = value.trim();
+  if (!href || href.length > MAX_HREF_LENGTH) return false;
+  if (CONTROL_CHAR_RE.test(href)) return false;
+
+  if (HTTP_SCHEME_RE.test(href)) {
+    try {
+      // "https://" alone parses but has nowhere to go.
+      return new URL(href).hostname !== '';
+    } catch {
+      return false;
+    }
+  }
+  if (MAILTO_SCHEME_RE.test(href)) {
+    const address = href.slice('mailto:'.length);
+    // A query string is the only way cc/bcc/subject/body can ride along.
+    return !address.includes('?') && EMAIL_RE.test(address);
+  }
+  return false;
+}
+
+/** True when the href should open the mail client rather than a new tab. */
+export function isMailtoHref(href: string): boolean {
+  return MAILTO_SCHEME_RE.test(href.trim());
+}
+
+/**
+ * The run's link target, or null. Re-checked here rather than trusted: rows
+ * written before links existed were never validated, and the renderer must
+ * not be one backend regression away from emitting a live `javascript:` href.
+ */
+export function hrefFromMarks(marks: RichTextMark[] | undefined): string | null {
+  for (const mark of marks ?? []) {
+    if (mark.type === 'link' && isSafeHref(mark.attrs?.href)) {
+      return mark.attrs!.href!.trim();
+    }
+  }
+  return null;
+}
+
+/** The dashboard this run links to, or null. */
+export function dashboardIdFromMarks(marks: RichTextMark[] | undefined): number | null {
+  for (const mark of marks ?? []) {
+    if (mark.type === 'dashboardLink') {
+      const id = mark.attrs?.dashboardId;
+      if (typeof id === 'number' && Number.isInteger(id) && id > 0) return id;
+    }
+  }
+  return null;
+}
+
 export type RichTextMark =
   | { type: 'bold' | 'italic' | 'underline' | 'strike' | 'code' }
   | {
       type: 'textStyle';
       attrs?: { color?: string; fontSize?: string; fontFamily?: string };
-    };
+    }
+  | { type: 'link'; attrs?: { href?: string } }
+  | { type: 'dashboardLink'; attrs?: { dashboardId?: number } };
 
 export interface RichTextNode {
   type: string;
@@ -208,6 +280,11 @@ export function styleFromMarks(marks: RichTextMark[] | undefined): React.CSSProp
         break;
       case 'code':
         style.fontFamily = FONT_FAMILY_STACKS.mono;
+        break;
+      case 'link':
+      case 'dashboardLink':
+        // A link becomes an element, not a style — see `hrefFromMarks` /
+        // `dashboardIdFromMarks` and the two branches in `RichTextRenderer`.
         break;
       case 'textStyle': {
         const attrs = mark.attrs ?? {};

@@ -146,15 +146,120 @@ describe("formatting a paragraph", () => {
 });
 
 describe("the shipped extension set", () => {
-  it("has no link mark, so no href can ever enter the document", () => {
+  it("has a link mark, so the toolbar can attach a URL", () => {
     const e = makeEditor("text");
-    expect(e.schema.marks.link).toBeUndefined();
+    expect(e.schema.marks.link).toBeDefined();
+    expect(e.schema.marks.dashboardLink).toBeDefined();
   });
 
   it("supports the marks the toolbar offers", () => {
     const e = makeEditor("text");
-    for (const mark of ["bold", "italic", "underline", "textStyle"]) {
+    for (const mark of ["bold", "italic", "underline", "textStyle", "link", "dashboardLink"]) {
       expect(e.schema.marks[mark], mark).toBeDefined();
     }
+  });
+});
+
+describe("linking a selection", () => {
+  /** Select "world" in "hello world". */
+  function selectWorld(e: Editor) {
+    e.chain().setTextSelection({ from: 7, to: 12 }).run();
+    return e;
+  }
+
+  it("links only the selected characters", () => {
+    const e = selectWorld(makeEditor("hello world"));
+    e.chain().setLink({ href: "https://example.com" }).run();
+
+    expect(runs(e.getJSON() as RichTextDoc)).toEqual([
+      ["hello ", []],
+      ["world", ["link"]],
+    ]);
+  });
+
+  it("keeps a mailto address", () => {
+    const e = selectWorld(makeEditor("hello world"));
+    e.chain().setLink({ href: "mailto:someone@example.com" }).run();
+
+    const run = (e.getJSON() as RichTextDoc).content[0].content![1];
+    expect(run.marks![0].attrs!.href).toBe("mailto:someone@example.com");
+  });
+
+  // Tiptap's link mark carries target/rel/class/title in the document JSON,
+  // not just in the HTML it renders. None of them are ever stored: the
+  // backend whitelist keeps `href` alone, and the renderer sets target and
+  // rel itself, so a value smuggled into the document cannot override what
+  // the renderer decided. See `_clean_marks` in api/rich_text.py.
+  it("carries editor-side attributes the backend is expected to drop", () => {
+    const e = selectWorld(makeEditor("hello world"));
+    e.chain().setLink({ href: "https://example.com" }).run();
+
+    const attrs = (e.getJSON() as RichTextDoc).content[0].content![1].marks![0].attrs!;
+    expect(attrs.href).toBe("https://example.com");
+    expect(Object.keys(attrs).sort()).toContain("target");
+  });
+
+  // These are the tests that prove `isAllowedUri` is actually wired into the
+  // shipped extension set. Without them the configuration could be narrowed
+  // back to a `protocols` list -- which reads like a restriction and enforces
+  // nothing -- and every other test here would still pass.
+  it.each([
+    ["javascript:alert(1)"],
+    ["JavaScript:alert(1)"],
+    ["javascript:alert(1)//https://example.com"],
+    ["//evil.com/path"],
+    ["data:text/html,<script>alert(1)</script>"],
+    ["mailto:a@b.com?cc=victim@evil.com"],
+    ["ftp://example.com/x"],
+    ["tel:+15551234"],
+  ])("refuses to attach %s", (href) => {
+    const e = selectWorld(makeEditor("hello world"));
+    e.chain().setLink({ href }).run();
+
+    expect(runs(e.getJSON() as RichTextDoc)).toEqual([["hello world", []]]);
+  });
+
+  it("replaces the whole link when the caret is inside one", () => {
+    const e = selectWorld(makeEditor("hello world"));
+    e.chain().setLink({ href: "https://old.example" }).run();
+
+    // Caret inside "world", nothing selected.
+    e.chain().setTextSelection(9).extendMarkRange("link").setLink({ href: "https://new.example" }).run();
+
+    const run = (e.getJSON() as RichTextDoc).content[0].content![1];
+    expect(run.text).toBe("world");
+    expect(run.marks![0].attrs!.href).toBe("https://new.example");
+  });
+
+  it("unsets the whole link from a caret inside it", () => {
+    const e = selectWorld(makeEditor("hello world"));
+    e.chain().setLink({ href: "https://example.com" }).run();
+    e.chain().setTextSelection(9).extendMarkRange("link").unsetLink().run();
+
+    expect(runs(e.getJSON() as RichTextDoc)).toEqual([["hello world", []]]);
+  });
+
+  it("replaces a web link with a dashboard link rather than stacking both", () => {
+    const e = selectWorld(makeEditor("hello world"));
+    e.chain().setLink({ href: "https://example.com" }).run();
+    e.chain()
+      .setTextSelection({ from: 7, to: 12 })
+      .extendMarkRange("link")
+      .unsetLink()
+      .setDashboardLink({ dashboardId: 4 })
+      .run();
+
+    expect(runs(e.getJSON() as RichTextDoc)).toEqual([
+      ["hello ", []],
+      ["world", ["dashboardLink"]],
+    ]);
+  });
+
+  it("stores a dashboard link as an id, never a URL", () => {
+    const e = selectWorld(makeEditor("hello world"));
+    e.chain().setDashboardLink({ dashboardId: 12 }).run();
+
+    const run = (e.getJSON() as RichTextDoc).content[0].content![1];
+    expect(run.marks![0].attrs).toEqual({ dashboardId: 12 });
   });
 });
