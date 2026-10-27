@@ -3551,7 +3551,7 @@ class TextBoxComponentFormattingTests(TestCase):
         )
 
     def test_a_link_to_another_projects_dashboard_is_dropped(self):
-        """The id alone proves nothing — it has to be in *this* project."""
+        """The id has to be in *this* project."""
         foreign_project = Project.objects.create(name="Theirs")
         foreign = Dashboard.objects.create(
             project=foreign_project, name="Theirs", order_in_project=0
@@ -3583,7 +3583,6 @@ class TextBoxComponentFormattingTests(TestCase):
         run = item["rich_text"]["content"][0]["content"][0]
         self.assertEqual(run["text"], "click")
         self.assertNotIn("marks", run)
-        # The plain-text mirror is derived from the cleaned document.
         self.assertEqual(item["text"], "click")
 
     def test_rich_text_round_trips_through_save_and_load(self):
@@ -3628,11 +3627,26 @@ class TextBoxComponentFormattingTests(TestCase):
         ]}
         self.assertEqual(self._save(rich_text=doc).status_code, 200)
         stored = self._layout()["rich_text"]
-        self.assertEqual(len(stored["content"]), 1)
-        run = stored["content"][0]["content"][0]
+        self.assertEqual([n["type"] for n in stored["content"]], ["paragraph", "paragraph"])
+        self.assertEqual(stored["content"][0]["content"][0]["text"], "boom")
+        run = stored["content"][1]["content"][0]
         self.assertEqual(run["text"], "kept")
         self.assertNotIn("marks", run)
-        self.assertNotIn("attrs", stored["content"][0])
+        self.assertNotIn("attrs", stored["content"][1])
+
+    def test_an_oversized_document_is_refused_with_400_not_silently_stripped(self):
+        """Losing all formatting and still being told "saved" is worse than
+        being refused."""
+        from .rich_text import MAX_NODES
+
+        doc = {"type": "doc", "content": [
+            {"type": "paragraph", "content": [{"type": "text", "text": "x"}]}
+            for _ in range(MAX_NODES)
+        ]}
+        response = self._save(rich_text=doc)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("too large", response.data["error"])
+        self.assertEqual(self.dashboard.components.count(), 0)
 
     def test_junk_in_rich_text_does_not_500(self):
         for bad in ("not a doc", [], 42, {"type": "paragraph"}, None):
@@ -3764,11 +3778,8 @@ class TextBoxRichTextValidationTests(SimpleTestCase):
         self.assertEqual(run["marks"], [{"type": "bold"}])
 
     def test_a_known_mark_with_a_hostile_value_is_dropped_but_the_text_stays(self):
-        """`link` is a known mark now, so a bad href has to fail on the href.
-
-        Until links shipped this case was covered by `link` simply not being
-        in the whitelist at all; that is no longer what rejects it.
-        """
+        """`link` is a known mark, so a bad href must fail on the href itself
+        rather than on the mark type being unknown."""
         from .rich_text import validated_rich_text
 
         doc = self._doc(self._para(self._text("hi", [
@@ -3811,26 +3822,23 @@ class TextBoxRichTextValidationTests(SimpleTestCase):
         hostile = (
             "javascript:alert(1)",
             "JavaScript:alert(1)",
-            # A browser strips the newline and then navigates; we must not
-            # be the thing that lets it get that far.
             "java\nscript:alert(1)",
             "java\tscript:alert(1)",
             "https://example.com\x00.evil.example",
-            # Looks like a URL further in, is not one at the front.
             "javascript:alert(1)//https://example.com",
             "data:text/html,<script>alert(1)</script>",
             "vbscript:msgbox(1)",
             "file:///etc/passwd",
             "ftp://example.com/x",
             "tel:+15551234",
-            # Protocol-relative: no scheme token at all.
             "//evil.example/path",
             "/dashboards/1",
             "dashboards/1",
-            # Parses, but goes nowhere.
             "https://",
+            # urlsplit and the browser's parser disagree on these two.
             "https:///path",
-            # The query string is the only way cc/bcc/body can ride along.
+            "https://exa mple.com",
+            "https://ho\"st/",
             "mailto:a@b.com?cc=victim@evil.example",
             "mailto:a@b.com?subject=hi",
             "mailto:a@b.com,c@d.com",
@@ -3859,11 +3867,8 @@ class TextBoxRichTextValidationTests(SimpleTestCase):
             self.assertNotIn("marks", run, repr(href))
 
     def test_a_link_stores_its_href_and_nothing_else(self):
-        """target/rel/class/title arrive from the editor and are never kept.
-
-        The renderer sets target and rel itself, so a stored value could only
-        ever be a way to override what it decided.
-        """
+        """The renderer sets target and rel itself, so a stored value could
+        only override what it decided."""
         from .rich_text import validated_rich_text
 
         doc = self._doc(self._para(self._text("hi", [
@@ -3897,7 +3902,7 @@ class TextBoxRichTextValidationTests(SimpleTestCase):
         self.assertNotIn("marks", run)
 
     def test_a_dashboard_link_is_dropped_when_no_project_is_known(self):
-        """The default drops every dashboard link rather than trusting one."""
+        """The default trusts nothing."""
         from .rich_text import validated_rich_text
 
         doc = self._doc(self._para(self._text("hi", [
@@ -3917,19 +3922,19 @@ class TextBoxRichTextValidationTests(SimpleTestCase):
             self.assertNotIn("marks", run, repr(dashboard_id))
 
     def test_hrefs_count_against_the_document_size_limit(self):
-        """Otherwise hrefs are a way around MAX_TEXT_LENGTH entirely.
-
-        A document may hold thousands of runs; at 2048 characters of href
-        each that is megabytes of payload while the visible text stays tiny.
-        """
+        """Otherwise thousands of maximal hrefs are megabytes of payload
+        while the visible text stays tiny."""
         from .rich_text import validated_rich_text
+
+        from .rich_text import RichTextTooLarge
 
         href = "https://example.com/" + ("a" * 2000)
         paragraphs = [
             self._para(self._text("x", [{"type": "link", "attrs": {"href": href}}]))
             for _ in range(60)
         ]
-        self.assertIsNone(validated_rich_text(self._doc(*paragraphs)))
+        with self.assertRaises(RichTextTooLarge):
+            validated_rich_text(self._doc(*paragraphs))
 
     def test_text_style_keeps_only_valid_attributes(self):
         from .rich_text import validated_rich_text
@@ -3998,7 +4003,9 @@ class TextBoxRichTextValidationTests(SimpleTestCase):
                          "content": [self._text("h")]})
         self.assertEqual(validated_rich_text(doc)["content"][0]["attrs"]["level"], 3)
 
-    def test_unknown_node_types_are_dropped(self):
+    def test_unknown_node_types_are_dropped_but_their_text_is_kept(self):
+        """The wrapper goes; the words it held do not. Bare inline content
+        gets a paragraph, or the editor's schema would reject the result."""
         from .rich_text import validated_rich_text
 
         doc = self._doc(
@@ -4007,8 +4014,10 @@ class TextBoxRichTextValidationTests(SimpleTestCase):
             self._para(self._text("kept")),
         )
         content = validated_rich_text(doc)["content"]
-        self.assertEqual(len(content), 1)
-        self.assertEqual(content[0]["content"][0]["text"], "kept")
+        self.assertEqual([node["type"] for node in content], ["paragraph", "paragraph"])
+        self.assertEqual(content[0]["content"][0]["text"], "boom")
+        self.assertEqual(content[1]["content"][0]["text"], "kept")
+        self.assertNotIn("attrs", content[0])
 
     def test_lists_and_blockquotes_survive(self):
         from .rich_text import validated_rich_text
@@ -4029,19 +4038,36 @@ class TextBoxRichTextValidationTests(SimpleTestCase):
                     self._doc(), {"type": "doc", "content": "nope"}):
             self.assertIsNone(validated_rich_text(bad), bad)
 
-    def test_an_oversized_document_is_rejected_rather_than_stored(self):
-        from .rich_text import MAX_NODES, validated_rich_text
+    def test_an_oversized_document_raises_rather_than_storing_nothing(self):
+        """Too big is not "no rich text": the caller has to tell them apart,
+        or a user loses all their formatting to a 200 response."""
+        from .rich_text import MAX_NODES, RichTextTooLarge, validated_rich_text
 
         doc = self._doc(*[self._para(self._text("x")) for _ in range(MAX_NODES)])
-        self.assertIsNone(validated_rich_text(doc))
+        with self.assertRaises(RichTextTooLarge):
+            validated_rich_text(doc)
 
-    def test_a_deeply_nested_document_is_rejected(self):
-        from .rich_text import MAX_DEPTH, validated_rich_text
+    def test_a_deeply_nested_document_raises(self):
+        from .rich_text import MAX_DEPTH, RichTextTooLarge, validated_rich_text
 
         node = self._para(self._text("deep"))
         for _ in range(MAX_DEPTH + 5):
             node = {"type": "blockquote", "content": [node]}
-        self.assertIsNone(validated_rich_text(self._doc(node)))
+        with self.assertRaises(RichTextTooLarge):
+            validated_rich_text(self._doc(node))
+
+    def test_an_unknown_wrapper_is_dropped_but_its_text_survives(self):
+        """A newer client's table or task list would otherwise have every
+        word inside it deleted at save time."""
+        from .rich_text import validated_rich_text
+
+        doc = self._doc({
+            "type": "table",
+            "content": [self._para(self._text("inside a table"))],
+        })
+        cleaned = validated_rich_text(doc)
+        self.assertEqual(cleaned["content"][0]["type"], "paragraph")
+        self.assertEqual(cleaned["content"][0]["content"][0]["text"], "inside a table")
 
     def test_plain_text_is_derived_one_line_per_block(self):
         from .rich_text import plain_text_from_doc

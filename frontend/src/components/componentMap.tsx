@@ -245,19 +245,15 @@ export const TextBoxComponent: React.FC<ComponentProps> = ({
   selectedFile,
   onOpenDashboard,
 }) => {
-  // A text box can link to another dashboard in the same project: the picker
-  // needs their names, and view mode needs their ids to tell a live link from
-  // one whose target has since been deleted. Fetched once per project and
-  // shared across every text box on the board.
+  // The picker needs their names; view mode needs the ids to tell a live
+  // link from a deleted one. Fetched once per project, shared across boxes.
   const dashboards = useProjectDashboards(selectedFile?.project);
   const knownDashboardIds = React.useMemo(
     () => new Set(dashboards.map((dashboard) => dashboard.id)),
     [dashboards],
   );
 
-  // Following a dashboard link replaces what the reader is looking at, and
-  // nothing on the page says where the words lead before they are clicked.
-  // Ask first, naming the destination.
+  // Nothing says where the words lead before they are clicked, so ask first.
   const [pendingDashboard, setPendingDashboard] = React.useState<number | null>(null);
   const pendingName = dashboards.find((d) => d.id === pendingDashboard)?.name;
 
@@ -373,11 +369,8 @@ export const TextBoxComponent: React.FC<ComponentProps> = ({
         </Card>
       )}
 
-      {/*
-        Same Dialog the dashboard uses to confirm discarding layout changes
-        (grid.tsx), so the two read alike. It portals to the body, which is
-        what lets it escape this widget's grid cell and its own React root.
-      */}
+      {/* The same Dialog grid.tsx uses to confirm discarding changes. It
+          portals to the body, escaping this widget's cell and React root. */}
       <Dialog
         open={pendingDashboard !== null}
         onOpenChange={(open) => {

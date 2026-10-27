@@ -14,7 +14,8 @@
  */
 import React from 'react';
 import { EditorContent, useEditor } from '@tiptap/react';
-import { type LinkableDashboard, TextBoxToolbar } from './TextBoxToolbar';
+import { TextBoxToolbar } from './TextBoxToolbar';
+import type { ProjectDashboard } from './useProjectDashboards';
 import { TEXT_BOX_EXTENSIONS } from './textBoxExtensions';
 import type { RichTextDoc } from './richText';
 import { type TextBoxFormat, TEXT_BOX_FORMAT_DEFAULTS } from './textBoxFormat';
@@ -28,7 +29,7 @@ export interface TextBoxEditorProps {
   onFormatChange: (patch: Partial<TextBoxFormat>) => void;
   idPrefix: string;
   /** Dashboards in this project, for the link popover's picker. */
-  dashboards?: LinkableDashboard[];
+  dashboards?: ProjectDashboard[];
 }
 
 export function TextBoxEditor({

@@ -22,35 +22,29 @@ import {
 } from './richText';
 
 /**
- * How a dashboard link behaves, supplied by the widget.
- *
- * A context rather than a prop threaded through every walker function: the
- * walk is a set of plain module-level functions and only one leaf cares.
- * `RichTextRenderer` still takes plain props, so tests need no provider.
+ * How a dashboard link behaves, supplied by the widget. A context because the
+ * walk is plain module-level functions and only one leaf cares;
+ * `RichTextRenderer` still takes props, so tests need no provider.
  */
 type LinkTargets = {
   onDashboardLink?: (dashboardId: number) => void;
-  /**
-   * Dashboards that still exist in this project. A link to one that has been
-   * deleted since it was written renders as plain text — the save-time check
-   * in `api/views/dashboards.py` cannot catch a later deletion.
-   */
+  /** Still-existing dashboards; a link to a deleted one renders as text. */
   knownDashboardIds?: Set<number>;
 };
 
 const LinkTargetContext = React.createContext<LinkTargets>({});
 
 /**
- * Links have to be styled here, not in CSS. Tailwind's preflight strips an
- * anchor's colour and underline, and the stylesheet rule for `.tiptap-text-box`
- * only covers the editor — view mode is this walker. Without this a link was
- * indistinguishable from the text around it.
+ * Styled here, not in CSS: Tailwind's preflight strips an anchor's colour and
+ * underline, and the `.tiptap-text-box` rule only reaches the editor. The two
+ * custom properties are defined once in custom.css so the modes cannot drift;
+ * the fallbacks keep links readable if that stylesheet never loads.
  *
  * Spread *before* the run's own marks, so a colour the user chose still wins.
  */
 const LINK_LOOK: React.CSSProperties = {
-  color: 'var(--primary)',
-  textDecoration: 'underline',
+  color: 'var(--totem-link-color, currentColor)',
+  textDecoration: 'var(--totem-link-decoration, underline)' as React.CSSProperties['textDecoration'],
   cursor: 'pointer',
 };
 
@@ -69,10 +63,8 @@ function Inline({ node, keyPrefix }: { node: RichTextNode; keyPrefix: string }) 
     const style = styleFromMarks(node.marks);
     const text = node.text ?? '';
 
-    // `target` and `rel` are set here and never read from the mark: the
-    // document is untrusted, and these two are what keep an opened tab from
-    // reaching back into the app. A mailto gets no `target`, because handing
-    // off to the mail client would otherwise leave an empty tab behind.
+    // `target` and `rel` are set here, never read from the mark. A mailto
+    // gets no `target`, which would leave an empty tab behind.
     const href = hrefFromMarks(node.marks);
     if (href) {
       return (
@@ -87,8 +79,7 @@ function Inline({ node, keyPrefix }: { node: RichTextNode; keyPrefix: string }) 
       );
     }
 
-    // No href at all for a dashboard link: it is an in-app view change, not
-    // a navigation, so there is nothing for a URL to leak through.
+    // No href at all: an in-app view change, not a navigation.
     const dashboardId = dashboardIdFromMarks(node.marks);
     if (dashboardId !== null && onDashboardLink && knownDashboardIds?.has(dashboardId)) {
       return (

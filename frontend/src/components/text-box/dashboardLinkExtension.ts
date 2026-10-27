@@ -1,17 +1,12 @@
 /**
  * A link from a Text Box to another dashboard.
  *
- * Deliberately *not* the `link` mark with some invented URL scheme. There are
- * no per-dashboard routes in this app — `ViewMode` is in-memory state and
- * every view lands on `/overview` — so a dashboard link was never going to be
- * a URL. Storing a plain integer id instead means this mark has no `href` for
- * a hostile scheme to hide in, and `api/rich_text.py` can validate it by
- * asking whether the number names a dashboard in the same project rather than
- * by parsing a string.
+ * Not the `link` mark with an invented scheme: there are no per-dashboard
+ * routes (`ViewMode` is in-memory state), so this was never going to be a
+ * URL. An integer id has no `href` for a hostile scheme to hide in.
  *
- * The rendered HTML here only matters inside the editor. View mode is walked
- * into React elements by `RichTextRenderer`, which turns this mark into a
- * `<button>` that calls back into `setViewMode`.
+ * The HTML here only matters inside the editor — view mode is walked into a
+ * `<button>` by `RichTextRenderer`.
  */
 import { Mark, mergeAttributes } from '@tiptap/core';
 
@@ -27,14 +22,13 @@ declare module '@tiptap/core' {
 export const DashboardLink = Mark.create({
   name: 'dashboardLink',
 
-  // Matches the `link` mark's behaviour: typing on from the end of a link
-  // should not silently extend it.
+  // As with `link`: typing on from the end should not extend it.
   inclusive: false,
 
-  // A run is either a web/email link or a dashboard link, never both. The
-  // commands below also unset the other explicitly, because ProseMirror's
-  // exclusion only applies in the direction it is declared.
-  excludes: 'link dashboardLink',
+  // Exclusion is directional, so `Link` declares the other half in
+  // textBoxExtensions.ts. Naming this mark too is required: spelling
+  // `excludes` out replaces the default of excluding itself.
+  excludes: 'dashboardLink link',
 
   addAttributes() {
     return {
@@ -70,16 +64,13 @@ export const DashboardLink = Mark.create({
     return {
       setDashboardLink:
         (attributes) =>
-        ({ chain }) =>
-          chain()
-            .unsetMark('link')
-            .setMark(this.name, attributes)
-            .run(),
+        ({ commands }) =>
+          commands.setMark(this.name, attributes),
 
       unsetDashboardLink:
         () =>
-        ({ chain }) =>
-          chain().unsetMark(this.name).run(),
+        ({ commands }) =>
+          commands.unsetMark(this.name),
     };
   },
 });

@@ -7,18 +7,11 @@ HTML sanitiser. What it does is rebuild the tree from a whitelist so that only
 known node types, known marks and known attribute *values* are ever stored:
 anything else is dropped rather than persisted and handed to other viewers.
 
-Links are the sharp edge. A text box can carry a web link, an email link or a
-link to another dashboard, and the first two end up in a real ``href`` that a
-browser will act on. ``_clean_href`` is therefore the strictest thing in this
-module, and dashboard links sidestep the question entirely by storing an
-integer id instead of a URL.
-
 Everything here is pure, so it is tested directly in
 ``TextBoxRichTextValidationTests`` without touching the database.
 """
 
 import re
-from urllib.parse import urlsplit
 
 # A paragraph's own attributes. Alignment is a block property — you cannot
 # centre half a word — so it lives here rather than on a mark.
@@ -38,26 +31,25 @@ _FONT_FAMILIES = (
 _HEX_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 _FONT_SIZE_RE = re.compile(r"^(\d{1,3})px$")
 
-# An href is the one value here that a browser will act on rather than merely
-# display, so it is matched against whole-string patterns and nothing else.
-# Anchoring at the start is what makes "javascript:alert(1)//https://x" fail:
-# the string only has to *look* like a URL somewhere for a naive search to
-# pass it. Requiring the literal scheme is also what rejects the
-# protocol-relative "//evil.com", which has no scheme token at all.
+# Anchored, so a hostile scheme cannot hide in front of a legitimate-looking
+# tail ("javascript:alert(1)//https://x"), and so "//evil.com" has no match.
 _HTTP_SCHEME_RE = re.compile(r"^https?://", re.IGNORECASE)
 _MAILTO_SCHEME_RE = re.compile(r"^mailto:", re.IGNORECASE)
 
-# One address, deliberately stricter than RFC 5322: a dotted domain and none
-# of the punctuation that lets a single field carry a second recipient.
+# Stricter than RFC 5322 on purpose: no punctuation that would let one field
+# carry a second recipient.
 _EMAIL_RE = re.compile(
     r"^[^\s@,;:<>()\[\]\\\"]+"
     r"@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
     r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$"
 )
 
-# A browser silently strips TAB, CR and LF from a URL before using it, so a
-# control character anywhere is a way to make the real destination differ from
-# what a reader sees ("java\nscript:"). Reject outright rather than strip.
+# Everything between "scheme://" and the first "/", "?" or "#". A closed set,
+# which is what rejects a space inside the host.
+_AUTHORITY_RE = re.compile(r"^[A-Za-z0-9._~%!$&'()*+,;=:@\[\]-]+$")
+
+# A browser strips TAB, CR and LF from a URL before using it, so a control
+# character is a way to hide the real destination. Reject rather than strip.
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
 _MAX_HREF_LENGTH = 2048
 
@@ -81,6 +73,9 @@ _CONTAINER_NODES = (
     "codeBlock",
 )
 _LEAF_NODES = ("horizontalRule", "hardBreak")
+
+# Nodes that belong inside a block, never directly under one.
+_INLINE_NODES = ("text", "hardBreak")
 
 # Bounds, so one dashboard cannot carry a document that costs every viewer a
 # frozen tab. Generous next to any realistic annotation.
@@ -132,27 +127,27 @@ def _clean_href(raw):
     """
     if not isinstance(raw, str):
         return None
-    # Pasting a URL routinely picks up surrounding spaces; that much is worth
-    # forgiving. Anything *inside* the string is not (see _CONTROL_CHAR_RE).
     href = raw.strip()
     if not href or len(href) > _MAX_HREF_LENGTH:
         return None
     if _CONTROL_CHAR_RE.search(href):
         return None
 
-    if _HTTP_SCHEME_RE.match(href):
-        try:
-            parts = urlsplit(href)
-        except ValueError:
+    match = _HTTP_SCHEME_RE.match(href)
+    if match:
+        # Read off the string rather than with urlsplit: urlsplit (RFC 3986)
+        # and the browser (WHATWG) disagree in both directions on inputs like
+        # "https:///p" and "https://exa mple.com". Deciding it here keeps this
+        # and `isSafeHref` in richText.ts answering identically.
+        rest = href[match.end():]
+        authority = re.split(r"[/?#]", rest, maxsplit=1)[0]
+        if not authority or not _AUTHORITY_RE.match(authority):
             return None
-        # "https://" with nothing after it parses fine and goes nowhere.
-        return href if parts.hostname else None
+        return href
 
     if _MAILTO_SCHEME_RE.match(href):
         address = href[len("mailto:"):]
-        # A query string is the only way cc/bcc/subject/body can appear, and
-        # those are what let a link do something other than what its text
-        # says. Reject the whole href rather than quietly trimming them off.
+        # A query string is the only way cc/bcc/body can ride along.
         if "?" in address or not _EMAIL_RE.match(address):
             return None
         return href
@@ -163,9 +158,8 @@ def _clean_href(raw):
 def _clean_dashboard_id(raw, allowed_ids):
     """Return the id only when it names a dashboard the caller vouches for.
 
-    ``allowed_ids`` is supplied by the view, which knows the project the
-    document is being saved into; ``None`` means the caller has no project in
-    hand, and then no dashboard link can be trusted at all.
+    ``allowed_ids`` comes from the view, which knows the project being saved
+    into. ``None`` means no project is known, so nothing is trusted.
     """
     if allowed_ids is None:
         return None
@@ -212,22 +206,17 @@ def _clean_marks(raw_marks, budget, allowed_dashboard_ids):
             raw_attrs = mark.get("attrs")
             raw_attrs = raw_attrs if isinstance(raw_attrs, dict) else {}
             href = _clean_href(raw_attrs.get("href"))
-            # Only the href is kept. The editor also sends target, rel, class
-            # and title; none are read, because the renderer sets target and
-            # rel itself. Storing them could only ever be a way to override
-            # what the renderer decided.
+            # Only the href is kept: the renderer sets target and rel itself,
+            # so a stored value could only override what it decided.
             if href and "link" not in seen:
-                # Hrefs count against the same ceiling as visible text.
-                # Without this a document could carry 5000 maximal hrefs --
-                # about 10MB -- while reporting almost no text at all.
+                # Otherwise 5000 maximal hrefs (~10MB) escape MAX_TEXT_LENGTH.
                 budget.spend_text(len(href))
                 seen.add("link")
                 cleaned.append({"type": "link", "attrs": {"href": href}})
         elif mark_type == "dashboardLink":
             raw_attrs = mark.get("attrs")
             raw_attrs = raw_attrs if isinstance(raw_attrs, dict) else {}
-            # An integer, never a string: a link to another dashboard cannot
-            # be a URL, so there is no scheme for anything to hide in.
+            # An integer, never a string: no scheme for anything to hide in.
             dashboard_id = _clean_dashboard_id(
                 raw_attrs.get("dashboardId"), allowed_dashboard_ids
             )
@@ -278,7 +267,11 @@ class _Budget:
 
 
 def _clean_node(raw, budget, depth, allowed_dashboard_ids):
-    """Return a rebuilt node, or None when it is not something we store."""
+    """Return a rebuilt node, None, or a list to splice into the parent.
+
+    The list case is an unrecognised wrapper: the wrapper goes, its usable
+    children stay.
+    """
     if depth > MAX_DEPTH:
         raise RichTextTooLarge(f"document nests deeper than {MAX_DEPTH}")
     if not isinstance(raw, dict):
@@ -312,9 +305,33 @@ def _clean_node(raw, budget, depth, allowed_dashboard_ids):
             node["content"] = content
         return node
 
-    # Unknown node type — drop the node, but keep any recognised content it
-    # wrapped, so text never silently disappears because of one stray node.
-    return None
+    # Unknown node type — drop the wrapper, keep the words it held. The list
+    # is spliced into the parent by `_clean_content`, matching what
+    # `RichTextRenderer` does with the same case on the way out.
+    children = _clean_content(raw.get("content"), budget, depth + 1, allowed_dashboard_ids)
+    return _as_blocks(children)
+
+
+def _as_blocks(nodes):
+    """Wrap any bare inline nodes in a paragraph.
+
+    Splicing inline content straight into a block position would make a
+    document the editor's schema refuses, so the text would survive here only
+    for ProseMirror to drop it on the next load.
+    """
+    blocks = []
+    run = []
+    for node in nodes:
+        if node["type"] in _INLINE_NODES:
+            run.append(node)
+            continue
+        if run:
+            blocks.append({"type": "paragraph", "content": run})
+            run = []
+        blocks.append(node)
+    if run:
+        blocks.append({"type": "paragraph", "content": run})
+    return blocks
 
 
 def _clean_content(raw_content, budget, depth, allowed_dashboard_ids):
@@ -323,7 +340,9 @@ def _clean_content(raw_content, budget, depth, allowed_dashboard_ids):
     cleaned = []
     for child in raw_content:
         node = _clean_node(child, budget, depth, allowed_dashboard_ids)
-        if node is not None:
+        if isinstance(node, list):
+            cleaned.extend(node)
+        elif node is not None:
             cleaned.append(node)
     return cleaned
 
@@ -339,14 +358,15 @@ def validated_rich_text(raw, allowed_dashboard_ids=None):
     point at — the view passes the ids in the document's own project. Leaving
     it unset drops every dashboard link, which is the right default for a
     caller that cannot say what the document belongs to.
+
+    Raises ``RichTextTooLarge`` rather than returning None for a document
+    that blows a limit: the caller has to tell that apart from "no rich text",
+    or a user loses all their formatting to a 200 response.
     """
     if not isinstance(raw, dict) or raw.get("type") != "doc":
         return None
     budget = _Budget()
-    try:
-        content = _clean_content(raw.get("content"), budget, 1, allowed_dashboard_ids)
-    except RichTextTooLarge:
-        return None
+    content = _clean_content(raw.get("content"), budget, 1, allowed_dashboard_ids)
     if not content:
         return None
     return {"type": "doc", "content": content}

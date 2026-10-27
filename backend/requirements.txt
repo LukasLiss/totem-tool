@@ -6,9 +6,11 @@ pulp==3.3.0
 highspy==1.15.1
 drf-polymorphic==2.1.1
 django-rest-polymorphic==0.1.10
-# Capped below 2.0: duckdb 2.0.0 removed DuckDBPyConnection.pl(), which
-# totem_lib/dfg/ocdfg_db.py and others call, and tightened connection-config
-# reuse. Keep in step with the bound in totem_lib/pyproject.toml.
+# duckdb 2.0 moved the result converters onto DuckDBPyRelation, so
+# `conn.execute(sql).pl()` raises AttributeError and has to become
+# `conn.sql(sql, params=...).pl()`; it also refuses to reuse a database file
+# opened with a different configuration, which ocel_duckdb.py does.
+# Keep in step with totem_lib/pyproject.toml.
 duckdb>=1.0.0,<2.0.0
 gunicorn==22.0.0
 whitenoise==6.6.0

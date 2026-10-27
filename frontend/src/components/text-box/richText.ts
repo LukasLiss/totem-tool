@@ -31,13 +31,18 @@ function isAllowedFontFamily(value: unknown): value is string {
  * The accepted link targets, mirroring `_clean_href` in `api/rich_text.py` —
  * change one and you must change the other.
  *
- * Anchored at the start, so a hostile scheme cannot hide in front of a
- * legitimate-looking tail (`javascript:alert(1)//https://x`), and requiring
- * the literal scheme is what rejects protocol-relative `//evil.com`. Control
- * characters are rejected rather than stripped, because a browser strips them
- * itself and would then navigate somewhere other than what the text showed.
+ * Anchored, so a hostile scheme cannot hide in front of a legitimate-looking
+ * tail, and `//evil.com` has no match. Control characters are rejected rather
+ * than stripped, because a browser strips them and then navigates elsewhere.
  */
-const HTTP_SCHEME_RE = /^https?:\/\//i;
+const HTTP_SCHEME_RE = /^(https?:\/\/)/i;
+/**
+ * Everything between `scheme://` and the first `/`, `?` or `#`, read off the
+ * string rather than via `new URL`: the browser (WHATWG) and Python's
+ * `urlsplit` (RFC 3986) disagree in both directions on inputs like
+ * `https:///p` and `https://exa mple.com`.
+ */
+const AUTHORITY_RE = /^[A-Za-z0-9._~%!$&'()*+,;=:@[\]-]+$/;
 const MAILTO_SCHEME_RE = /^mailto:/i;
 const EMAIL_RE = /^[^\s@,;:<>()[\]\\"]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$/;
 // eslint-disable-next-line no-control-regex
@@ -51,13 +56,10 @@ export function isSafeHref(value: unknown): value is string {
   if (!href || href.length > MAX_HREF_LENGTH) return false;
   if (CONTROL_CHAR_RE.test(href)) return false;
 
-  if (HTTP_SCHEME_RE.test(href)) {
-    try {
-      // "https://" alone parses but has nowhere to go.
-      return new URL(href).hostname !== '';
-    } catch {
-      return false;
-    }
+  const scheme = HTTP_SCHEME_RE.exec(href);
+  if (scheme) {
+    const authority = href.slice(scheme[0].length).split(/[/?#]/, 1)[0];
+    return authority !== '' && AUTHORITY_RE.test(authority);
   }
   if (MAILTO_SCHEME_RE.test(href)) {
     const address = href.slice('mailto:'.length);
@@ -73,9 +75,8 @@ export function isMailtoHref(href: string): boolean {
 }
 
 /**
- * The run's link target, or null. Re-checked here rather than trusted: rows
- * written before links existed were never validated, and the renderer must
- * not be one backend regression away from emitting a live `javascript:` href.
+ * The run's link target, or null. Re-checked rather than trusted: rows
+ * written before links existed were never validated.
  */
 export function hrefFromMarks(marks: RichTextMark[] | undefined): string | null {
   for (const mark of marks ?? []) {
@@ -283,8 +284,7 @@ export function styleFromMarks(marks: RichTextMark[] | undefined): React.CSSProp
         break;
       case 'link':
       case 'dashboardLink':
-        // A link becomes an element, not a style — see `hrefFromMarks` /
-        // `dashboardIdFromMarks` and the two branches in `RichTextRenderer`.
+        // A link becomes an element, not a style — see `RichTextRenderer`.
         break;
       case 'textStyle': {
         const attrs = mark.attrs ?? {};

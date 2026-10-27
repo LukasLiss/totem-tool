@@ -115,13 +115,10 @@ describe("TextBoxComponent edit mode", () => {
 
 describe("TextBoxComponent view mode", () => {
   /**
-   * The widget takes navigation as a *prop*, never from `DashboardContext`.
-   *
-   * Every widget is mounted in its own `ReactDOM.createRoot` by
-   * `gridstackprovider`, and React context does not cross a root boundary — a
-   * `useContext` here silently receives the context's default value, whose
-   * `setViewMode` does nothing, so the link rendered and clicked and went
-   * nowhere. This asserts the prop is what gets called.
+   * Navigation arrives as a *prop*, never from `DashboardContext`: widgets
+   * are mounted in their own `ReactDOM.createRoot` and context does not cross
+   * a root boundary, so `useContext` would get a `setViewMode` that does
+   * nothing and the link would go nowhere.
    */
   it("confirms before leaving, naming the destination", async () => {
     const onOpenDashboard = vi.fn();

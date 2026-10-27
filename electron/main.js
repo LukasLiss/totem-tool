@@ -205,26 +205,19 @@ function createWindow() {
     },
   });
 
-  // Text Box links render with target="_blank" (RichTextRenderer.tsx). Left
-  // alone, Electron honours that by opening a second bare BrowserWindow at
-  // the external site -- no address bar, no back button, and none of the
-  // user's own browser session. Hand qualifying URLs to the OS instead and
-  // never open a window inside the app.
-  //
-  // The scheme is re-checked here even though the backend whitelist and the
-  // renderer have both already done it: shell.openExternal asks the OS to
-  // open whatever the URL names, which on some platforms means a registered
-  // protocol handler. It is the last gate before leaving the sandbox and
-  // does not get to assume its input was cleaned upstream.
+  // Text Box links carry target="_blank". Left alone, Electron opens a bare
+  // second BrowserWindow at the external site instead of the user's browser.
+  // The scheme is re-checked here even though the backend and renderer have:
+  // shell.openExternal asks the OS to open whatever the URL names, so this is
+  // the last gate before leaving the sandbox.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isExternalOpenable(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
 
-  // A mailto link carries no target, so it arrives as a navigation of the
-  // window itself rather than through the handler above; so would any link
-  // that lost its target. Following one would strand the user on a website
-  // inside the app frame with no way back short of restarting.
+  // A mailto link carries no target, so it arrives here rather than through
+  // the handler above. Following it would strand the user on a website inside
+  // the app frame with no way back.
   mainWindow.webContents.on('will-navigate', (event, url) => {
     let target;
     try {
@@ -233,9 +226,7 @@ function createWindow() {
       event.preventDefault();
       return;
     }
-    // The app serves itself over http://localhost on a port picked at
-    // runtime, so same-origin is compared against the window, never a
-    // hard-coded port.
+    // The port is picked at runtime, so compare against the window.
     const current = new URL(mainWindow.webContents.getURL());
     if (target.origin === current.origin) return;
     event.preventDefault();

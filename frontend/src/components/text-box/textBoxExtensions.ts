@@ -17,28 +17,29 @@ import Link from '@tiptap/extension-link';
 import TextAlign from '@tiptap/extension-text-align';
 import { Color, FontFamily, FontSize, TextStyle } from '@tiptap/extension-text-style';
 import { DashboardLink } from './dashboardLinkExtension';
+import { LineHeight } from './lineHeightExtension';
 import { isSafeHref } from './richText';
 
 export const TEXT_BOX_EXTENSIONS = [
-  // StarterKit bundles its own copy of Link; disable it so the configured
-  // one below is the only registration of the mark.
+  // StarterKit bundles its own Link; disable it so the one below is the only
+  // registration of the mark.
   StarterKit.configure({ link: false }),
   Link.configure({
-    // Clicking in the editor should place the caret, not navigate away from
-    // under the user.
     openOnClick: false,
-    // The toolbar is the only way to make a link. Typing or pasting a URL
-    // does not silently become one.
+    // The toolbar is the only way to make a link.
     autolink: false,
     linkOnPaste: false,
-    // NOT a narrower `protocols` list. That option only *adds* to Tiptap's
-    // built-in allowlist (ftp, tel, sms, xmpp and more) and cannot subtract
-    // from it, and its default `isAllowedUri` additionally lets through
-    // anything with no apparent scheme — protocol-relative `//evil.com`
-    // included. Replacing the gate is the whole point; narrowing `protocols`
-    // would look like a restriction and enforce nothing.
+    // NOT a narrower `protocols` list: that option only *adds* to Tiptap's
+    // allowlist and cannot subtract from it, and the default `isAllowedUri`
+    // also lets through anything with no apparent scheme, `//evil.com`
+    // included. Narrowing `protocols` looks like a restriction and enforces
+    // nothing — the gate has to be replaced.
     isAllowedUri: (url: string) => isSafeHref(url),
     HTMLAttributes: { target: '_blank', rel: 'noopener noreferrer' },
+  }).extend({
+    // The other half of the exclusion on `DashboardLink`; `link` is named
+    // because spelling `excludes` out replaces the self-exclusion default.
+    excludes: 'link dashboardLink',
   }),
   DashboardLink,
   // A real placeholder, so an empty box shows a hint instead of carrying the
@@ -49,4 +50,6 @@ export const TEXT_BOX_EXTENSIONS = [
   FontFamily,
   FontSize,
   TextAlign.configure({ types: ['heading', 'paragraph'] }),
+  // Without this the schema drops `lineHeight` on load.
+  LineHeight,
 ];

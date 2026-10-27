@@ -42,9 +42,7 @@ import {
   isHexColor,
 } from './textBoxFormat';
 import { isMailtoHref, isSafeHref } from './richText';
-
-/** A dashboard a link can point at — the current project's, by name. */
-export type LinkableDashboard = { id: number; name: string };
+import type { ProjectDashboard } from './useProjectDashboards';
 
 type LinkKind = 'web' | 'email' | 'dashboard';
 
@@ -149,13 +147,6 @@ function ColorField({
 /**
  * Attach a link to the selected text: a web URL, an email address, or another
  * dashboard in this project.
- *
- * Unlike `ColorField` this popover does **not** suppress its own autofocus —
- * a URL field has to be typable. The selection survives anyway because the
- * trigger keeps it on mousedown and every command re-focuses the editor
- * first, which restores the stored ProseMirror selection. `extendMarkRange`
- * is what makes editing replace the whole existing link rather than only the
- * characters that happen to be selected.
  */
 function LinkField({
   editor,
@@ -163,12 +154,15 @@ function LinkField({
   dashboardId,
   dashboards,
   canLink,
+  inputId,
 }: {
   editor: Editor;
   href: string | null;
   dashboardId: number | null;
-  dashboards: LinkableDashboard[];
+  dashboards: ProjectDashboard[];
   canLink: boolean;
+  /** Unique per widget: two text boxes can have their popovers open at once. */
+  inputId: string;
 }) {
   const active = Boolean(href) || dashboardId !== null;
   const inputRef = React.useRef<HTMLInputElement>(null);
@@ -183,8 +177,7 @@ function LinkField({
       ? target !== ''
       : isSafeHref(resolved) && (kind === 'email') === isMailtoHref(resolved);
 
-  // Seed the popover from whatever the caret is already sitting on, so
-  // opening it on an existing link edits that link instead of a blank form.
+  // Open on an existing link and it edits that link, not a blank form.
   const seed = () => {
     if (dashboardId !== null) {
       setKind('dashboard');
@@ -193,23 +186,28 @@ function LinkField({
     } else if (href && isMailtoHref(href)) {
       setKind('email');
       setDraft(href.slice('mailto:'.length));
+      // Or a dashboard left over from a previous use shows up pre-chosen,
+      // one click away from linking this run somewhere never picked.
+      setTarget('');
     } else {
       setKind('web');
       setDraft(href ?? '');
+      setTarget('');
     }
   };
 
-  // Clear both kinds before setting either, so switching a web link to a
-  // dashboard link (or back) never leaves the old mark underneath.
+  // Widen to whichever link the caret sits in, so editing replaces the whole
+  // link. The marks exclude each other in the schema, so setting one drops
+  // the other with no unsetting here.
   const spanning = () =>
     editor.chain().focus().extendMarkRange('link').extendMarkRange('dashboardLink');
 
   const apply = () => {
     if (!valid) return;
     if (kind === 'dashboard') {
-      spanning().unsetLink().setDashboardLink({ dashboardId: Number(target) }).run();
+      spanning().setDashboardLink({ dashboardId: Number(target) }).run();
     } else {
-      spanning().unsetDashboardLink().setLink({ href: resolved }).run();
+      spanning().setLink({ href: resolved }).run();
     }
     setOpen(false);
   };
@@ -245,11 +243,9 @@ function LinkField({
       <PopoverContent
         className="w-72 space-y-3"
         align="start"
-        // Radix would otherwise focus the first thing in the popover, which
-        // is the "Web" button — so a user who opens this and starts typing
-        // types into nothing. Put the caret in the URL field instead. The
-        // editor's selection survives the blur either way, because the
-        // trigger keeps it on mousedown and every command re-focuses first.
+        // Radix would otherwise focus the "Web" button, so typing goes
+        // nowhere. Unlike ColorField the field must take focus; the selection
+        // survives because the trigger keeps it on mousedown.
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           requestAnimationFrame(() => inputRef.current?.select());
@@ -275,13 +271,8 @@ function LinkField({
         {kind === 'dashboard' ? (
           <>
             <Label className="text-xs">Dashboard</Label>
-            {/*
-              An inline list rather than a <Select>: a Select renders its
-              options in their own portal, and a click out there reads as a
-              click outside this popover, which closed it before the choice
-              could be applied. The list is short and already inside a
-              popover, so there is nothing to gain from a second layer.
-            */}
+            {/* Not a <Select>: its options render in their own portal, and
+                a click out there closed this popover before Apply. */}
             <div
               role="listbox"
               aria-label="Dashboard"
@@ -314,12 +305,12 @@ function LinkField({
           </>
         ) : (
           <>
-            <Label className="text-xs" htmlFor="text-box-link-target">
+            <Label className="text-xs" htmlFor={inputId}>
               {kind === 'email' ? 'Email address' : 'URL'}
             </Label>
             <input
               ref={inputRef}
-              id="text-box-link-target"
+              id={inputId}
               type="text"
               inputMode="url"
               value={draft}
@@ -378,7 +369,7 @@ export interface TextBoxToolbarProps {
   /** Unique per widget — a dashboard can hold several text boxes. */
   idPrefix: string;
   /** Dashboards in this project, for the link popover's picker. */
-  dashboards?: LinkableDashboard[];
+  dashboards?: ProjectDashboard[];
 }
 
 export function TextBoxToolbar({
@@ -434,21 +425,42 @@ export function TextBoxToolbar({
   // the click on the button.
   const chain = () => editor!.chain().focus();
 
+  // While typing, `sizeDraft` holds the raw string; null means "show the
+  // selection's own size".
+  const [sizeDraft, setSizeDraft] = useState<string | null>(null);
+
+  const commitFontSize = () => {
+    if (sizeDraft === null) return;
+    const next = Number(sizeDraft);
+    setSizeDraft(null);
+    // A cleared field reverts rather than snapping to the minimum.
+    if (!editor || sizeDraft.trim() === '' || !Number.isFinite(next)) return;
+    const clamped = Math.min(Math.max(Math.round(next), FONT_SIZE_MIN), FONT_SIZE_MAX);
+    chain().setFontSize(`${clamped}px`).run();
+  };
+
   return (
     <div className="flex flex-wrap items-center gap-1.5 border-b border-border bg-card px-2 py-1.5">
+      {/* Clamped on blur or Enter, never per keystroke: the first digit of
+          "24" clamps to the 8 minimum and rewrites the field, so most sizes
+          could not be typed at all. */}
       <input
         type="number"
         min={FONT_SIZE_MIN}
         max={FONT_SIZE_MAX}
-        value={fontSize}
+        value={sizeDraft ?? fontSize}
         disabled={disabled}
         aria-label="Font size"
         title="Font size"
-        onChange={(event) => {
-          const next = Number(event.target.value);
-          if (!Number.isFinite(next) || !editor) return;
-          const clamped = Math.min(Math.max(Math.round(next), FONT_SIZE_MIN), FONT_SIZE_MAX);
-          chain().setFontSize(`${clamped}px`).run();
+        onChange={(event) => setSizeDraft(event.target.value)}
+        onBlur={commitFontSize}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            commitFontSize();
+          } else if (event.key === 'Escape') {
+            setSizeDraft(null);
+          }
         }}
         className="h-8 w-16 rounded-md border border-border bg-background px-2 text-xs"
       />
@@ -519,6 +531,7 @@ export function TextBoxToolbar({
             dashboardId={state?.dashboardId ?? null}
             dashboards={dashboards}
             canLink={Boolean(state?.canLink)}
+            inputId={`${idPrefix}-link-target`}
           />
         )}
       </div>

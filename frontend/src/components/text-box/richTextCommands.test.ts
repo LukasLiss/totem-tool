@@ -27,14 +27,8 @@ function makeEditor(text: string) {
   return editor;
 }
 
-/**
- * A mark's attributes, whatever kind of mark it is.
- *
- * `RichTextMark` is a union and its attribute-free members (bold, italic, …)
- * genuinely have no `attrs`, so reading it off the union does not compile.
- * These tests assert on attributes generically, hence one narrowing helper
- * rather than a cast at every call site.
- */
+/** A mark's attributes: the union's attribute-free members have none, so
+ *  reading `attrs` off it directly does not compile. */
 function attrsOf(mark: RichTextMark): Record<string, unknown> {
   return (mark as { attrs?: Record<string, unknown> }).attrs ?? {};
 }
@@ -164,6 +158,25 @@ describe("the shipped extension set", () => {
     expect(e.schema.marks.dashboardLink).toBeDefined();
   });
 
+  it("keeps lineHeight on a block, which the schema used to discard", () => {
+    const e = new Editor({
+      extensions: TEXT_BOX_EXTENSIONS,
+      content: {
+        type: "doc",
+        content: [{
+          type: "paragraph",
+          attrs: { textAlign: "center", lineHeight: "2" },
+          content: [{ type: "text", text: "hi" }],
+        }],
+      },
+    });
+    const attrs = (e.getJSON() as RichTextDoc).content[0].attrs!;
+    // Without an extension declaring it, ProseMirror dropped it on load.
+    expect(attrs.lineHeight).toBe("2");
+    expect(attrs.textAlign).toBe("center");
+    e.destroy();
+  });
+
   it("supports the marks the toolbar offers", () => {
     const e = makeEditor("text");
     for (const mark of ["bold", "italic", "underline", "textStyle", "link", "dashboardLink"]) {
@@ -197,11 +210,8 @@ describe("linking a selection", () => {
     expect(attrsOf(run.marks![0]).href).toBe("mailto:someone@example.com");
   });
 
-  // Tiptap's link mark carries target/rel/class/title in the document JSON,
-  // not just in the HTML it renders. None of them are ever stored: the
-  // backend whitelist keeps `href` alone, and the renderer sets target and
-  // rel itself, so a value smuggled into the document cannot override what
-  // the renderer decided. See `_clean_marks` in api/rich_text.py.
+  // Tiptap keeps target/rel/class/title in the document JSON; the backend
+  // whitelist stores `href` alone. See `_clean_marks` in api/rich_text.py.
   it("carries editor-side attributes the backend is expected to drop", () => {
     const e = selectWorld(makeEditor("hello world"));
     e.chain().setLink({ href: "https://example.com" }).run();
@@ -211,10 +221,8 @@ describe("linking a selection", () => {
     expect(Object.keys(attrs).sort()).toContain("target");
   });
 
-  // These are the tests that prove `isAllowedUri` is actually wired into the
-  // shipped extension set. Without them the configuration could be narrowed
-  // back to a `protocols` list -- which reads like a restriction and enforces
-  // nothing -- and every other test here would still pass.
+  // These prove `isAllowedUri` is wired in: narrowed back to a `protocols`
+  // list it would enforce nothing and every other test would still pass.
   it.each([
     ["javascript:alert(1)"],
     ["JavaScript:alert(1)"],
@@ -251,19 +259,32 @@ describe("linking a selection", () => {
     expect(runs(e.getJSON() as RichTextDoc)).toEqual([["hello world", []]]);
   });
 
+  // The schema exclusion is the only thing stopping a run being both.
   it("replaces a web link with a dashboard link rather than stacking both", () => {
     const e = selectWorld(makeEditor("hello world"));
     e.chain().setLink({ href: "https://example.com" }).run();
     e.chain()
       .setTextSelection({ from: 7, to: 12 })
-      .extendMarkRange("link")
-      .unsetLink()
       .setDashboardLink({ dashboardId: 4 })
       .run();
 
     expect(runs(e.getJSON() as RichTextDoc)).toEqual([
       ["hello ", []],
       ["world", ["dashboardLink"]],
+    ]);
+  });
+
+  it("replaces a dashboard link with a web link, the other direction", () => {
+    const e = selectWorld(makeEditor("hello world"));
+    e.chain().setDashboardLink({ dashboardId: 4 }).run();
+    e.chain()
+      .setTextSelection({ from: 7, to: 12 })
+      .setLink({ href: "https://example.com" })
+      .run();
+
+    expect(runs(e.getJSON() as RichTextDoc)).toEqual([
+      ["hello ", []],
+      ["world", ["link"]],
     ]);
   });
 

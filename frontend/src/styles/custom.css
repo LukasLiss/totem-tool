@@ -213,13 +213,18 @@
   opacity: 0.85;
 }
 
-/* Links inside the Text Box editor (#373 follow-up).
-   View mode is styled inline by RichTextRenderer; these rules are only for
-   what TipTap renders while editing. A dashboard link is a <span> here and a
-   <button> there, so both need the look an anchor gets for free. */
+/* What a Text Box link looks like, defined once: RichTextRenderer reads the
+   same two properties for view mode, where the look must be inline because
+   Tailwind's preflight strips an anchor's colour and underline. */
+:root {
+  --totem-link-color: var(--primary);
+  --totem-link-decoration: underline;
+}
+
+/* A text caret, not a pointer: in the editor these are not live links. */
 .tiptap-text-box a,
 .tiptap-text-box .totem-dashboard-link {
-  color: var(--primary);
-  text-decoration: underline;
+  color: var(--totem-link-color);
+  text-decoration: var(--totem-link-decoration);
   cursor: text;
 }

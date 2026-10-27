@@ -50,7 +50,7 @@ from totem_lib.orgamining import (
     NORMALIZATIONS,
 )
 
-from ..rich_text import plain_text_from_doc, validated_rich_text
+from ..rich_text import RichTextTooLarge, plain_text_from_doc, validated_rich_text
 
 
 _HEX_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
@@ -304,8 +304,15 @@ class DashboardViewSet(viewsets.ModelViewSet):
 
         # Replace the components atomically: either the new layout is stored
         # in full, or the previous one is kept.
-        with transaction.atomic():
-            self._replace_components(dashboard, layout, request)
+        try:
+            with transaction.atomic():
+                self._replace_components(dashboard, layout, request)
+        except RichTextTooLarge as exc:
+            # Say so, rather than storing the box with its formatting stripped.
+            return Response(
+                {"error": f"a text box's content is too large: {exc}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         return Response({"status": "saved"})
 
@@ -313,11 +320,8 @@ class DashboardViewSet(viewsets.ModelViewSet):
         # Clear existing components
         dashboard.components.all().delete()
 
-        # A text box may link to another dashboard, and that link is stored as
-        # a bare id. Resolve the ids this project actually contains once, here,
-        # rather than per component: a link to someone else's dashboard -- or
-        # to one that has since been deleted -- is then dropped at save, and
-        # the text it was attached to is kept.
+        # Resolved once rather than per component: a dashboard link pointing
+        # outside this project is dropped at save, its text kept.
         allowed_dashboard_ids = set(
             Dashboard.objects.filter(project_id=dashboard.project_id).values_list(
                 "id", flat=True
