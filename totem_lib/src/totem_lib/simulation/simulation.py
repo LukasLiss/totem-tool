@@ -828,7 +828,13 @@ class OCProcessAreaSimulationModel:
 
         # Calculate Resource Allocation Strategy
         resource_allocation_strategy = calculate_resource_allocation_strategy(
-            filtered_ocel, resource_cooldown_dist, ocel.obj_type_map, calendars
+            filtered_ocel,
+            resource_cooldown_dist,
+            ocel.obj_type_map,
+            calendars,
+            variants,
+            resource_constraints,
+            fallback_constraints,
         )
 
         # Calculate needed resources per activity.
@@ -903,7 +909,13 @@ class OCProcessAreaSimulationModel:
 
         # Calculate Resource Allocation Strategy
         resource_allocation_strategy = calculate_resource_allocation_strategy(
-            filtered_ocel, resource_cooldown_dist, ocel.obj_type_map, calendars
+            filtered_ocel,
+            resource_cooldown_dist,
+            ocel.obj_type_map,
+            calendars,
+            structure_variants,
+            resource_constraints,
+            fallback_constraints,
         )
 
         # Per-structure needed resources per activity.

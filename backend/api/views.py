@@ -3222,7 +3222,13 @@ def get_simulation_details(request):
         # Compute resource allocation strategy
         _report_progress(progress_id, _SIM_DETAILS_STEPS, 5)
         allocation_strategy = calculate_resource_allocation_strategy(
-            filtered_ocel, cooldown_dist, ocel.obj_type_map, calendars
+            filtered_ocel,
+            cooldown_dist,
+            ocel.obj_type_map,
+            calendars,
+            variants,
+            per_variant_constraints,
+            fallback_constraints,
         )
 
         # Time window of the *filtered* log
