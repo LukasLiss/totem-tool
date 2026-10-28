@@ -37,6 +37,19 @@ Available components include:
 SQL-based components can **link** a stored query from the [Project Asset Store](project-asset-store.md).
 When you edit that query, every linked component updates.
 
+### Links in a Text Box
+
+Select some text in a Text Box, click the **link** button in the formatting toolbar, and pick what
+it points at:
+
+- **Web** — an `http://` or `https://` address. Opens in a new tab of your browser.
+- **Email** — an address. Opens your mail program.
+- **Dashboard** — another dashboard in the same project. Switches to it in place, asking first if
+  you have unsaved layout changes.
+
+Only these three are accepted; anything else is refused when you type it and dropped again when the
+dashboard is saved. If a linked dashboard is later deleted, the words stay but stop being a link.
+
 ## View mode
 
 In view mode, the layout is locked and all components show their results. The global filter in the

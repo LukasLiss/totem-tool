@@ -24,6 +24,7 @@ import { NavConformance } from "./nav-conformance";
 import { NavEditor } from "./nav-editor";
 import { NavPlayout } from "./nav-playout";
 import { getDashboards } from "@/api/dashboardApi";
+import { invalidateProjectDashboards } from "@/components/text-box/useProjectDashboards";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 
@@ -92,6 +93,8 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
           dashboards={dashboards}
           refreshDashboards={async () => {
             if (!selectedFile?.project) return;
+            // Text Box links resolve ids against their own cached copy.
+            invalidateProjectDashboards(selectedFile.project);
             try {
               const response = await getDashboards(selectedFile.project);
               const data = response.results || response;

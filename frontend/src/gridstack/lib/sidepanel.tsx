@@ -22,6 +22,7 @@ import {
   TrashTile,
   VariantsTile,
 } from "@/components/tiles/tile-previews";
+import { TEXT_BOX_FORMAT_DEFAULTS } from "@/components/text-box/textBoxFormat";
 
 const SidePanel: React.FC = () => {
   const { grid } = useGrid();
@@ -35,7 +36,9 @@ const SidePanel: React.FC = () => {
         helper: "clone",
         appendTo: "body",
       },
-      [{ h: 1, w: 6, content: "Text Box", component_name: "TextBoxComponent", font_size: 14, text: "", order: 0 }]  // Ensure consistency
+      // Spread the shared defaults so a dragged-in text box starts out
+      // identical to one loaded from the database (#373).
+      [{ h: 1, w: 6, content: "Text Box", component_name: "TextBoxComponent", text: "", order: 0, rich_text: null, ...TEXT_BOX_FORMAT_DEFAULTS }]
     );
 
     GridStack.setupDragIn(

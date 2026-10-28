@@ -210,8 +210,69 @@ class NumberofEventsComponent(DashboardComponent):
 
 
 class TextBoxComponent(DashboardComponent):
+    # Box-level formatting. For a plain box (no `rich_text`) every option
+    # applies to the whole text; once a box has a document, only
+    # background_color and vertical_align stay box-level and the document
+    # carries the rest per run and per paragraph (#373). The defaults below
+    # reproduce the unformatted look the widget had before formatting
+    # existed, so dashboards saved earlier render unchanged.
+    FONT_FAMILY_CHOICES = [
+        ('sans', 'Sans serif'),
+        ('serif', 'Serif'),
+        ('mono', 'Monospace'),
+    ]
+    FONT_WEIGHT_CHOICES = [
+        ('normal', 'Normal'),
+        ('bold', 'Bold'),
+    ]
+    TEXT_ALIGN_CHOICES = [
+        ('left', 'Left'),
+        ('center', 'Center'),
+        ('right', 'Right'),
+        ('justify', 'Justify'),
+    ]
+    VERTICAL_ALIGN_CHOICES = [
+        ('top', 'Top'),
+        ('middle', 'Middle'),
+        ('bottom', 'Bottom'),
+    ]
+
     text = models.TextField()
     font_size = models.IntegerField(default=14)
+    # Choice keys, not CSS values: the frontend maps them onto the design
+    # system's system-font stacks. No webfonts — the packaged desktop app
+    # has no network, so a remote font would silently fail there only.
+    font_family = models.CharField(
+        max_length=16, choices=FONT_FAMILY_CHOICES, default='sans'
+    )
+    font_weight = models.CharField(
+        max_length=16, choices=FONT_WEIGHT_CHOICES, default='normal'
+    )
+    italic = models.BooleanField(default=False)
+    underline = models.BooleanField(default=False)
+    # CSS keywords, as on ImageComponent.image_fit.
+    text_align = models.CharField(
+        max_length=16, choices=TEXT_ALIGN_CHOICES, default='left'
+    )
+    vertical_align = models.CharField(
+        max_length=16, choices=VERTICAL_ALIGN_CHOICES, default='top'
+    )
+    # "#rgb" or "#rrggbb" hex literals, validated in the save_layout view.
+    text_color = models.CharField(max_length=20, default='#1e293b')
+    background_color = models.CharField(max_length=20, default='#ffffff')
+    line_height = models.FloatField(default=1.5)
+
+    # Per-selection formatting (#373 follow-up): a TipTap/ProseMirror document.
+    # Null means "no rich text yet" — the box renders `text` with the block
+    # fields above, which is exactly how every box saved before this change
+    # behaves. The fields above stay meaningful either way: they are the
+    # document's base style, which individual runs and paragraphs override.
+    #
+    # Stored as structured JSON, never HTML, and rendered by walking the tree
+    # into React elements — so there is no markup to sanitise and no
+    # dangerouslySetInnerHTML anywhere in the path. `validated_rich_text` in
+    # api/rich_text.py rebuilds it from a whitelist on the way in.
+    rich_text = models.JSONField(null=True, blank=True)
 
 class ImageComponent(DashboardComponent):
     # Legacy per-component upload, kept so old dashboards still render.
