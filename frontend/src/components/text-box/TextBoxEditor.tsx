@@ -84,6 +84,12 @@ export function TextBoxEditor({
           fontSize: TEXT_BOX_FORMAT_DEFAULTS.font_size,
           color: TEXT_BOX_FORMAT_DEFAULTS.text_color,
           lineHeight: TEXT_BOX_FORMAT_DEFAULTS.line_height,
+          // Alignment too, and for a sharper reason: `.grid-stack-item-content`
+          // sets `text-align: center` for every widget, so a block that has no
+          // textAlign of its own (one ProseMirror just made -- the paragraph
+          // after a divider, say) would render centred while the toolbar, which
+          // falls back to this same default, reported it left.
+          textAlign: TEXT_BOX_FORMAT_DEFAULTS.text_align,
         }}
       >
         <EditorContent editor={editor} className="h-full" />

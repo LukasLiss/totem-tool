@@ -354,6 +354,9 @@ export const TextBoxComponent: React.FC<ComponentProps> = ({
                   fontSize: TEXT_BOX_FORMAT_DEFAULTS.font_size,
                   color: TEXT_BOX_FORMAT_DEFAULTS.text_color,
                   lineHeight: TEXT_BOX_FORMAT_DEFAULTS.line_height,
+                  // Mirrors TextBoxEditor: without it an unaligned block
+                  // inherits `text-align: center` from `.grid-stack-item-content`.
+                  textAlign: TEXT_BOX_FORMAT_DEFAULTS.text_align,
                 }}
               >
                 <RichTextRenderer
