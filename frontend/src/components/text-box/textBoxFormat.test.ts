@@ -11,7 +11,6 @@ import {
   isHexColor,
   resolveTextBoxFormat,
   textBoxContainerStyle,
-  textBoxFormatProps,
   textBoxTextStyle,
 } from "./textBoxFormat";
 
@@ -121,9 +120,9 @@ describe("resolveTextBoxFormat", () => {
   });
 });
 
-describe("textBoxFormatProps", () => {
+describe("resolveTextBoxFormat key set", () => {
   it("always returns the complete key set, so save and load cannot drift", () => {
-    expect(Object.keys(textBoxFormatProps({ font_size: 20 })).sort()).toEqual(
+    expect(Object.keys(resolveTextBoxFormat({ font_size: 20 })).sort()).toEqual(
       Object.keys(TEXT_BOX_FORMAT_DEFAULTS).sort(),
     );
   });

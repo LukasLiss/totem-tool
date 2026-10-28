@@ -18,12 +18,50 @@ import TextAlign from '@tiptap/extension-text-align';
 import { Color, FontFamily, FontSize, TextStyle } from '@tiptap/extension-text-style';
 import { DashboardLink } from './dashboardLinkExtension';
 import { LineHeight } from './lineHeightExtension';
-import { isSafeHref } from './richText';
+import {
+  isSafeHref,
+  normalizePastedColor,
+  normalizePastedFontFamily,
+  normalizePastedFontSize,
+} from './richText';
+
+type GlobalAttributes = Array<{
+  types: string[];
+  attributes: Record<string, { parseHTML?: (element: HTMLElement) => unknown }>;
+}>;
+
+/**
+ * Run an extension's parsed attribute through `normalize`, so pasted HTML
+ * only ever produces a value the backend will keep.
+ */
+function narrowParsedAttribute(
+  attributes: GlobalAttributes,
+  name: string,
+  normalize: (value: unknown) => string | null,
+): GlobalAttributes {
+  return attributes.map((entry) => {
+    const spec = entry.attributes[name];
+    if (!spec?.parseHTML) return entry;
+    const parse = spec.parseHTML;
+    return {
+      ...entry,
+      attributes: {
+        ...entry.attributes,
+        [name]: { ...spec, parseHTML: (element: HTMLElement) => normalize(parse(element)) },
+      },
+    };
+  });
+}
 
 export const TEXT_BOX_EXTENSIONS = [
-  // StarterKit bundles its own Link; disable it so the one below is the only
-  // registration of the mark.
-  StarterKit.configure({ link: false }),
+  StarterKit.configure({
+    // StarterKit bundles its own Link; disable it so the one below is the
+    // only registration of the mark.
+    link: false,
+    // The backend and renderer know three heading sizes. Left at the default
+    // of six, "#### " made an H4 that came back as an H1 after saving.
+    heading: { levels: [1, 2, 3] },
+  }),
   Link.configure({
     openOnClick: false,
     // The toolbar is the only way to make a link.
@@ -46,9 +84,33 @@ export const TEXT_BOX_EXTENSIONS = [
   // words "Enter text here" as actual content the user has to delete.
   Placeholder.configure({ placeholder: 'Type here…' }),
   TextStyle,
-  Color,
-  FontFamily,
-  FontSize,
+  Color.extend({
+    addGlobalAttributes() {
+      return narrowParsedAttribute(
+        (this.parent?.() ?? []) as GlobalAttributes,
+        'color',
+        normalizePastedColor,
+      );
+    },
+  }),
+  FontFamily.extend({
+    addGlobalAttributes() {
+      return narrowParsedAttribute(
+        (this.parent?.() ?? []) as GlobalAttributes,
+        'fontFamily',
+        normalizePastedFontFamily,
+      );
+    },
+  }),
+  FontSize.extend({
+    addGlobalAttributes() {
+      return narrowParsedAttribute(
+        (this.parent?.() ?? []) as GlobalAttributes,
+        'fontSize',
+        normalizePastedFontSize,
+      );
+    },
+  }),
   TextAlign.configure({ types: ['heading', 'paragraph'] }),
   // Without this the schema drops `lineHeight` on load.
   LineHeight,

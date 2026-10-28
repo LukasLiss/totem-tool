@@ -1,9 +1,10 @@
 /**
- * Block-level formatting for the dashboard Text Box widget (#373).
+ * Box-level formatting for the dashboard Text Box widget (#373).
  *
- * Every option applies to the whole text box — there is deliberately no
- * per-character rich text, so nothing here ever produces HTML and the
- * widget stays safe by construction (React escapes the text node).
+ * For a plain box every option applies to the whole text. Once a box has a
+ * rich-text document (`richText.ts`), the document owns the text styling and
+ * only background colour and vertical alignment stay box-level. Nothing here
+ * ever produces HTML (React escapes the text node).
  *
  * The option keys mirror `TextBoxComponent`'s choices in
  * `backend/api/models.py`; the backend validates the same values again in
@@ -201,14 +202,4 @@ export function textBoxTextStyle(format: TextBoxFormat): CSSProperties {
     color: format.text_color,
     lineHeight: format.line_height,
   };
-}
-
-/**
- * The formatting keys as a flat object, for the three hand-maintained
- * plumbing lists in `gridstackprovider.tsx` (save and load) and the
- * side-panel drag-in seed. Keeping them all on this one function is what
- * stops a new option from being persisted but never loaded back.
- */
-export function textBoxFormatProps(raw: Partial<TextBoxFormat> | undefined | null): TextBoxFormat {
-  return resolveTextBoxFormat(raw);
 }

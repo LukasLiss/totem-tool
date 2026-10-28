@@ -7,6 +7,9 @@ import {
   docFromPlainText,
   isDocEmpty,
   isRichTextDoc,
+  normalizePastedColor,
+  normalizePastedFontFamily,
+  normalizePastedFontSize,
   plainTextFromDoc,
   styleFromBlockAttrs,
   styleFromMarks,
@@ -44,6 +47,15 @@ describe("plainTextFromDoc", () => {
       content: [{ type: "listItem", content: [para(run("point"))] }],
     });
     expect(plainTextFromDoc(doc)).toBe("point");
+  });
+
+  it("gives every list item and quoted paragraph its own line", () => {
+    const item = (text: string) => ({ type: "listItem", content: [para(run(text))] });
+    const doc = docOf(
+      { type: "bulletList", content: [item("Revenue"), item("Costs")] },
+      { type: "blockquote", content: [para(run("a")), para(run("b"))] },
+    );
+    expect(plainTextFromDoc(doc)).toBe("Revenue\nCosts\na\nb");
   });
 
   it("returns an empty string for anything that is not a document", () => {
@@ -190,5 +202,32 @@ describe("isDocEmpty", () => {
     expect(isDocEmpty(docOf())).toBe(true);
     expect(isDocEmpty(docOf(para(run("   "))))).toBe(true);
     expect(isDocEmpty(docOf(para(run("x"))))).toBe(false);
+  });
+});
+
+describe("pasted style normalisation", () => {
+  it("turns opaque rgb() into the hex form the backend keeps", () => {
+    expect(normalizePastedColor("rgb(220, 38, 38)")).toBe("#dc2626");
+    expect(normalizePastedColor("rgba(0, 0, 0, 1)")).toBe("#000000");
+    expect(normalizePastedColor("#ABC")).toBe("#abc");
+  });
+
+  it("drops colours with no stored form", () => {
+    for (const bad of ["red", "rgba(0, 0, 0, 0.5)", "rgb(300, 0, 0)", "hsl(0, 50%, 50%)", "", null]) {
+      expect(normalizePastedColor(bad)).toBeNull();
+    }
+  });
+
+  it("keeps only the three font tokens", () => {
+    expect(normalizePastedFontFamily(FONT_FAMILY_STACKS.serif)).toBe(FONT_FAMILY_STACKS.serif);
+    expect(normalizePastedFontFamily("Arial, sans-serif")).toBeNull();
+  });
+
+  it("converts sizes to whole, clamped pixels", () => {
+    expect(normalizePastedFontSize("24px")).toBe("24px");
+    expect(normalizePastedFontSize("12pt")).toBe("16px");
+    expect(normalizePastedFontSize("13.6px")).toBe("14px");
+    expect(normalizePastedFontSize("2px")).toBe("8px");
+    expect(normalizePastedFontSize("1.2em")).toBeNull();
   });
 });

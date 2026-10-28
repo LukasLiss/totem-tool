@@ -13,7 +13,12 @@
  * the box-level format in `textBoxFormat.ts`.
  */
 import type { TextBoxFormat } from './textBoxFormat';
-import { FONT_FAMILY_STACKS, TEXT_BOX_FORMAT_DEFAULTS } from './textBoxFormat';
+import {
+  FONT_FAMILY_STACKS,
+  FONT_SIZE_MAX,
+  FONT_SIZE_MIN,
+  TEXT_BOX_FORMAT_DEFAULTS,
+} from './textBoxFormat';
 
 /**
  * The only font-family values a run may carry: references to the design
@@ -67,6 +72,43 @@ export function isSafeHref(value: unknown): value is string {
     return !address.includes('?') && EMAIL_RE.test(address);
   }
   return false;
+}
+
+/**
+ * Pasted styles, narrowed to what the backend stores.
+ *
+ * TipTap's Color, FontFamily and FontSize take any CSS value from pasted
+ * HTML, but `_clean_marks` keeps only hex colours, the three font tokens and
+ * whole-pixel sizes. Without this the editor would show pasted formatting
+ * that silently disappears on save. Each returns null to drop the value.
+ */
+const RGB_RE = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*(?:,\s*([\d.]+)\s*)?\)$/i;
+
+export function normalizePastedColor(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const raw = value.trim();
+  if (/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(raw)) return raw.toLowerCase();
+  // Browsers report an inline colour as rgb()/rgba(), whatever was written.
+  const match = RGB_RE.exec(raw);
+  if (!match) return null;
+  // A translucent colour has no hex form we store; drop it.
+  if (match[4] !== undefined && Number(match[4]) !== 1) return null;
+  const channels = match.slice(1, 4).map(Number);
+  if (channels.some((c) => c > 255)) return null;
+  return `#${channels.map((c) => c.toString(16).padStart(2, '0')).join('')}`;
+}
+
+export function normalizePastedFontFamily(value: unknown): string | null {
+  return isAllowedFontFamily(value) ? value : null;
+}
+
+export function normalizePastedFontSize(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const match = /^(\d+(?:\.\d+)?)(px|pt)$/i.exec(value.trim());
+  if (!match) return null;
+  const px = Number(match[1]) * (match[2].toLowerCase() === 'pt' ? 4 / 3 : 1);
+  if (!Number.isFinite(px)) return null;
+  return `${Math.min(Math.max(Math.round(px), FONT_SIZE_MIN), FONT_SIZE_MAX)}px`;
 }
 
 /** True when the href should open the mail client rather than a new tab. */
@@ -135,10 +177,17 @@ export function isRichTextDoc(value: unknown): value is RichTextDoc {
   );
 }
 
-/** Flatten a document to plain text, one line per block. */
+/** Blocks whose content is inline: each one is a line of plain text. */
+const LINE_NODES = new Set(['paragraph', 'heading', 'codeBlock', 'text', 'hardBreak']);
+
+/**
+ * Flatten a document to plain text, one line per paragraph wherever it sits,
+ * so each list item gets its own line. Mirrors `plain_text_from_doc` in
+ * `api/rich_text.py`.
+ */
 export function plainTextFromDoc(doc: unknown): string {
   if (!isRichTextDoc(doc)) return '';
-  const lineOf = (node: RichTextNode, out: string[]): void => {
+  const inline = (node: RichTextNode, out: string[]): void => {
     if (node.type === 'text') {
       out.push(node.text ?? '');
       return;
@@ -147,15 +196,20 @@ export function plainTextFromDoc(doc: unknown): string {
       out.push('\n');
       return;
     }
-    for (const child of node.content ?? []) lineOf(child, out);
+    for (const child of node.content ?? []) inline(child, out);
   };
-  return (doc.content ?? [])
-    .map((block) => {
+  const lines: string[] = [];
+  const block = (node: RichTextNode): void => {
+    if (LINE_NODES.has(node.type)) {
       const out: string[] = [];
-      lineOf(block, out);
-      return out.join('');
-    })
-    .join('\n');
+      inline(node, out);
+      lines.push(out.join(''));
+      return;
+    }
+    for (const child of node.content ?? []) block(child);
+  };
+  for (const node of doc.content ?? []) block(node);
+  return lines.join('\n');
 }
 
 /**

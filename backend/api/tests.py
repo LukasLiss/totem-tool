@@ -3656,6 +3656,13 @@ class TextBoxComponentFormattingTests(TestCase):
             self.assertIsNone(item["rich_text"], bad)
             self.assertEqual(item["text"], "fallback", bad)
 
+    def test_a_string_false_is_not_read_as_true(self):
+        """``bool("false")`` is True; a string falls back to the default."""
+        self.assertEqual(self._save(italic="false", underline="true").status_code, 200)
+        item = self._layout()
+        self.assertIs(item["italic"], False)
+        self.assertIs(item["underline"], False)
+
     def test_italic_and_underline_accept_only_booleans_out(self):
         self.assertEqual(self._save(italic=1, underline=0).status_code, 200)
         item = self._layout()
@@ -4002,6 +4009,59 @@ class TextBoxRichTextValidationTests(SimpleTestCase):
         doc = self._doc({"type": "heading", "attrs": {"level": 3},
                          "content": [self._text("h")]})
         self.assertEqual(validated_rich_text(doc)["content"][0]["attrs"]["level"], 3)
+
+    def test_deeper_headings_become_the_smallest_rather_than_the_largest(self):
+        from .rich_text import validated_rich_text
+
+        for sent in (4, 5, 6):
+            doc = self._doc({"type": "heading", "attrs": {"level": sent},
+                             "content": [self._text("h")]})
+            self.assertEqual(validated_rich_text(doc)["content"][0]["attrs"]["level"], 3, sent)
+
+    def test_an_ordered_list_keeps_its_start_number(self):
+        from .rich_text import validated_rich_text
+
+        def start_of(sent):
+            doc = self._doc({"type": "orderedList", "attrs": {"start": sent}, "content": [
+                {"type": "listItem", "content": [self._para(self._text("x"))]},
+            ]})
+            return validated_rich_text(doc)["content"][0].get("attrs", {}).get("start")
+
+        self.assertEqual(start_of(5), 5)
+        for bad in (1, 0, -3, "5", 2.5, True, None, 10**9):
+            self.assertIsNone(start_of(bad), bad)
+
+    def test_an_unknown_inline_wrapper_does_not_nest_a_paragraph(self):
+        """Inside a paragraph, the wrapper's words are spliced in as runs."""
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(self._para(
+            self._text("a "),
+            {"type": "mention", "content": [self._text("@b")]},
+            {"type": "widget", "content": [self._para(self._text(" c"))]},
+        ))
+        para = validated_rich_text(doc)["content"][0]
+        self.assertEqual([n["type"] for n in para["content"]], ["text", "text", "text"])
+        self.assertEqual("".join(n["text"] for n in para["content"]), "a @b c")
+
+    def test_bare_text_under_a_block_container_is_wrapped(self):
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(self._text("loose"), {"type": "blockquote", "content": [self._text("q")]})
+        content = validated_rich_text(doc)["content"]
+        self.assertEqual(content[0]["type"], "paragraph")
+        self.assertEqual(content[1]["content"][0]["type"], "paragraph")
+
+    def test_plain_text_gives_each_list_item_its_own_line(self):
+        from .rich_text import plain_text_from_doc
+
+        item = lambda text: {"type": "listItem", "content": [self._para(self._text(text))]}
+        doc = self._doc(
+            {"type": "bulletList", "content": [item("Revenue"), item("Costs")]},
+            self._para(),
+            self._para(self._text("end")),
+        )
+        self.assertEqual(plain_text_from_doc(doc), "Revenue\nCosts\n\nend")
 
     def test_unknown_node_types_are_dropped_but_their_text_is_kept(self):
         """The wrapper goes; the words it held do not. Bare inline content

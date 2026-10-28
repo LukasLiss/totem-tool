@@ -7,9 +7,7 @@ from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 from django.conf import settings
 from django.db import transaction
-import math
 import os
-import re
 
 from ..models import (
     Dashboard,
@@ -50,10 +48,17 @@ from totem_lib.orgamining import (
     NORMALIZATIONS,
 )
 
-from ..rich_text import RichTextTooLarge, plain_text_from_doc, validated_rich_text
-
-
-_HEX_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+from ..rich_text import (
+    FONT_SIZE_MAX,
+    FONT_SIZE_MIN,
+    LINE_HEIGHT_MAX,
+    LINE_HEIGHT_MIN,
+    RichTextTooLarge,
+    clamp_number,
+    is_hex_color,
+    plain_text_from_doc,
+    validated_rich_text,
+)
 
 
 def _validated_choice(raw, choices, default):
@@ -73,34 +78,32 @@ def _validated_hex_color(raw, default):
     that shows the component, so anything else is replaced rather than
     stored.
     """
-    if not isinstance(raw, str):
-        return default
-    candidate = raw.strip()
-    return candidate if _HEX_COLOR_RE.match(candidate) else default
+    return raw.strip() if is_hex_color(raw) else default
+
+
+def _validated_bool(raw, default):
+    """Return a real boolean: ``raw`` itself, a number's truthiness, else ``default``.
+
+    Not ``bool(raw)``: that turns the string ``"false"`` into True.
+    """
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return bool(raw)
+    return default
 
 
 def _validated_number(raw, default, minimum, maximum):
     """Clamp ``raw`` into ``[minimum, maximum]``, falling back to ``default``.
 
     Keeps a stray 0 or 10000 from a hand-edited payload out of the CSS,
-    where it would render the text invisible or unusably large. A bool is
-    excluded on purpose: in Python it is an ``int``, so ``True`` would
-    otherwise become the minimum after clamping.
+    where it would render the text invisible or unusably large. A bool or a
+    non-finite value falls back to the default — matching
+    resolveTextBoxFormat on the frontend, which rejects anything
+    Number.isFinite declines.
     """
-    if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
-        return default
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        return default
-    # A non-finite value is nonsense input rather than "very large", so it
-    # falls back to the default — matching resolveTextBoxFormat on the
-    # frontend, which rejects anything Number.isFinite declines. Unreachable
-    # through the API (DRF's STRICT_JSON parser refuses NaN / Infinity
-    # first), but this is also called directly.
-    if not math.isfinite(value):
-        return default
-    return min(max(value, minimum), maximum)
+    value = clamp_number(raw, minimum, maximum)
+    return default if value is None else value
 
 
 def _validated_int(raw, default, minimum, maximum):
@@ -358,7 +361,9 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     component_name=component_name,
                     text=text,
                     rich_text=rich_text,
-                    font_size=_validated_int(item.get("font_size"), 14, 8, 200),
+                    font_size=_validated_int(
+                        item.get("font_size"), 14, FONT_SIZE_MIN, FONT_SIZE_MAX
+                    ),
                     font_family=_validated_choice(
                         item.get("font_family"),
                         TextBoxComponent.FONT_FAMILY_CHOICES,
@@ -369,8 +374,8 @@ class DashboardViewSet(viewsets.ModelViewSet):
                         TextBoxComponent.FONT_WEIGHT_CHOICES,
                         "normal",
                     ),
-                    italic=bool(item.get("italic", False)),
-                    underline=bool(item.get("underline", False)),
+                    italic=_validated_bool(item.get("italic"), False),
+                    underline=_validated_bool(item.get("underline"), False),
                     text_align=_validated_choice(
                         item.get("text_align"),
                         TextBoxComponent.TEXT_ALIGN_CHOICES,
@@ -388,7 +393,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                         item.get("background_color"), "#ffffff"
                     ),
                     line_height=_validated_number(
-                        item.get("line_height"), 1.5, 0.5, 5.0
+                        item.get("line_height"), 1.5, LINE_HEIGHT_MIN, LINE_HEIGHT_MAX
                     ),
                 )
 

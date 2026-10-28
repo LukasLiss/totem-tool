@@ -210,10 +210,12 @@ class NumberofEventsComponent(DashboardComponent):
 
 
 class TextBoxComponent(DashboardComponent):
-    # Block-level formatting: every option applies to the whole text box.
-    # There is deliberately no per-character rich text — see #373. The
-    # defaults below reproduce the unformatted look the widget had before
-    # formatting existed, so dashboards saved earlier render unchanged.
+    # Box-level formatting. For a plain box (no `rich_text`) every option
+    # applies to the whole text; once a box has a document, only
+    # background_color and vertical_align stay box-level and the document
+    # carries the rest per run and per paragraph (#373). The defaults below
+    # reproduce the unformatted look the widget had before formatting
+    # existed, so dashboards saved earlier render unchanged.
     FONT_FAMILY_CHOICES = [
         ('sans', 'Sans serif'),
         ('serif', 'Serif'),
@@ -268,8 +270,8 @@ class TextBoxComponent(DashboardComponent):
     #
     # Stored as structured JSON, never HTML, and rendered by walking the tree
     # into React elements — so there is no markup to sanitise and no
-    # dangerouslySetInnerHTML anywhere in the path. `_validated_rich_text` in
-    # the save_layout view rebuilds it from a whitelist on the way in.
+    # dangerouslySetInnerHTML anywhere in the path. `validated_rich_text` in
+    # api/rich_text.py rebuilds it from a whitelist on the way in.
     rich_text = models.JSONField(null=True, blank=True)
 
 class ImageComponent(DashboardComponent):

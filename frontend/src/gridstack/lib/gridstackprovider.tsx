@@ -14,7 +14,7 @@ import type { SelectedFile } from "../../contexts/SelectedFileContext";
 import { DashboardContext } from "../../contexts/DashboardContext";
 import { GridContext, GridModeContext, type GridLayoutItem } from "./gridContext";
 import { toast } from "sonner";
-import { textBoxFormatProps } from "../../components/text-box/textBoxFormat";
+import { resolveTextBoxFormat } from "../../components/text-box/textBoxFormat";
 
 type GridWidgetElement = HTMLElement & {
   _reactRoot?: Root;
@@ -286,7 +286,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         // load lists below cannot drift apart as options are added.
         props = {
           text: node.text ?? "",
-          ...textBoxFormatProps(node),
+          ...resolveTextBoxFormat(node),
           // The rich-text document, when the box has one. Null is meaningful:
           // it means "plain text box", and the backend stores it as such.
           rich_text: node.rich_text ?? null,
@@ -439,7 +439,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       } else {
         props = {
           text: node.el ? node.el.innerHTML.trim() : "",
-          ...textBoxFormatProps(node),
+          ...resolveTextBoxFormat(node),
         };
       }
       

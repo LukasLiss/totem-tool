@@ -165,3 +165,27 @@ describe("dashboard links", () => {
     },
   );
 });
+
+describe("ordered lists", () => {
+  const list = (attrs?: Record<string, unknown>) => ({
+    type: "doc",
+    content: [{
+      type: "orderedList",
+      ...(attrs ? { attrs } : {}),
+      content: [{ type: "listItem", content: [{ type: "paragraph", content: [{ type: "text", text: "x" }] }] }],
+    }],
+  }) as RichTextDoc;
+
+  it("keeps the number a list was started at", () => {
+    const { container } = render(<RichTextRenderer doc={list({ start: 5 })} />);
+    expect(container.querySelector("ol")?.getAttribute("start")).toBe("5");
+  });
+
+  it("ignores a start that is not a whole number above one", () => {
+    for (const start of [1, 0, "5", 2.5]) {
+      const { container } = render(<RichTextRenderer doc={list({ start })} />);
+      expect(container.querySelector("ol")?.hasAttribute("start")).toBe(false);
+      cleanup();
+    }
+  });
+});

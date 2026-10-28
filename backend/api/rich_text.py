@@ -11,6 +11,7 @@ Everything here is pure, so it is tested directly in
 ``TextBoxRichTextValidationTests`` without touching the database.
 """
 
+import math
 import re
 
 # A paragraph's own attributes. Alignment is a block property — you cannot
@@ -28,7 +29,7 @@ _FONT_FAMILIES = (
     "var(--font-mono)",
 )
 
-_HEX_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+HEX_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 _FONT_SIZE_RE = re.compile(r"^(\d{1,3})px$")
 
 # Anchored, so a hostile scheme cannot hide in front of a legitimate-looking
@@ -53,11 +54,19 @@ _AUTHORITY_RE = re.compile(r"^[A-Za-z0-9._~%!$&'()*+,;=:@\[\]-]+$")
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
 _MAX_HREF_LENGTH = 2048
 
-_FONT_SIZE_MIN = 8
-_FONT_SIZE_MAX = 200
-_LINE_HEIGHT_MIN = 0.5
-_LINE_HEIGHT_MAX = 5.0
+# Shared with the box-level fields validated in views/dashboards.py, so a run
+# and the box it sits in accept the same range.
+FONT_SIZE_MIN = 8
+FONT_SIZE_MAX = 200
+LINE_HEIGHT_MIN = 0.5
+LINE_HEIGHT_MAX = 5.0
 _HEADING_LEVELS = (1, 2, 3)
+# What ProseMirror itself allows. A deeper heading (from a paste, or an older
+# client whose StarterKit still offered all six) becomes the smallest one we
+# render rather than the largest.
+_ANY_HEADING_LEVELS = (1, 2, 3, 4, 5, 6)
+# An ordered list numbered past this is a hostile payload, not a document.
+_LIST_START_MAX = 100_000
 
 # Marks that carry no attributes of their own.
 _SIMPLE_MARKS = ("bold", "italic", "underline", "strike", "code")
@@ -77,6 +86,10 @@ _LEAF_NODES = ("horizontalRule", "hardBreak")
 # Nodes that belong inside a block, never directly under one.
 _INLINE_NODES = ("text", "hardBreak")
 
+# Blocks whose content is inline. Anything spliced into one has to be inline
+# too, or the result nests a paragraph inside a paragraph.
+_TEXTBLOCK_NODES = ("paragraph", "heading", "codeBlock")
+
 # Bounds, so one dashboard cannot carry a document that costs every viewer a
 # frozen tab. Generous next to any realistic annotation.
 MAX_NODES = 5000
@@ -88,10 +101,31 @@ class RichTextTooLarge(ValueError):
     """The document exceeded MAX_NODES / MAX_DEPTH / MAX_TEXT_LENGTH."""
 
 
+def is_hex_color(raw):
+    """True for a ``#rgb`` / ``#rrggbb`` literal, surrounding space allowed."""
+    return isinstance(raw, str) and bool(HEX_COLOR_RE.match(raw.strip()))
+
+
+def clamp_number(raw, minimum, maximum):
+    """Clamp ``raw`` into ``[minimum, maximum]``, or None when it is no number.
+
+    A bool is excluded on purpose: in Python it is an ``int``, so ``True``
+    would otherwise become the minimum after clamping. A non-finite value is
+    nonsense input rather than "very large", so it is None too.
+    """
+    if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value):
+        return None
+    return min(max(value, minimum), maximum)
+
+
 def _clean_hex_color(raw):
-    if isinstance(raw, str) and _HEX_COLOR_RE.match(raw.strip()):
-        return raw.strip().lower()
-    return None
+    return raw.strip().lower() if is_hex_color(raw) else None
 
 
 def _clean_font_size(raw):
@@ -101,20 +135,13 @@ def _clean_font_size(raw):
     match = _FONT_SIZE_RE.match(raw.strip())
     if not match:
         return None
-    size = min(max(int(match.group(1)), _FONT_SIZE_MIN), _FONT_SIZE_MAX)
+    size = min(max(int(match.group(1)), FONT_SIZE_MIN), FONT_SIZE_MAX)
     return f"{size}px"
 
 
 def _clean_line_height(raw):
-    if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
-        return None
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        return None
-    if value != value or value in (float("inf"), float("-inf")):
-        return None
-    return str(min(max(value, _LINE_HEIGHT_MIN), _LINE_HEIGHT_MAX))
+    value = clamp_number(raw, LINE_HEIGHT_MIN, LINE_HEIGHT_MAX)
+    return None if value is None else str(value)
 
 
 def _clean_href(raw):
@@ -241,10 +268,19 @@ def _clean_block_attrs(node_type, raw_attrs):
     if node_type == "heading":
         level = raw_attrs.get("level")
         # A bool is an int in Python, so reject it before the range check.
-        if not isinstance(level, bool) and isinstance(level, int) and level in _HEADING_LEVELS:
-            attrs["level"] = level
+        if not isinstance(level, bool) and isinstance(level, int) and level in _ANY_HEADING_LEVELS:
+            attrs["level"] = min(level, _HEADING_LEVELS[-1])
         else:
             attrs["level"] = 1
+    if node_type == "orderedList":
+        start = raw_attrs.get("start")
+        # 1 is the default, so it is left off rather than stored.
+        if (
+            not isinstance(start, bool)
+            and isinstance(start, int)
+            and 1 < start <= _LIST_START_MAX
+        ):
+            attrs["start"] = start
     return attrs
 
 
@@ -299,17 +335,36 @@ def _clean_node(raw, budget, depth, allowed_dashboard_ids):
         if attrs:
             node["attrs"] = attrs
         content = _clean_content(
-            raw.get("content"), budget, depth + 1, allowed_dashboard_ids
+            raw.get("content"),
+            budget,
+            depth + 1,
+            allowed_dashboard_ids,
+            inline=node_type in _TEXTBLOCK_NODES,
         )
         if content:
             node["content"] = content
         return node
 
     # Unknown node type — drop the wrapper, keep the words it held. The list
-    # is spliced into the parent by `_clean_content`, matching what
-    # `RichTextRenderer` does with the same case on the way out.
-    children = _clean_content(raw.get("content"), budget, depth + 1, allowed_dashboard_ids)
-    return _as_blocks(children)
+    # is spliced into the parent by `_clean_content`, which also makes it fit
+    # there, matching what `RichTextRenderer` does with the same case on the
+    # way out.
+    return _clean_content(raw.get("content"), budget, depth + 1, allowed_dashboard_ids)
+
+
+def _as_inline(nodes):
+    """Flatten any block nodes down to the inline content they hold.
+
+    For content headed into a paragraph or heading: a block there would nest
+    a paragraph inside a paragraph, which the editor's schema refuses.
+    """
+    inline = []
+    for node in nodes:
+        if node["type"] in _INLINE_NODES:
+            inline.append(node)
+        else:
+            inline.extend(_as_inline(node.get("content") or []))
+    return inline
 
 
 def _as_blocks(nodes):
@@ -334,7 +389,13 @@ def _as_blocks(nodes):
     return blocks
 
 
-def _clean_content(raw_content, budget, depth, allowed_dashboard_ids):
+def _clean_content(raw_content, budget, depth, allowed_dashboard_ids, inline=False):
+    """Clean a node's children and make them fit where they are going.
+
+    ``inline`` says the parent is a textblock: its content is flattened to
+    inline nodes. Otherwise bare inline nodes are wrapped in paragraphs, so a
+    run sent straight under ``doc`` or a list item still loads in the editor.
+    """
     if not isinstance(raw_content, list):
         return []
     cleaned = []
@@ -344,7 +405,7 @@ def _clean_content(raw_content, budget, depth, allowed_dashboard_ids):
             cleaned.extend(node)
         elif node is not None:
             cleaned.append(node)
-    return cleaned
+    return _as_inline(cleaned) if inline else _as_blocks(cleaned)
 
 
 def validated_rich_text(raw, allowed_dashboard_ids=None):
@@ -373,31 +434,40 @@ def validated_rich_text(raw, allowed_dashboard_ids=None):
 
 
 def plain_text_from_doc(doc):
-    """Flatten a document to plain text, one line per block.
+    """Flatten a document to plain text, one line per paragraph.
 
     Keeps the `text` column meaningful for everything that still reads it —
     older clients, the sample-project seeder, and anyone eyeballing the DB.
+    A line is a textblock, wherever it sits, so each item of a list gets its
+    own line rather than running into the next. Mirrored by `plainTextFromDoc`
+    in richText.ts.
     """
     if not isinstance(doc, dict):
         return ""
     lines = []
 
-    def walk(node, line):
+    def inline(node, out):
         node_type = node.get("type")
         if node_type == "text":
-            line.append(node.get("text", ""))
-            return
-        if node_type == "hardBreak":
-            line.append("\n")
+            out.append(node.get("text", ""))
+        elif node_type == "hardBreak":
+            out.append("\n")
+        else:
+            for child in node.get("content") or []:
+                if isinstance(child, dict):
+                    inline(child, out)
+
+    def block(node):
+        if node.get("type") in _TEXTBLOCK_NODES or node.get("type") in _INLINE_NODES:
+            out = []
+            inline(node, out)
+            lines.append("".join(out))
             return
         for child in node.get("content") or []:
             if isinstance(child, dict):
-                walk(child, line)
+                block(child)
 
-    for block in doc.get("content") or []:
-        if not isinstance(block, dict):
-            continue
-        line = []
-        walk(block, line)
-        lines.append("".join(line))
+    for top in doc.get("content") or []:
+        if isinstance(top, dict):
+            block(top)
     return "\n".join(lines)

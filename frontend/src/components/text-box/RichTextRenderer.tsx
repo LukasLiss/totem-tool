@@ -143,12 +143,19 @@ function Block({ node, keyPrefix }: { node: RichTextNode; keyPrefix: string }) {
         </ul>
       );
 
-    case 'orderedList':
+    case 'orderedList': {
+      // A list typed as "5. " starts at 5; the backend keeps only a whole
+      // number above 1, but this re-checks rather than trusts the row.
+      const start = node.attrs?.start;
       return (
-        <ol style={{ ...style, margin: 0, paddingLeft: '1.6em', listStyle: 'decimal' }}>
+        <ol
+          start={typeof start === 'number' && Number.isInteger(start) && start > 1 ? start : undefined}
+          style={{ ...style, margin: 0, paddingLeft: '1.6em', listStyle: 'decimal' }}
+        >
           {renderChildren(node, keyPrefix)}
         </ol>
       );
+    }
 
     case 'listItem':
       return <li style={style}>{renderChildren(node, keyPrefix)}</li>;

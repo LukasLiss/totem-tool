@@ -152,6 +152,24 @@ describe("formatting a paragraph", () => {
 });
 
 describe("the shipped extension set", () => {
+  it("offers only the three heading levels the backend keeps", () => {
+    const e = makeEditor("text");
+    // Left at StarterKit's six, an H4 was saved back as an H1.
+    expect(e.can().setHeading({ level: 3 })).toBe(true);
+    expect(e.can().setHeading({ level: 4 as 3 })).toBe(false);
+  });
+
+  it("narrows pasted styles to values the backend stores", () => {
+    const e = new Editor({
+      extensions: TEXT_BOX_EXTENSIONS,
+      content:
+        '<p><span style="color: rgb(220, 38, 38); font-family: Arial; font-size: 12pt">hi</span></p>',
+    });
+    const run = (e.getJSON() as RichTextDoc).content[0].content![0];
+    const style = run.marks?.find((m) => m.type === "textStyle");
+    expect(attrsOf(style!)).toMatchObject({ color: "#dc2626", fontSize: "16px", fontFamily: null });
+  });
+
   it("has a link mark, so the toolbar can attach a URL", () => {
     const e = makeEditor("text");
     expect(e.schema.marks.link).toBeDefined();
