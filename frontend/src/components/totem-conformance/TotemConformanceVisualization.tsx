@@ -140,9 +140,15 @@ function TotemConformanceCanvas({
     setNodes(createTotemFlowNodes(model));
   }, [model]);
 
+  // Boxes can be moved but never removed: the model is read-only here.
   const onNodesChange = useCallback(
     (changes: NodeChange<TotemConformanceNodeType>[]) =>
-      setNodes((current) => applyNodeChanges(changes, current)),
+      setNodes((current) =>
+        applyNodeChanges(
+          changes.filter((change) => change.type !== "remove"),
+          current
+        )
+      ),
     []
   );
 
@@ -217,6 +223,7 @@ function TotemConformanceCanvas({
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
           nodesConnectable={false}
+          deleteKeyCode={null}
           elementsSelectable
           onNodeClick={(_, node) =>
             onSelect({ kind: "objectType", objectType: node.id })

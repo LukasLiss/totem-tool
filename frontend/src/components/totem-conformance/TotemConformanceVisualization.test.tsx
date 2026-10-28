@@ -19,6 +19,7 @@ type FlowProps = {
   nodes: TotemConformanceNodeType[];
   edges: TotemConformanceEdgeType[];
   nodesDraggable?: boolean;
+  deleteKeyCode?: string | string[] | null;
   onNodesChange?: (changes: unknown[]) => void;
   onNodeClick?: (event: unknown, node: { id: string }) => void;
 };
@@ -125,6 +126,22 @@ describe("TotemConformanceVisualization", () => {
     expect(nodeById("Order").position).toEqual({ x: 640, y: 480 });
     expect(nodeById("Order").selected).toBe(true);
     expect(nodeById("Item").selected).toBe(false);
+  });
+
+  it("never removes a node", () => {
+    renderVisualization();
+    act(() => {
+      flow().onNodeClick?.({}, { id: "Order" });
+    });
+
+    // The delete key is off, and a remove change that still arrives is ignored.
+    expect(flow().deleteKeyCode).toBeNull();
+    act(() => {
+      flow().onNodesChange?.([{ id: "Order", type: "remove" }]);
+    });
+
+    expect(nodeById("Order").selected).toBe(true);
+    expect(flow().nodes.map((node) => node.id)).toContain("Item");
   });
 
   it("restores the generated layout on relayout", () => {
