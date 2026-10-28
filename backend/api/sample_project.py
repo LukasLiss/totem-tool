@@ -381,9 +381,8 @@ def sample_guide_doc():
                 [
                     _run("Headline KPIs", bold=True),
                     _run(
-                        " — how many customer orders the network handled, how "
-                        "long one took end to end, and how often a container had to "
-                        "be rescheduled."
+                        " — order volume, average end-to-end lead time, and "
+                        "how often a container had to be rescheduled."
                     ),
                 ],
                 [
@@ -397,15 +396,14 @@ def sample_guide_doc():
                     _run("Terminal Workload by Activity", bold=True),
                     _run(
                         " — which of the log's 14 activities absorb the "
-                        "handling effort. The long tail is grouped into one slice "
-                        "so the ring stays readable."
+                        "effort; the long tail is grouped into one slice."
                     ),
                 ],
                 [
                     _run("Process Areas", bold=True),
                     _run(
                         " — the seven object types in the log, arranged into "
-                        "levels by how they interact with one another."
+                        "levels by how they interact."
                     ),
                 ],
             ], "left"),
@@ -417,10 +415,8 @@ def sample_guide_doc():
                 "content": [
                     _para([
                         _run(
-                            "The bar and donut charts run stored queries: edit one "
-                            "under Project Assets → SQL Queries and the chart "
-                            "follows. The rest of the query store is there too — "
-                            "lead times, turnaround, the exception lists.",
+                            "The bar and donut run stored queries — edit one under "
+                            "Project Assets → SQL Queries and the chart follows.",
                             italic=True,
                             size=13,
                             color=MUTED,
@@ -508,7 +504,7 @@ def sample_dashboard_layout():
         (ProcessAreaComponent, "ProcessAreaComponent", (0, 14, 12, 7), {}),
         # Below everything it describes, so the widgets lead and the guide
         # follows. Appended at y=21, where the process areas end.
-        (TextBoxComponent, "TextBoxComponent", (0, 21, 12, 5), _text_box(
+        (TextBoxComponent, "TextBoxComponent", (0, 21, 12, 4), _text_box(
             sample_guide_doc(),
         )),
     ]
