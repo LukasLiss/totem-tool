@@ -19,10 +19,18 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from totem_lib.ocel import OcelDuckDB, import_ocel_db  # noqa: E402
 from totem_lib.ocel.importer import import_ocel  # noqa: E402
-from totem_lib.ochandover import OCHANDOVER, EventObjectSource, ProfileMatrix  # noqa: E402
+from totem_lib.orgamining import (  # noqa: E402
+    FEATURE_GROUPS,
+    EventObjectSource,
+    HandoverGraph,
+    ProfileMatrix,
+    compute_footprint,
+    discover_handover,
+    discover_resource_profiles,
+)
 
 LIB_ROOT = Path(__file__).parent.parent.parent
-RUNNING_EXAMPLE = LIB_ROOT / "src" / "totem_lib" / "ochandover" / "runningexample.json"
+RUNNING_EXAMPLE = LIB_ROOT / "test_data" / "small" / "runningexample.json"
 CONTAINER_LOGISTICS = LIB_ROOT / "test_data" / "small" / "container_logistics.json"
 
 
@@ -51,12 +59,12 @@ def container_logistics():
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _graph_signature(graph: OCHANDOVER) -> tuple[dict, dict]:
+def _graph_signature(graph: HandoverGraph) -> tuple[dict, dict]:
     nodes = {n: (d.get("object_type"), d.get("event_count")) for n, d in graph.nodes(data=True)}
     edges = {}
     for u, v, key, d in graph.edges(keys=True, data=True):
         edges[(u, v, key)] = (
-            d.get("raw_weight"),
+            d.get("count"),
             round(d.get("weight", 0.0), 9),
             d.get("avg_time"),
             d.get("min_time"),
@@ -65,14 +73,14 @@ def _graph_signature(graph: OCHANDOVER) -> tuple[dict, dict]:
     return nodes, edges
 
 
-def _assert_same_graph(a: OCHANDOVER, b: OCHANDOVER) -> None:
+def _assert_same_graph(a: HandoverGraph, b: HandoverGraph) -> None:
     nodes_a, edges_a = _graph_signature(a)
     nodes_b, edges_b = _graph_signature(b)
     assert nodes_a == nodes_b
     assert edges_a == edges_b
 
 
-def _sorted_flows(graph: OCHANDOVER) -> list[tuple]:
+def _sorted_flows(graph: HandoverGraph) -> list[tuple]:
     flows = (graph.graph.get("animation_flows") or {}).get("flows", [])
     return sorted(
         (f["source"], f["target"], f["bo_type"], tuple(sorted(f["bo_ids"])), f["start_time"], f["duration"])
@@ -80,7 +88,7 @@ def _sorted_flows(graph: OCHANDOVER) -> list[tuple]:
     )
 
 
-def _sorted_bindings(graph: OCHANDOVER) -> list[tuple]:
+def _sorted_bindings(graph: HandoverGraph) -> list[tuple]:
     out = []
     for b in graph.graph.get("bindings", []):
         arcs = tuple(sorted((a["other_resource"], a["bo_type"], a["mark"], a["is_gapped"]) for a in b["arcs"]))
@@ -131,7 +139,7 @@ def test_source_honours_a_filter_shadow(running_example):
         src = EventObjectSource.from_ocel_db(db, ["employee", "machine"])
         assert "machine" not in set(src.object_type_by_id.values())
         assert "machine" not in src.all_object_types
-        graph = OCHANDOVER.from_ocel_db(db, ["employee", "machine"], ["item", "package"])
+        graph = HandoverGraph.from_ocel_db(db, ["employee", "machine"], ["item", "package"])
         assert all(d["object_type"] == "employee" for _, d in graph.nodes(data=True))
     finally:
         for tbl in ("objects", "event_object", "events"):
@@ -163,8 +171,8 @@ def test_source_honours_a_filter_shadow(running_example):
 def test_handover_parity_running_example(running_example, kwargs):
     ocel, db = running_example
     resources, business = ["employee", "machine"], ["item", "package"]
-    g_pl = OCHANDOVER.from_ocel(ocel, resources, business, **kwargs)
-    g_db = OCHANDOVER.from_ocel_db(db, resources, business, **kwargs)
+    g_pl = HandoverGraph.from_ocel(ocel, resources, business, **kwargs)
+    g_db = HandoverGraph.from_ocel_db(db, resources, business, **kwargs)
     assert g_db.number_of_edges() > 0
     _assert_same_graph(g_pl, g_db)
 
@@ -172,8 +180,8 @@ def test_handover_parity_running_example(running_example, kwargs):
 def test_handover_flows_and_bindings_parity(running_example):
     ocel, db = running_example
     resources, business = ["employee", "machine"], ["item", "package"]
-    g_pl = OCHANDOVER.from_ocel(ocel, resources, business, include_flows=True, include_bindings=True)
-    g_db = OCHANDOVER.from_ocel_db(db, resources, business, include_flows=True, include_bindings=True)
+    g_pl = HandoverGraph.from_ocel(ocel, resources, business, include_flows=True, include_bindings=True)
+    g_db = HandoverGraph.from_ocel_db(db, resources, business, include_flows=True, include_bindings=True)
     _assert_same_graph(g_pl, g_db)
     assert _sorted_flows(g_pl) == _sorted_flows(g_db)
     assert g_pl.graph["animation_flows"]["timeline"] == g_db.graph["animation_flows"]["timeline"]
@@ -183,28 +191,44 @@ def test_handover_flows_and_bindings_parity(running_example):
 
 def test_handover_db_graph_has_expected_shape(running_example):
     _, db = running_example
-    graph = OCHANDOVER.from_ocel_db(db, ["employee", "machine"], ["item", "package"])
+    graph = HandoverGraph.from_ocel_db(db, ["employee", "machine"], ["item", "package"])
     node_types = {d["object_type"] for _, d in graph.nodes(data=True)}
     assert node_types <= {"employee", "machine"}
     edge_types = {d["businessobject_type"] for _, _, d in graph.edges(data=True)}
     assert edge_types <= {"item", "package"}
     for _, _, d in graph.edges(data=True):
-        assert d["raw_weight"] >= 1
+        assert d["count"] >= 1
         assert 0.0 < d["weight"] <= 1.0
 
 
-def test_flattened_parity(running_example):
+def test_discover_handover_dispatches_on_log_type(running_example):
     ocel, db = running_example
-    for max_gap in (None, 0, 2):
-        g_pl = OCHANDOVER.from_ocel_flattened(ocel, "item", "employee", max_gap=max_gap)
-        g_db = OCHANDOVER.from_ocel_db_flattened(db, "item", "employee", max_gap=max_gap)
-        _assert_same_graph(g_pl, g_db)
+    resources, business = ["employee", "machine"], ["item", "package"]
+    _assert_same_graph(
+        discover_handover(ocel, resources, business, max_gap=2),
+        HandoverGraph.from_ocel(ocel, resources, business, max_gap=2),
+    )
+    _assert_same_graph(
+        discover_handover(db, resources, business, max_gap=2),
+        HandoverGraph.from_ocel_db(db, resources, business, max_gap=2),
+    )
+
+
+def test_compute_footprint_dispatches_on_log_type(running_example):
+    ocel, db = running_example
+    order = ["businessobject_type", "activity_a", "activity_b"]
+    assert compute_footprint(ocel, ["item"]).sort(order).equals(
+        HandoverGraph.compute_footprint(ocel, ["item"]).sort(order)
+    )
+    assert compute_footprint(db, ["item"]).sort(order).equals(
+        HandoverGraph.compute_footprint_db(db, ["item"]).sort(order)
+    )
 
 
 def test_footprint_parity(running_example):
     ocel, db = running_example
-    fp_pl = OCHANDOVER.compute_footprint(ocel, ["item", "package"])
-    fp_db = OCHANDOVER.compute_footprint_db(db, ["item", "package"])
+    fp_pl = HandoverGraph.compute_footprint(ocel, ["item", "package"])
+    fp_db = HandoverGraph.compute_footprint_db(db, ["item", "package"])
     order = ["businessobject_type", "activity_a", "activity_b"]
     assert fp_pl.sort(order).equals(fp_db.sort(order))
     assert fp_db.height > 0
@@ -214,8 +238,8 @@ def test_handover_parity_container_logistics(container_logistics):
     """A realistic log, imported by the streaming importer the backend uses."""
     ocel, db = container_logistics
     resources, business = ["Forklift", "Truck"], ["Container", "Vehicle"]
-    g_pl = OCHANDOVER.from_ocel(ocel, resources, business, max_gap=3)
-    g_db = OCHANDOVER.from_ocel_db(db, resources, business, max_gap=3)
+    g_pl = HandoverGraph.from_ocel(ocel, resources, business, max_gap=3)
+    g_db = HandoverGraph.from_ocel_db(db, resources, business, max_gap=3)
     assert g_db.number_of_edges() > 0
     _assert_same_graph(g_pl, g_db)
 
@@ -265,6 +289,21 @@ def test_profile_matrix_parity(running_example, kwargs):
     pm_db = ProfileMatrix.from_ocel_db(db, **kwargs)
     assert len(pm_db.resources) > 0
     _assert_same_profile_matrix(pm_pl, pm_db)
+
+
+def test_feature_groups_constant_lists_every_group():
+    assert list(FEATURE_GROUPS) == ALL_GROUPS
+
+
+def test_discover_resource_profiles_dispatches_on_log_type(running_example):
+    ocel, db = running_example
+    kwargs = dict(resource_types=["employee", "machine"], feature_groups=ALL_GROUPS)
+    _assert_same_profile_matrix(
+        discover_resource_profiles(ocel, **kwargs), ProfileMatrix.from_ocel(ocel, **kwargs),
+    )
+    _assert_same_profile_matrix(
+        discover_resource_profiles(db, **kwargs), ProfileMatrix.from_ocel_db(db, **kwargs),
+    )
 
 
 def test_profile_matrix_to_dict_parity(running_example):

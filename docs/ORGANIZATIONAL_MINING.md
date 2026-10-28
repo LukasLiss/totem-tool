@@ -4,18 +4,19 @@ Two analysis components look at *who* does the work in an object-centric
 event log:
 
 * **Handover of Work** — which resources pass business objects to each other,
-  how often, and how fast (`totem_lib.ochandover.OCHANDOVER`).
+  how often, and how fast (`totem_lib.orgamining.handover`, result
+  `HandoverGraph`).
 * **Resource Profiling** — a feature profile per resource (activities,
   co-occurrence, object collaboration, object portfolio, time of day, weekday),
   distances, clustering into organizational units and an MDS layout
-  (`totem_lib.ochandover.ProfileMatrix`).
+  (`totem_lib.orgamining.profiling`, result `ProfileMatrix`).
 
 Both live under *Analysis → Organizational Mining* in the sidebar and are
 available as dashboard widgets.
 
 ## Data access
 
-The algorithms read the log through `totem_lib.ochandover.EventObjectSource`,
+The algorithms read the log through `totem_lib.orgamining.EventObjectSource`,
 which describes the one slice they need: one row per (event, object) pair for
 the object types under study, plus the type of every such object. It can be
 built from the polars `ObjectCentricEventLog` (`from_ocel`) or — the path the
@@ -25,17 +26,20 @@ requested object types are read. Because the query names the tables
 unqualified, a backend filter shadow (`_filter_shadow`) is honoured, so the
 global filter applies to both analyses.
 
-Library entry points:
+Library entry points (`totem_lib.orgamining`), each accepting an
+`ObjectCentricEventLog` or an `OcelDuckDB`:
 
-| Polars log | DuckDB log |
+| Function | Returns |
 |---|---|
-| `OCHANDOVER.from_ocel(ocel, resource_types, businessobject_types, ...)` | `OCHANDOVER.from_ocel_db(db, ...)` |
-| `OCHANDOVER.from_ocel_flattened(ocel, case_type, resource_type, ...)` | `OCHANDOVER.from_ocel_db_flattened(db, ...)` |
-| `OCHANDOVER.compute_footprint(ocel, object_types)` | `OCHANDOVER.compute_footprint_db(db, object_types)` |
-| `ProfileMatrix.from_ocel(ocel, ...)` | `ProfileMatrix.from_ocel_db(db, ...)` |
+| `discover_handover(ocel, resource_types, business_object_types, ...)` | `HandoverGraph` |
+| `compute_footprint(ocel, object_types)` | footprint `pl.DataFrame` |
+| `discover_resource_profiles(ocel, resource_types=None, feature_groups=None, ...)` | `ProfileMatrix` |
 
-`totem_lib/tests/ochandover/test_db_parity.py` asserts that both paths give
-identical results.
+The allowed option values are exported as `NORMALIZATIONS`,
+`NORMALIZATION_SCOPES`, `FEATURE_GROUPS`, `CLUSTER_METHODS` and
+`DISTANCE_METRICS`; the backend validates its parameters against them.
+`totem_lib/tests/orgamining/test_db_parity.py` asserts that both log
+representations give identical results.
 
 ## Endpoints (`backend/api/views/ochandover.py`)
 
@@ -44,7 +48,7 @@ and cache their result in the results cache keyed by parameters and filter.
 
 | Route | Purpose |
 |---|---|
-| `GET/POST /api/handover/` | Handover graph. `file_id`, `method` (`oc` \| `flattened`), `resource_types`, `businessobject_types` (comma-separated) or `case_type` + `resource_type`, `max_gap`, `normalization`, `normalization_scope`, `parallel_threshold`, `min_parallel_observations`, `cluster_by_ot`, `include_flows`, `include_bindings`. `POST` additionally takes a JSON `cluster_map` (`{resource: cluster}`) that collapses resources into organizational units. |
+| `GET/POST /api/handover/` | Handover graph. `file_id`, `method` (`oc`), `resource_types`, `businessobject_types` (comma-separated), `max_gap`, `normalization`, `normalization_scope`, `parallel_threshold`, `min_parallel_observations`, `cluster_by_ot`, `include_flows`, `include_bindings`. `POST` additionally takes a JSON `cluster_map` (`{resource: cluster}`) that collapses resources into organizational units. |
 | `GET /api/profile-matrix/` | Resource profiles. `file_id`, `resource_types`, `business_object_types`, `feature_groups`, `tooltip_feature_groups`, `width` + `height` (MDS canvas), `compute_clusters`, `cluster_method` (`kmeans` \| `agglomerative` \| `hdbscan`), `n_clusters`, `min_cluster_size`, `distance_metric` (`euclidean` \| `hellinger`). |
 | `GET /api/event-log/` | The (filtered) log as a flat table, one row per event with its objects grouped by type; timestamps in Unix milliseconds. Optional `limit`; `total_events` always reports the full count. |
 

@@ -444,7 +444,9 @@ export default function FilterChipStack() {
       // be visible to be understood.
       setExpanded(true);
     } else {
-      useFilterStore.getState().clear();
+      // `clear()` bumps the filter version, which makes every component abort
+      // and resend its request — for nothing when no filter is applied.
+      if (useFilterStore.getState().isApplied) useFilterStore.getState().clear();
       useFilterStore.getState().setStats(null);
       // A large log gets a time-range filter straight away: the analyses on
       // the overview page would otherwise run over the whole log, which can

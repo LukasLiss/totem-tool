@@ -44,14 +44,21 @@ type ComputationStore = {
 
 const POLL_INTERVAL_MS = 500;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+// The browser opens only a few connections per host. While they are all taken
+// by computations waiting for the per-file lock, a poll waits in the browser;
+// sending the next ones on schedule anyway would pile up queued polls (ahead
+// of a Cancel request). At most one poll is in flight.
+let pollInFlight = false;
 
 async function pollProgress() {
+  if (pollInFlight) return;
   const { jobs, update } = useComputationStore.getState();
   const ids = Object.keys(jobs);
   if (ids.length === 0) {
     stopPolling();
     return;
   }
+  pollInFlight = true;
   try {
     const { data } = await axios.get<Record<string, { status?: string; fraction?: number | null; message?: string }>>(
       "/api/jobs/",
@@ -67,6 +74,8 @@ async function pollProgress() {
     }
   } catch {
     /* progress is best-effort; the request itself reports the outcome */
+  } finally {
+    pollInFlight = false;
   }
 }
 
