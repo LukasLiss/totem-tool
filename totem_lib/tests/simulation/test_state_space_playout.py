@@ -165,3 +165,52 @@ def test_next_event_is_generated_in_the_loop_with_runtime_context(monkeypatch):
     assert contexts
     assert "resource_utilization" in contexts[0]
     assert "Worker" in contexts[0]["resource_utilization"]
+
+
+def test_resource_demand_is_drawn_once_per_pending_event(monkeypatch):
+    """A pending event keeps its drawn resource demand while it is blocked, so
+    congestion cannot bias the demand towards draws that happen to fit. One
+    Worker with a 10 min cooldown for 4 Worker events per case and 3 cases per
+    hour blocks instances repeatedly; still, every generated event is drawn once.
+    """
+    from totem_lib.simulation import simulation as sim
+    from totem_lib.simulation.utils import state_space as ss
+
+    draws = []
+    original_sample = sim._sample_needed_resources
+
+    def spy_sample(activity_res_dist, resource_pool_expanded):
+        draws.append(activity_res_dist)
+        return original_sample(activity_res_dist, resource_pool_expanded)
+
+    generated = []
+    original_step = ss.ExecutionGenerator.step
+
+    def spy_step(self, runtime_context=None):
+        event = original_step(self, runtime_context)
+        if event is not None:
+            generated.append(event)
+        return event
+
+    monkeypatch.setattr(sim, "_sample_needed_resources", spy_sample)
+    monkeypatch.setattr(ss.ExecutionGenerator, "step", spy_step)
+
+    random.seed(0)
+    np.random.seed(0)
+    model = _advanced_model(_order_items_log())
+    one_worker = {"Worker": {"count_distribution": {1: 1.0}}}
+    activities = ("create", "pick", "ship")
+    model.needed_resources_per_activity = {
+        sv: {act: one_worker for act in activities}
+        for sv in model.playout_strategy.structure_variants
+    }
+    model.resource_cooldown_distribution = {
+        act: {"Worker": {"samples": [600.0]}} for act in activities
+    }
+    ocel, finished, spawned = model.run(
+        sim_duration_s=6 * HOUR, resource_pool={"Worker": 1}
+    )
+
+    assert ocel.events.height > 0
+    assert finished < spawned  # congested: the Worker is the bottleneck
+    assert len(draws) == len(generated)

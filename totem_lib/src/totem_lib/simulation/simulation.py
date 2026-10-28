@@ -50,6 +50,10 @@ VIOLATION_COST_WEIGHTS = {
 # Needed when the only resource based steering of activity enablement is not enough
 # This might occur, when the log is sparse, or many resources are available
 MODEL_ACTIVITY_DURATIONS = True
+# Time resolution of the playout in seconds (timestamps are Unix seconds). A causal
+# successor fires at least this long after its predecessor, so the order of the
+# output log never depends on the tie-break by event id.
+MIN_EVENT_SPACING_S = 1
 
 
 class _ViolationBudget:
@@ -260,6 +264,14 @@ def _sample_activity_delay(activity, activity_delays):
     return random.choice(samples)
 
 
+def _sample_ready_time(enabling_time, activity, activity_delays):
+    """Ready time of an event enabled at ``enabling_time``: the enabling time plus
+    a sampled delay, but at least ``MIN_EVENT_SPACING_S`` after it."""
+    return enabling_time + max(
+        _sample_activity_delay(activity, activity_delays), MIN_EVENT_SPACING_S
+    )
+
+
 def _get_node_objects(graph, node):
     """Collect all object IDs from incident edges of a node."""
     objects = set()
@@ -272,14 +284,20 @@ def _get_node_objects(graph, node):
     return objects
 
 
-def _next_resource_free(blocked_resources, tick):
+def _next_resource_free(blocked_resources, tick, res_types, resource_id_type_map):
     """
-    Earliest tick at which a currently blocked resource frees again, or None if
-    none are blocked. A resource-blocked instance cannot make progress before
-    this time
+    Earliest time at which a currently blocked resource of one of ``res_types``
+    frees again, or None if none is blocked. A resource-blocked instance cannot
+    make progress before this time; releases of types its event does not need
+    cannot change its allocation. A cooldown ending at ``tick`` itself (zero
+    cooldown) is only released by the next Phase B, one time step later.
     """
-    future = [cd for _, cd in blocked_resources if cd > tick]
-    return min(future) if future else None
+    ends = [
+        cd for rid, cd in blocked_resources if resource_id_type_map[rid] in res_types
+    ]
+    if not ends:
+        return None
+    return max(min(ends), tick + MIN_EVENT_SPACING_S)
 
 
 def _earliest_future_ready(inst, tick, activity_delays):
@@ -298,8 +316,9 @@ def _earliest_future_ready(inst, tick, activity_delays):
             continue  # start node: due now, not a future wake
         ra = ready_at.get(n)
         if ra is None:
-            enabling_tick = max(finish_tick[p] for p in preds)
-            ra = enabling_tick + _sample_activity_delay(node_labels[n], activity_delays)
+            ra = _sample_ready_time(
+                max(finish_tick[p] for p in preds), node_labels[n], activity_delays
+            )
             ready_at[n] = ra
         if ra > tick and (earliest is None or ra < earliest):
             earliest = ra
@@ -360,6 +379,38 @@ class _CalendarGate:
         if not self.active:
             return True
         return self._present(rid, res_type, hour_index, timestamp_s)
+
+    def next_presence_hour(self, candidates, hour_index, last_hour):
+        """First clock hour after ``hour_index`` in which a candidate that is
+        absent in ``hour_index`` is present, or None if none is up to ``last_hour``.
+
+        The calendar can only unblock an instance when a resource joins the
+        present set; hours in which presence merely persists or shrinks cannot.
+        Looking ahead draws the same cached bits the allocation reads later, so
+        the realized schedule is unchanged.
+
+        Args:
+            candidates: ``(rid, res_type)`` pairs of the free resources the
+                blocked instance could use.
+            hour_index: Absolute clock hour of the failed allocation.
+            last_hour: Last absolute clock hour of the horizon.
+        """
+        if not self.active:
+            return None
+        absent = [
+            (rid, rtype)
+            for rid, rtype in candidates
+            if self._calendar(rid, rtype)
+            and not self._present(rid, rtype, hour_index, hour_index * 3600)
+        ]
+        if not absent:
+            return None
+        for hour in range(hour_index + 1, last_hour + 1):
+            if any(
+                self._present(rid, rtype, hour, hour * 3600) for rid, rtype in absent
+            ):
+                return hour
+        return None
 
     def cooldown_end(self, rid, res_type, start_s, work_seconds) -> int:
         """Absolute second at which a cooldown of ``work_seconds`` finishes.
@@ -743,7 +794,6 @@ class OCProcessAreaSimulationModel:
         self,
         sim_duration_s: int,
         resource_pool: dict,
-        tick_size_s: int = 60,
         start_datetime: dt.datetime = None,
         progress_callback=None,
     ):
@@ -751,7 +801,6 @@ class OCProcessAreaSimulationModel:
             self,
             sim_duration_s,
             resource_pool,
-            tick_size_s,
             start_datetime,
             progress_callback=progress_callback,
         )
@@ -947,7 +996,7 @@ class OCProcessAreaSimulationModel:
 
 
 # --- Shared playout helpers --------------------------------------------------
-# Both playout strategies drive the same tick-based resource/cooldown/calendar/
+# Both playout strategies drive the same event-based resource/cooldown/calendar/
 # duration loop; only the *source of the next event* differs (replay a discovered
 # variant DAG vs. generate the next event from the state space). These module-level
 # helpers hold the machinery both loops share, so each ``run`` stays focused on its
@@ -1052,14 +1101,20 @@ def _release_elapsed_cooldowns(
     """Free every resource whose cooldown has elapsed by ``tick``.
 
     Appends freed resources back onto their queue (mutating ``resource_queues``)
-    and returns the still-blocked set.
+    in the order their cooldowns ended, so a queue stays sorted by the time its
+    resources became idle even when several are released at once (FIFO/LIFO
+    rely on it). Returns the still-blocked set.
     """
-    freed = set()
-    for res_id, cooldown_end in blocked_resources:
-        if cooldown_end <= tick:
-            freed.add((res_id, cooldown_end))
-            resource_queues[resource_id_type_map[res_id]].append(res_id)
-    return blocked_resources - freed
+    freed = sorted(
+        (cooldown_end, res_id)
+        for res_id, cooldown_end in blocked_resources
+        if cooldown_end <= tick
+    )
+    for _, res_id in freed:
+        resource_queues[resource_id_type_map[res_id]].append(res_id)
+    return blocked_resources - {
+        (res_id, cooldown_end) for cooldown_end, res_id in freed
+    }
 
 
 def _partition_due_instances(active_executions, tick):
@@ -1156,22 +1211,45 @@ def _record_instance_firing(inst, activity, allocated_rids, resource_id_type_map
             act_resources.setdefault(rtype, []).append(rid)
 
 
-def _jittered_event_time(base_ts, tick, tick_size_s, sim_duration_s):
-    """Absolute event timestamp with sub-tick jitter, so events are not tied to
-    tick boundaries (jitter stays inside the remaining horizon)."""
-    jitter_window = min(tick_size_s, sim_duration_s - tick)
-    jitter = random.randint(0, jitter_window - 1) if jitter_window > 0 else 0
-    return base_ts + tick + jitter
-
-
-def _schedule_next_tick(
-    tick, sim_duration_s, tick_size_s, active_executions, schedule, schedule_idx
+def _resource_blocked_wake(
+    tick,
+    blocked_resources,
+    calendar_gate,
+    needed_res_types,
+    resource_queues,
+    resource_id_type_map,
+    hour_index,
+    base_ts,
+    sim_duration_s,
 ):
-    """Next grid tick to jump to, or ``None`` to end the run.
+    """Earliest time a resource-blocked instance can make progress.
 
-    Fast-forwards to the earliest tick where something can happen — the next
-    instance wake or the next arrival — snapped up to the tick grid. Returns
-    ``None`` at the horizon or when nothing is left to do.
+    Only a release of a needed type or a free resource of a needed type turning
+    present can unblock it. If neither happens before the horizon, it sleeps
+    until then.
+    """
+    wake = _next_resource_free(
+        blocked_resources, tick, needed_res_types, resource_id_type_map
+    )
+    candidates = [
+        (rid, res_type)
+        for res_type in needed_res_types
+        for rid in resource_queues.get(res_type, ())
+    ]
+    presence_hour = calendar_gate.next_presence_hour(
+        candidates, hour_index, (base_ts + sim_duration_s) // 3600
+    )
+    if presence_hour is not None:
+        presence_wake = presence_hour * 3600 - base_ts
+        wake = presence_wake if wake is None else min(wake, presence_wake)
+    return sim_duration_s if wake is None else wake
+
+
+def _next_clock_time(tick, sim_duration_s, active_executions, schedule, schedule_idx):
+    """Next point in time at which the state can change, or ``None`` to end the run.
+
+    Jumps straight to the earliest instance wake or arrival (next-event time
+    advance). Returns ``None`` at the horizon or when nothing is left to do.
     """
     if tick >= sim_duration_s:
         return None
@@ -1182,16 +1260,12 @@ def _schedule_next_tick(
         candidates.append(schedule[schedule_idx][0])
     if not candidates:
         return None
-    target = min(candidates)
-    next_tick = ((target + tick_size_s - 1) // tick_size_s) * tick_size_s
-    if next_tick <= tick:
-        next_tick = tick + tick_size_s
-    return min(next_tick, sim_duration_s)
+    return min(max(min(candidates), tick + MIN_EVENT_SPACING_S), sim_duration_s)
 
 
 def _build_output_log(event_output, object_output):
     """Assemble the simulated ``ObjectCentricEventLog`` from collected events and
-    objects (events sorted by timestamp to undo the sub-tick jitter)."""
+    objects (events sorted by timestamp)."""
     if event_output:
         events_df = pl.DataFrame(event_output, schema=EVENTS_SCHEMA).sort(
             "_timestampUnix"
@@ -1295,7 +1369,6 @@ class VariantPlayoutStrategy:
         simulation_model,
         sim_duration_s: int,
         resource_pool: dict,
-        tick_size_s: int = 60,
         start_datetime: dt.datetime = None,
         progress_callback=None,
     ) -> dict:
@@ -1306,7 +1379,6 @@ class VariantPlayoutStrategy:
             simulation_model: OCProcessAreaSimulationModel
             sim_duration_s: Total simulation duration in seconds
             resource_pool: {resource_type: count} — e.g. {'Forklift': 3, 'Crane': 2}
-            tick_size_s: Clock tick size in seconds
             start_datetime: datetime of simulation start. Defaults to the filtered source log's first event
             progress_callback: Optional callable invoked with the fraction of the
                 simulated time span elapsed (0.0-1.0) as the clock advances, so a
@@ -1361,8 +1433,8 @@ class VariantPlayoutStrategy:
         schedule_idx = 0
 
         # --- Main simulation loop ---
-        # Event-aware ticking: step tick-by-tick while instances are active, but
-        # fast-forward over empty stretches straight to the next arrival's tick.
+        # Next-event time advance: the clock jumps straight to the next arrival or
+        # instance wake, the only points in time at which the state can change.
         tick = 0
         while True:
             # Report how much of the simulated time span has elapsed. Throttling
@@ -1421,6 +1493,7 @@ class VariantPlayoutStrategy:
                 # resource availability, to schedule its next examination
                 fired_any = False
                 resource_blocked = False
+                blocked_res_types = set()
 
                 variant_res_dist = resource_distribution_of_variants.get(
                     inst["variant"], {}
@@ -1438,9 +1511,10 @@ class VariantPlayoutStrategy:
                         preds = preds_map[node]
                         if preds:
                             if node not in ready_at:
-                                enabling_tick = max(finish_tick[p] for p in preds)
-                                ready_at[node] = enabling_tick + _sample_activity_delay(
-                                    activity, activity_delays
+                                ready_at[node] = _sample_ready_time(
+                                    max(finish_tick[p] for p in preds),
+                                    activity,
+                                    activity_delays,
                                 )
                             if tick < ready_at[node]:
                                 continue  # not due yet
@@ -1470,6 +1544,7 @@ class VariantPlayoutStrategy:
                         for t, cnt in needed_res_types.items()
                     ):
                         resource_blocked = True
+                        blocked_res_types.update(needed_res_types)
                         continue
 
                     # Allocate resources respecting constraints
@@ -1490,6 +1565,7 @@ class VariantPlayoutStrategy:
                         # Due now but no resource allocation possible: held back
                         # until a resource frees.
                         resource_blocked = True
+                        blocked_res_types.update(needed_res_types)
                         continue
 
                     # Commit the budget only now that the activity actually fires.
@@ -1519,14 +1595,11 @@ class VariantPlayoutStrategy:
                         for oid in inst["node_objects"][node]
                         if oid in obj_map
                     ]
-                    abs_ts = _jittered_event_time(
-                        base_ts, tick, tick_size_s, sim_duration_s
-                    )
                     event_output.append(
                         {
                             "_eventId": f"sim_e_{inst['id']}_{node}",
                             "_activity": activity,
-                            "_timestampUnix": abs_ts,
+                            "_timestampUnix": base_ts + tick,
                             "_objects": sorted(set(event_objects)),
                             "_qualifiers": [],
                             "_attributes": json.dumps(
@@ -1552,12 +1625,13 @@ class VariantPlayoutStrategy:
                     finished_count += 1
                 else:
                     # Schedule the next examination of this instance:
-                    #   - just fired   → revisit next tick (successors may follow)
+                    #   - just fired   → revisit one time step later (successors
+                    #     may follow)
                     #   - else sleep until the earliest of its next future
                     #     ready_at and, if a due node was resource-blocked, the
-                    #     next time a resource frees.
+                    #     next time a resource frees or a free one turns present.
                     if fired_any:
-                        inst["next_wake"] = tick + tick_size_s
+                        inst["next_wake"] = tick + MIN_EVENT_SPACING_S
                     else:
                         wake = (
                             _earliest_future_ready(inst, tick, activity_delays)
@@ -1565,28 +1639,33 @@ class VariantPlayoutStrategy:
                             else None
                         )
                         if resource_blocked:
-                            nf = _next_resource_free(blocked_resources, tick)
-                            cand = (
-                                nf if nf is not None else sim_duration_s + tick_size_s
+                            blocked_wake = _resource_blocked_wake(
+                                tick,
+                                blocked_resources,
+                                calendar_gate,
+                                blocked_res_types,
+                                resource_queues,
+                                resource_id_type_map,
+                                hour_index,
+                                base_ts,
+                                sim_duration_s,
                             )
-                            wake = cand if wake is None else min(wake, cand)
-                            if calendar_gate.active:
-                                next_hour = (hour_index + 1) * 3600 - base_ts
-                                wake = (
-                                    next_hour if wake is None else min(wake, next_hour)
-                                )
+                            wake = (
+                                blocked_wake
+                                if wake is None
+                                else min(wake, blocked_wake)
+                            )
                         inst["next_wake"] = (
-                            wake if wake is not None else tick + tick_size_s
+                            wake if wake is not None else tick + MIN_EVENT_SPACING_S
                         )
                     next_active.append(inst)
 
             active_executions = next_active
 
-            # --- Advance the clock to the next tick where something can happen. ---
-            next_tick = _schedule_next_tick(
+            # --- Advance the clock to the next point where something can happen. ---
+            next_tick = _next_clock_time(
                 tick,
                 sim_duration_s,
-                tick_size_s,
                 active_executions,
                 schedule,
                 schedule_idx,
@@ -1622,7 +1701,7 @@ class StateSpacePlayoutStrategy:
     its skeleton is cloned, and the state-space model generates the activities over
     it. Resource demand and constraints are keyed **per structure variant** (with a
     pooled fallback) — exactly as the variant playout keys them per variant. This is
-    a standalone strategy — it shares the tick-loop machinery with
+    a standalone strategy — it shares the playout-loop machinery with
     ``VariantPlayoutStrategy`` through the module-level helpers, not by inheritance.
     """
 
@@ -1671,7 +1750,6 @@ class StateSpacePlayoutStrategy:
         simulation_model,
         sim_duration_s: int,
         resource_pool: dict,
-        tick_size_s: int = 60,
         start_datetime: dt.datetime = None,
         progress_callback=None,
     ) -> dict:
@@ -1760,6 +1838,7 @@ class StateSpacePlayoutStrategy:
                         "generator": generator,
                         "obj_types": generator.object_type_map,
                         "pending": None,
+                        "pending_needed": None,
                         "event_index": 0,
                         "last_finish": tick,
                         "ready_at": tick,
@@ -1800,15 +1879,16 @@ class StateSpacePlayoutStrategy:
                         continue  # instance complete; drop it
                     inst["pending"] = event
                     # The first event of a case has no predecessor, so it fires at
-                    # the arrival tick with no inter-activity delay — mirrors the
+                    # the arrival time with no inter-activity delay — mirrors the
                     # variant playout, where execution-start nodes (no predecessors)
                     # fire immediately and only successor nodes carry a sampled delay.
-                    delay = (
-                        _sample_activity_delay(event[0], activity_delays)
+                    inst["ready_at"] = (
+                        _sample_ready_time(
+                            inst["last_finish"], event[0], activity_delays
+                        )
                         if model_durations and inst["event_index"] > 0
-                        else 0
+                        else inst["last_finish"]
                     )
-                    inst["ready_at"] = inst["last_finish"] + delay
 
                 activity, participants = inst["pending"]
 
@@ -1827,10 +1907,14 @@ class StateSpacePlayoutStrategy:
                     structure_variant, fallback_constraints
                 )
 
-                # Resources this activity needs.
-                needed_res_types = _sample_needed_resources(
-                    variant_res_dist.get(activity, {}), resource_pool_expanded
-                )
+                # Resources this activity needs: drawn once per pending event and
+                # kept while it is blocked, like the variant playout's node cache.
+                needed_res_types = inst["pending_needed"]
+                if needed_res_types is None:
+                    needed_res_types = _sample_needed_resources(
+                        variant_res_dist.get(activity, {}), resource_pool_expanded
+                    )
+                    inst["pending_needed"] = needed_res_types
                 available_queues = _calendar_filtered_queues(
                     calendar_gate,
                     resource_queues,
@@ -1860,12 +1944,19 @@ class StateSpacePlayoutStrategy:
                     resource_blocked = allocated is None
 
                 if resource_blocked:
-                    # Keep the pending event; retry when a resource frees.
-                    nf = _next_resource_free(blocked_resources, tick)
-                    wake = nf if nf is not None else tick + tick_size_s
-                    if calendar_gate.active:
-                        wake = min(wake, (hour_index + 1) * 3600 - base_ts)
-                    inst["next_wake"] = wake
+                    # Keep the pending event; retry when a resource frees or a
+                    # free one turns present.
+                    inst["next_wake"] = _resource_blocked_wake(
+                        tick,
+                        blocked_resources,
+                        calendar_gate,
+                        needed_res_types,
+                        resource_queues,
+                        resource_id_type_map,
+                        hour_index,
+                        base_ts,
+                        sim_duration_s,
+                    )
                     next_active.append(inst)
                     continue
 
@@ -1895,9 +1986,7 @@ class StateSpacePlayoutStrategy:
                     {
                         "_eventId": f"sim_e_{inst['id']}_{inst['event_index']}",
                         "_activity": activity,
-                        "_timestampUnix": _jittered_event_time(
-                            base_ts, tick, tick_size_s, sim_duration_s
-                        ),
+                        "_timestampUnix": base_ts + tick,
                         "_objects": sorted(set(participants)),
                         "_qualifiers": [],
                         "_attributes": json.dumps(
@@ -1908,16 +1997,16 @@ class StateSpacePlayoutStrategy:
                 inst["event_index"] += 1
                 inst["last_finish"] = tick
                 inst["pending"] = None
-                inst["next_wake"] = tick + tick_size_s
+                inst["pending_needed"] = None
+                inst["next_wake"] = tick + MIN_EVENT_SPACING_S
                 next_active.append(inst)
 
             active_executions = next_active
 
-            # --- Advance the clock to the next tick where something can happen. ---
-            next_tick = _schedule_next_tick(
+            # --- Advance the clock to the next point where something can happen. ---
+            next_tick = _next_clock_time(
                 tick,
                 sim_duration_s,
-                tick_size_s,
                 active_executions,
                 schedule,
                 schedule_idx,

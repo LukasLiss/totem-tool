@@ -2586,7 +2586,6 @@ def run_simulation(request):
         "activities": ["Act1", "Act2"],
         "resource_pool": {"ResourceType1": 3, "ResourceType2": 5},
         "sim_duration_days": 7,
-        "tick_size_s": 60,
         "resource_constraint_violation_degree": 0.0,
         "constraint_lookback_length": null
     }
@@ -2596,7 +2595,6 @@ def run_simulation(request):
     activities = request.data.get("activities", [])
     resource_pool = request.data.get("resource_pool", {})
     sim_duration_days = request.data.get("sim_duration_days", 7)
-    tick_size_s = request.data.get("tick_size_s", 30)
     sim_start_unix = request.data.get("sim_start_unix", None)
     violation_degree = request.data.get("resource_constraint_violation_degree", 0.0)
     lookback_length = request.data.get("constraint_lookback_length", None)
@@ -2697,7 +2695,6 @@ def run_simulation(request):
             sim_log, finished_count, spawned_count = simulation_model.run(
                 sim_duration_s=sim_duration_s,
                 resource_pool=resource_pool,
-                tick_size_s=tick_size_s,
                 start_datetime=start_datetime,
                 progress_callback=_on_sim_progress,
             )

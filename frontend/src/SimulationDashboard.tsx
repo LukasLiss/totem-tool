@@ -240,7 +240,6 @@ export const SimulationDashboard: React.FC = () => {
   const [selectedActivities, setSelectedActivities] = useState<string[]>([]);
   const [resourcePool, setResourcePool] = useState<Record<string, number>>({});
   const [simDurationDays, setSimDurationDays] = useState(7);
-  const [tickSize, setTickSize] = useState(60);
   const [simStartUnix, setSimStartUnix] = useState<number | null>(null);
   const [violationDegree, setViolationDegree] = useState(0.0);
   const [lookbackLength, setLookbackLength] = useState<number | null>(null);
@@ -714,7 +713,6 @@ export const SimulationDashboard: React.FC = () => {
       activities: selectedActivities,
       resource_pool: resourcePool,
       sim_duration_days: simDurationDays,
-      tick_size_s: tickSize,
       sim_start_unix: simStartUnix,
       model_activity_durations: modelActivityDurations,
       resource_constraint_violation_degree: violationDegree,
@@ -1032,12 +1030,6 @@ export const SimulationDashboard: React.FC = () => {
             <Card>
               <CardHeader><CardTitle>Simulation Parameters</CardTitle></CardHeader>
               <CardContent className="space-y-4">
-                <div>
-                  <Label htmlFor="tick-size">Tick size (seconds)</Label>
-                  <Input id="tick-size" type="number" min={1} value={tickSize}
-                    onChange={(e) => setTickSize(parseInt(e.target.value) || 60)} />
-                </div>
-
                 <div className="flex items-start gap-3">
                   <Switch id="model-durations" className="mt-1"
                     checked={modelActivityDurations}
@@ -1150,10 +1142,6 @@ export const SimulationDashboard: React.FC = () => {
                   <div>
                     <span className="text-muted-foreground">Duration:</span>{" "}
                     <span className="font-medium">{simDurationDays} days</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Tick:</span>{" "}
-                    <span className="font-medium">{tickSize}s</span>
                   </div>
                   <div>
                     <span className="text-muted-foreground">Violation degree:</span>{" "}
@@ -1410,7 +1398,7 @@ export const SimulationDashboard: React.FC = () => {
               <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary"></div>
               <p className="text-muted-foreground font-medium">Simulation running...</p>
               <p className="text-xs text-muted-foreground">
-                Mode: {mode} | Duration: {simDurationDays} days | Tick: {tickSize}s
+                Mode: {mode} | Duration: {simDurationDays} days
               </p>
               <Button
                 variant="outline"

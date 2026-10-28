@@ -19,10 +19,13 @@ import networkx as nx
 import numpy as np
 
 from totem_lib.simulation.simulation import (
+    MIN_EVENT_SPACING_S,
     OCProcessAreaSimulationConfiguration,
     OCProcessAreaSimulationModel,
     VariantPlayoutStrategy,
     _CalendarGate,
+    _next_resource_free,
+    _release_elapsed_cooldowns,
 )
 from totem_lib.simulation.utils.resource_calendar import WEEKDAYS
 
@@ -120,13 +123,12 @@ def _build_model(
     )
 
 
-def _run(model, *, pool, duration_s=HOUR, tick_s=60, seed=42, start=None):
+def _run(model, *, pool, duration_s=HOUR, seed=42, start=None):
     random.seed(seed)
     np.random.seed(seed)
     return model.run(
         sim_duration_s=duration_s,
         resource_pool=pool,
-        tick_size_s=tick_s,
         start_datetime=start,
     )
 
@@ -326,9 +328,78 @@ def test_cooldown_delays_reuse_of_the_same_resource():
 
     assert with_cd and without_cd
     # cooldown run: B waits out the (exact) cooldown before reusing A's Worker.
-    assert all(gap >= cooldown_s - 60 for gap in with_cd)
-    # no cooldown: A's Worker frees immediately, B follows within a tick or two.
+    assert all(gap >= cooldown_s for gap in with_cd)
+    # no cooldown: A's Worker frees immediately, B follows almost at once.
     assert all(gap < cooldown_s for gap in without_cd)
+
+
+def test_release_appends_resources_in_cooldown_order():
+    """Resources released together (the clock jumped past several cooldown ends)
+    rejoin the queue in the order their cooldowns ended, so FIFO/LIFO still see
+    the queue sorted by idle time."""
+    ends = list(range(10, 210, 10))
+    random.seed(3)
+    random.shuffle(ends)
+    blocked = {(f"Worker_{i}", end) for i, end in enumerate(ends)}
+    blocked.add(("Worker_late", 500))
+    queues = {"Worker": []}
+    type_map = {rid: "Worker" for rid, _ in blocked}
+
+    still_blocked = _release_elapsed_cooldowns(blocked, 300, queues, type_map)
+
+    by_end = dict((rid, end) for rid, end in blocked)
+    assert [by_end[rid] for rid in queues["Worker"]] == sorted(ends)
+    assert still_blocked == {("Worker_late", 500)}
+
+
+def test_zero_cooldown_wakes_blocked_instance_one_step_later():
+    """A resource blocked with a zero cooldown at ``tick`` is released by the next
+    Phase B, so a waiting instance wakes one time step later instead of sleeping
+    until the horizon."""
+    type_map = {"Worker_1": "Worker", "Worker_2": "Worker"}
+    workers = {"Worker"}
+    assert (
+        _next_resource_free({("Worker_1", 100)}, 100, workers, type_map)
+        == 100 + MIN_EVENT_SPACING_S
+    )
+    assert (
+        _next_resource_free(
+            {("Worker_1", 100), ("Worker_2", 400)}, 50, workers, type_map
+        )
+        == 100
+    )
+    assert _next_resource_free(set(), 100, workers, type_map) is None
+
+
+def test_release_of_an_unneeded_type_does_not_wake_a_blocked_instance():
+    """An instance waiting for a Worker sleeps through a Forklift release: only
+    releases of the types its event needs can change its allocation."""
+    type_map = {"Forklift_1": "Forklift", "Worker_1": "Worker"}
+    blocked = {("Forklift_1", 50), ("Worker_1", 300)}
+    assert _next_resource_free(blocked, 0, {"Worker"}, type_map) == 300
+    assert _next_resource_free(blocked, 0, {"Worker", "Forklift"}, type_map) == 50
+    assert _next_resource_free(blocked, 0, {"Crane"}, type_map) is None
+
+
+def test_blocked_instance_wakes_at_the_release_of_its_own_type():
+    """End to end: B needs a Worker and waits out the Worker's cooldown, while a
+    much shorter Forklift cooldown runs in parallel. B still fires exactly when
+    the Worker frees, so the type filter loses no wake-up it needs."""
+    variant = _chain("A", "B")
+    model = _build_model(
+        variant,
+        needed=_needs({"A": {"Worker": 1, "Forklift": 1}, "B": {"Worker": 1}}),
+        constraints={variant: {"B": {"A": {"Worker": "same_resource"}}}},
+        cooldowns={"A": {"Worker": _cd(900), "Forklift": _cd(60)}},
+    )
+    ocel, _, _ = _run(model, pool={"Worker": 50, "Forklift": 50}, duration_s=2 * HOUR)
+    gaps = [
+        acts["B"]["ts"] - acts["A"]["ts"]
+        for acts in _by_instance(ocel).values()
+        if "A" in acts and "B" in acts
+    ]
+    assert gaps
+    assert all(gap == 900 for gap in gaps)
 
 
 def test_cooldown_burns_only_during_available_hours():
@@ -373,7 +444,7 @@ def test_cooldown_burns_only_during_available_hours():
     off_block_gaps = run_with(off_block)
 
     assert all_on_gaps and off_block_gaps
-    # Always on: the gap is the flat 2h cooldown (± tick jitter).
+    # Always on: the gap is the flat 2h cooldown (plus contention for the Worker).
     assert all(cooldown_s - 120 <= gap <= cooldown_s + 240 for gap in all_on_gaps)
     # Off block inside the cooldown: the countdown skips the missing hour, so the
     # Worker frees ~1h later and every reuse gap grows by roughly that hour.
@@ -525,8 +596,8 @@ def test_higher_arrival_rate_spawns_more_instances():
 
 def test_activity_duration_model_delays_successor():
     """With the duration model on, B is held back by a sampled inter-activity
-    delay; with it off, B fires on the next tick. Resource-free so the gap is
-    pure timing.
+    delay; with it off, B fires one time step after A. Resource-free so the gap
+    is pure timing.
     """
     delay_s = 1800
     needed = _needs({"A": {}, "B": {}})
@@ -546,8 +617,24 @@ def test_activity_duration_model_delays_successor():
     off = gaps(OCProcessAreaSimulationConfiguration(model_activity_durations=False))
 
     assert on and off
-    assert all(gap >= delay_s - 60 for gap in on)
-    assert all(gap < delay_s for gap in off)
+    assert all(gap == delay_s for gap in on)
+    assert all(gap == MIN_EVENT_SPACING_S for gap in off)
+
+
+def test_causal_successor_never_shares_its_predecessors_timestamp():
+    """A zero delay still spaces B one time step after A, so the event order of
+    the output log never falls back to the tie-break by event id."""
+    needed = _needs({"A": {}, "B": {}})
+    variant = _chain("A", "B")
+    model = _build_model(variant, needed=needed, delays={"B": [0]})
+    ocel, _, _ = _run(model, pool={}, duration_s=2 * HOUR)
+    gaps = [
+        acts["B"]["ts"] - acts["A"]["ts"]
+        for acts in _by_instance(ocel).values()
+        if "A" in acts and "B" in acts
+    ]
+    assert gaps
+    assert all(gap == MIN_EVENT_SPACING_S for gap in gaps)
 
 
 # --- calendar gate: one realized schedule per (resource, hour) ---
@@ -591,3 +678,56 @@ def test_gate_hour_decision_is_stable_and_shared_with_cooldown():
     )
     gate.cooldown_end("Worker_1", "Worker", start, 5 * HOUR)
     assert gate._shift[("Worker_1", hour)] == first
+
+
+def _office_hours(start_hour=9, end_hour=17):
+    """Worker calendar: present Monday-Friday from ``start_hour`` to ``end_hour``."""
+    day = [1.0 if start_hour <= h < end_hour else 0.0 for h in range(24)]
+    off = [0.0] * 24
+    return {
+        "Worker": {
+            d: list(off) if d in ("Saturday", "Sunday") else list(day) for d in WEEKDAYS
+        }
+    }
+
+
+def test_gate_next_presence_hour_skips_to_the_next_shift():
+    """An absent Worker at Monday 18:00 next turns present Tuesday 09:00; the
+    lookahead jumps straight there instead of waking every hour overnight."""
+    gate = _CalendarGate(_office_hours(), {})
+    monday_18 = int(dt.datetime(2024, 1, 1, 18, 0, tzinfo=UTC).timestamp()) // HOUR
+    tuesday_09 = int(dt.datetime(2024, 1, 2, 9, 0, tzinfo=UTC).timestamp()) // HOUR
+    candidates = [("Worker_1", "Worker")]
+    assert gate.next_presence_hour(candidates, monday_18, monday_18 + 48) == tuesday_09
+    assert gate.next_presence_hour(candidates, monday_18, monday_18 + 10) is None
+
+
+def test_gate_next_presence_hour_ignores_resources_already_present():
+    """A Worker that is present now cannot unblock anything by staying present."""
+    gate = _CalendarGate(_office_hours(), {})
+    monday_10 = int(START.timestamp()) // HOUR
+    assert (
+        gate.next_presence_hour([("Worker_1", "Worker")], monday_10, monday_10 + 48)
+        is None
+    )
+    assert (
+        _CalendarGate({}, {}).next_presence_hour(
+            [("Worker_1", "Worker")], monday_10, monday_10 + 48
+        )
+        is None
+    )
+
+
+def test_calendar_blocked_activity_fires_at_shift_start():
+    """Arrivals at Monday 10:xx need a Worker whose shift starts at 12:00: every
+    event fires at 12:00:00 sharp, the first second the Worker is present."""
+    variant = _single("Load")
+    model = _build_model(
+        variant,
+        needed=_needs({"Load": {"Worker": 1}}),
+        type_calendars=_office_hours(start_hour=12),
+    )
+    ocel, finished, spawned = _run(model, pool={"Worker": 50}, duration_s=4 * HOUR)
+    noon = int(dt.datetime(2024, 1, 1, 12, 0, tzinfo=UTC).timestamp())
+    assert spawned > 0 and finished == spawned
+    assert set(ocel.events["_timestampUnix"].to_list()) == {noon}

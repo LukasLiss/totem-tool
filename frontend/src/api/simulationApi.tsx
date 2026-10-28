@@ -48,7 +48,6 @@ export type SimulationConfig = {
   activities: string[];
   resource_pool: Record<string, number>;
   sim_duration_days: number;
-  tick_size_s: number;
   sim_start_unix: number | null;
   resource_constraint_violation_degree: number;
   constraint_lookback_length: number | null;
