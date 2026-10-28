@@ -48,6 +48,73 @@ from totem_lib.orgamining import (
     NORMALIZATIONS,
 )
 
+from ..rich_text import (
+    FONT_SIZE_MAX,
+    FONT_SIZE_MIN,
+    LINE_HEIGHT_MAX,
+    LINE_HEIGHT_MIN,
+    RichTextTooLarge,
+    clamp_number,
+    is_hex_color,
+    plain_text_from_doc,
+    validated_rich_text,
+)
+
+
+def _validated_choice(raw, choices, default):
+    """Return ``raw`` when it is one of ``choices``, else ``default``.
+
+    ``choices`` is a model's ``(value, label)`` list, so the accepted set
+    cannot drift away from what the column actually allows.
+    """
+    allowed = {value for value, _label in choices}
+    return raw if isinstance(raw, str) and raw in allowed else default
+
+
+def _validated_hex_color(raw, default):
+    """Return ``raw`` only when it is a ``#rgb`` / ``#rrggbb`` literal.
+
+    These values are rendered into an inline ``style`` on every dashboard
+    that shows the component, so anything else is replaced rather than
+    stored.
+    """
+    return raw.strip() if is_hex_color(raw) else default
+
+
+def _validated_bool(raw, default):
+    """Return a real boolean: ``raw`` itself, a number's truthiness, else ``default``.
+
+    Not ``bool(raw)``: that turns the string ``"false"`` into True.
+    """
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return bool(raw)
+    return default
+
+
+def _validated_number(raw, default, minimum, maximum):
+    """Clamp ``raw`` into ``[minimum, maximum]``, falling back to ``default``.
+
+    Keeps a stray 0 or 10000 from a hand-edited payload out of the CSS,
+    where it would render the text invisible or unusably large. A bool or a
+    non-finite value falls back to the default — matching
+    resolveTextBoxFormat on the frontend, which rejects anything
+    Number.isFinite declines.
+    """
+    value = clamp_number(raw, minimum, maximum)
+    return default if value is None else value
+
+
+def _validated_int(raw, default, minimum, maximum):
+    """``_validated_number`` rounded to a whole number for an integer column.
+
+    Rounds rather than truncates so it agrees with the frontend, where
+    ``resolveTextBoxFormat`` uses ``Math.round``.
+    """
+    value = _validated_number(raw, None, minimum, maximum)
+    return default if value is None else int(round(value))
+
 
 def _validated_legacy_image_path(raw, project):
     """Return ``raw`` (minus the ``/files/`` prefix) only if it names an existing
@@ -240,8 +307,15 @@ class DashboardViewSet(viewsets.ModelViewSet):
 
         # Replace the components atomically: either the new layout is stored
         # in full, or the previous one is kept.
-        with transaction.atomic():
-            self._replace_components(dashboard, layout, request)
+        try:
+            with transaction.atomic():
+                self._replace_components(dashboard, layout, request)
+        except RichTextTooLarge as exc:
+            # Say so, rather than storing the box with its formatting stripped.
+            return Response(
+                {"error": f"a text box's content is too large: {exc}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         return Response({"status": "saved"})
 
@@ -249,9 +323,35 @@ class DashboardViewSet(viewsets.ModelViewSet):
         # Clear existing components
         dashboard.components.all().delete()
 
+        # Resolved once rather than per component: a dashboard link pointing
+        # outside this project is dropped at save, its text kept.
+        allowed_dashboard_ids = set(
+            Dashboard.objects.filter(project_id=dashboard.project_id).values_list(
+                "id", flat=True
+            )
+        )
+
         for item in layout:
             component_name = item["component_name"]
             if component_name == "TextBoxComponent":
+                # Formatting is presentational, but it lands in an inline
+                # style, so every value is validated down to a known-safe one
+                # rather than trusted or rejected.
+                #
+                # The rich-text document is rebuilt from a whitelist too. When
+                # it survives, `text` is derived from it so the plain column
+                # stays in step with what the box actually shows; otherwise we
+                # keep whatever plain text was sent.
+                rich_text = validated_rich_text(
+                    item.get("rich_text"), allowed_dashboard_ids
+                )
+                text = (
+                    plain_text_from_doc(rich_text)
+                    if rich_text is not None
+                    else item.get("text", "")
+                )
+                if not isinstance(text, str):
+                    text = ""
                 TextBoxComponent.objects.create(
                     dashboard=dashboard,
                     x=item["x"],
@@ -259,8 +359,42 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     w=item["w"],
                     h=item["h"],
                     component_name=component_name,
-                    text=item.get("text", ""),
-                    font_size=item.get("font_size", 14),
+                    text=text,
+                    rich_text=rich_text,
+                    font_size=_validated_int(
+                        item.get("font_size"), 14, FONT_SIZE_MIN, FONT_SIZE_MAX
+                    ),
+                    font_family=_validated_choice(
+                        item.get("font_family"),
+                        TextBoxComponent.FONT_FAMILY_CHOICES,
+                        "sans",
+                    ),
+                    font_weight=_validated_choice(
+                        item.get("font_weight"),
+                        TextBoxComponent.FONT_WEIGHT_CHOICES,
+                        "normal",
+                    ),
+                    italic=_validated_bool(item.get("italic"), False),
+                    underline=_validated_bool(item.get("underline"), False),
+                    text_align=_validated_choice(
+                        item.get("text_align"),
+                        TextBoxComponent.TEXT_ALIGN_CHOICES,
+                        "left",
+                    ),
+                    vertical_align=_validated_choice(
+                        item.get("vertical_align"),
+                        TextBoxComponent.VERTICAL_ALIGN_CHOICES,
+                        "top",
+                    ),
+                    text_color=_validated_hex_color(
+                        item.get("text_color"), "#1e293b"
+                    ),
+                    background_color=_validated_hex_color(
+                        item.get("background_color"), "#ffffff"
+                    ),
+                    line_height=_validated_number(
+                        item.get("line_height"), 1.5, LINE_HEIGHT_MIN, LINE_HEIGHT_MAX
+                    ),
                 )
 
             elif component_name == "NumberOfEventsComponent":

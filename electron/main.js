@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog } = require('electron');
+const { app, BrowserWindow, dialog, shell } = require('electron');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const http = require('http');
@@ -183,6 +183,16 @@ function startFrontendServer() {
 // Window
 // ---------------------------------------------------------------------------
 
+/** The only schemes a Text Box link may hand to the operating system. */
+function isExternalOpenable(raw) {
+  try {
+    const { protocol } = new URL(raw);
+    return protocol === 'http:' || protocol === 'https:' || protocol === 'mailto:';
+  } catch {
+    return false;
+  }
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -193,6 +203,34 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
     },
+  });
+
+  // Text Box links carry target="_blank". Left alone, Electron opens a bare
+  // second BrowserWindow at the external site instead of the user's browser.
+  // The scheme is re-checked here even though the backend and renderer have:
+  // shell.openExternal asks the OS to open whatever the URL names, so this is
+  // the last gate before leaving the sandbox.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (isExternalOpenable(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+
+  // A mailto link carries no target, so it arrives here rather than through
+  // the handler above. Following it would strand the user on a website inside
+  // the app frame with no way back.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    let target;
+    try {
+      target = new URL(url);
+    } catch {
+      event.preventDefault();
+      return;
+    }
+    // The port is picked at runtime, so compare against the window.
+    const current = new URL(mainWindow.webContents.getURL());
+    if (target.origin === current.origin) return;
+    event.preventDefault();
+    if (isExternalOpenable(url)) shell.openExternal(url);
   });
 
   mainWindow.loadURL(isDev ? 'http://localhost:3000' : `${frontendOrigin()}/`);
