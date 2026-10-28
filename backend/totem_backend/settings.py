@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 
 import os
+import sys
 from pathlib import Path
 from datetime import timedelta
 from corsheaders.defaults import default_headers
@@ -26,9 +27,27 @@ try:
 except ImportError:
     HAS_WHITENOISE = False
 
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None
+
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Per-developer settings (OAuth credentials, DEV_LOGIN, …) can live in
+# backend/.env, which is git-ignored; see backend/.env.example. Variables
+# already set in the environment win, so a server's real config is never
+# overridden by a stray file. Must run before any os.environ read below.
+if load_dotenv:
+    load_dotenv(BASE_DIR / '.env')
+elif (BASE_DIR / '.env').exists():
+    print(
+        'WARNING: backend/.env was found but python-dotenv is not installed, '
+        'so it is being ignored. Run: pip install -r backend/requirements.txt',
+        file=sys.stderr,
+    )
 
 # Writable runtime data (SQLite DB, uploaded logs, result cache). Defaults to
 # BASE_DIR for development and server deployments. The Electron app passes
@@ -328,3 +347,33 @@ if LOCAL_MODE:
 LOCAL_GUEST_USERNAME = 'Guest'
 LOCAL_GUEST_PASSWORD = 'guest'
 SEED_GUEST_USER = LOCAL_MODE or os.environ.get('SEED_GUEST_USER', '0') == '1'
+
+# ---------------------------------------------------------------------------
+# Login page mode
+# ---------------------------------------------------------------------------
+# DEV_LOGIN=1: the login page shows the username/password form so developers can sign in without OAuth apps.
+# DEV_LOGIN=0: the login page offers only GitHub/Google OAuth.
+# Defaults to DEBUG, so `npm run dev` gets the form and a deployment with
+# DEBUG=False gets OAuth. This only changes the page; /token/ stays enabled
+# because the desktop app's Guest auto-login uses it.
+DEV_LOGIN = os.environ.get('DEV_LOGIN', str(DEBUG)).lower() in ('true', '1', 't')
+
+# ---------------------------------------------------------------------------
+# OAuth login (GitHub / Google) — see authentification/oauth.py
+# ---------------------------------------------------------------------------
+# A provider is offered on the login page only when both its id and secret
+# are set. Register this callback URL with each provider:
+#   <backend origin>/auth/oauth/github/callback/
+#   <backend origin>/auth/oauth/google/callback/
+OAUTH_PROVIDERS = {
+    'github': {
+        'client_id': os.environ.get('GITHUB_OAUTH_CLIENT_ID', ''),
+        'client_secret': os.environ.get('GITHUB_OAUTH_CLIENT_SECRET', ''),
+    },
+    'google': {
+        'client_id': os.environ.get('GOOGLE_OAUTH_CLIENT_ID', ''),
+        'client_secret': os.environ.get('GOOGLE_OAUTH_CLIENT_SECRET', ''),
+    },
+}
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000').rstrip('/')
+OAUTH_REDIRECT_BASE_URL = os.environ.get('OAUTH_REDIRECT_BASE_URL', '').rstrip('/')
