@@ -18,6 +18,7 @@ both is reported as disabled and its endpoints return an error.
 """
 
 import json
+import logging
 import re
 import urllib.error
 import urllib.parse
@@ -31,6 +32,8 @@ from django.db import transaction
 from .models import SocialAccount
 
 HTTP_TIMEOUT_SECONDS = 10
+
+logger = logging.getLogger(__name__)
 
 
 class OAuthError(Exception):
@@ -115,25 +118,55 @@ def _request_json(url, data=None, token=None):
     try:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_SECONDS) as resp:
             return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        # The provider answered, but refused (e.g. Google's 400 for a wrong
+        # redirect_uri or secret). Must come before URLError, its base class,
+        # so misconfiguration isn't reported as the provider being down.
+        detail = _error_detail(exc)
+        logger.warning('OAuth request to %s failed: HTTP %s %s', url, exc.code, detail)
+        raise OAuthError('provider_error', detail) from exc
     except (urllib.error.URLError, TimeoutError, ValueError) as exc:
         raise OAuthError('provider_unreachable', str(exc)) from exc
 
 
+def _error_detail(exc):
+    try:
+        payload = json.loads(exc.read().decode())
+    except (OSError, ValueError):
+        return exc.reason or ''
+    if not isinstance(payload, dict):
+        return ''
+    return str(
+        payload.get('error_description')
+        or payload.get('error')
+        or payload.get('message')
+        or ''
+    )
+
+
 def _exchange_code(provider_name, code, redirect_uri):
     client_id, client_secret = credentials(provider_name)
-    payload = _request_json(
-        PROVIDERS[provider_name].token_url,
-        data={
-            'client_id': client_id,
-            'client_secret': client_secret,
-            'code': code,
-            'redirect_uri': redirect_uri,
-            'grant_type': 'authorization_code',
-        },
-    )
+    try:
+        payload = _request_json(
+            PROVIDERS[provider_name].token_url,
+            data={
+                'client_id': client_id,
+                'client_secret': client_secret,
+                'code': code,
+                'redirect_uri': redirect_uri,
+                'grant_type': 'authorization_code',
+            },
+        )
+    except OAuthError as exc:
+        if exc.code != 'provider_error':
+            raise
+        raise OAuthError('token_exchange_failed', str(exc)) from exc
     token = payload.get('access_token')
     if not token:
-        raise OAuthError('token_exchange_failed', str(payload.get('error', '')))
+        # GitHub reports failures as HTTP 200 with an `error` field.
+        detail = str(payload.get('error_description') or payload.get('error') or '')
+        logger.warning('OAuth token exchange with %s failed: %s', provider_name, detail)
+        raise OAuthError('token_exchange_failed', detail)
     return token
 
 

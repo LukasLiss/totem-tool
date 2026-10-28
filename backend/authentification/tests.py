@@ -1,3 +1,5 @@
+import io
+import urllib.error
 import urllib.parse
 from unittest import mock
 
@@ -155,3 +157,52 @@ class GitHubIdentityTests(TestCase):
         ):
             oauth._github_identity('t')
         self.assertEqual(ctx.exception.code, 'no_verified_email')
+
+
+@override_settings(**OAUTH_SETTINGS)
+class ProviderErrorTests(TestCase):
+    def _http_error(self, status, body):
+        return urllib.error.HTTPError(
+            'https://provider.test', status, 'Bad Request', {}, io.BytesIO(body)
+        )
+
+    def test_rejected_token_exchange_is_not_reported_as_unreachable(self):
+        err = self._http_error(400, b'{"error": "redirect_uri_mismatch"}')
+        with (
+            mock.patch('urllib.request.urlopen', side_effect=err),
+            self.assertLogs('authentification.oauth', 'WARNING'),
+            self.assertRaises(oauth.OAuthError) as ctx,
+        ):
+            oauth._exchange_code('github', 'code', 'http://testserver/cb')
+        self.assertEqual(ctx.exception.code, 'token_exchange_failed')
+        self.assertIn('redirect_uri_mismatch', str(ctx.exception))
+
+    def test_github_200_error_payload_is_token_exchange_failure(self):
+        with (
+            mock.patch.object(
+                oauth, '_request_json', return_value={'error': 'bad_verification_code'}
+            ),
+            self.assertLogs('authentification.oauth', 'WARNING'),
+            self.assertRaises(oauth.OAuthError) as ctx,
+        ):
+            oauth._exchange_code('github', 'code', 'http://testserver/cb')
+        self.assertEqual(ctx.exception.code, 'token_exchange_failed')
+
+    def test_rejected_api_call_is_provider_error(self):
+        err = self._http_error(403, b'{"message": "Resource not accessible"}')
+        with (
+            mock.patch('urllib.request.urlopen', side_effect=err),
+            self.assertLogs('authentification.oauth', 'WARNING'),
+            self.assertRaises(oauth.OAuthError) as ctx,
+        ):
+            oauth._request_json('https://api.github.com/user/emails', token='t')
+        self.assertEqual(ctx.exception.code, 'provider_error')
+
+    def test_network_failure_is_still_unreachable(self):
+        err = urllib.error.URLError('connection refused')
+        with (
+            mock.patch('urllib.request.urlopen', side_effect=err),
+            self.assertRaises(oauth.OAuthError) as ctx,
+        ):
+            oauth._request_json('https://api.github.com/user', token='t')
+        self.assertEqual(ctx.exception.code, 'provider_unreachable')

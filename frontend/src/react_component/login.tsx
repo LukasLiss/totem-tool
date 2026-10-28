@@ -42,6 +42,10 @@ const OAUTH_ERROR_MESSAGES: Record<string, string> = {
   provider_disabled:
     "This sign-in option hasn't been set up on the server yet. Contact an administrator.",
   provider_unreachable: "Could not reach the sign-in provider. Please try again.",
+  token_exchange_failed:
+    "The sign-in provider rejected the server's request. Contact an administrator.",
+  provider_error:
+    "The sign-in provider rejected the server's request. Contact an administrator.",
 };
 
 const GitHubIcon = () => (
