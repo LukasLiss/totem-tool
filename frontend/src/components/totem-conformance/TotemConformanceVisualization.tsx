@@ -1,16 +1,21 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  applyNodeChanges,
   Background,
   BackgroundVariant,
   Controls,
   ReactFlow,
   ReactFlowProvider,
+  useReactFlow,
+  type NodeChange,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { RefreshCcw } from "lucide-react";
 
 import type { TotemConformanceResponse } from "@/api/totemConformanceApi";
 import TotemObjectTypeNode from "@/components/totem/TotemObjectTypeNode";
 import TotemRelationEdge from "@/components/totem/TotemRelationEdge";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 import {
@@ -27,7 +32,8 @@ import {
 } from "./TotemConformanceDetails";
 import { TotemConformanceSummary } from "./TotemConformanceSummary";
 import {
-  createTotemFlowElements,
+  createTotemFlowEdges,
+  createTotemFlowNodes,
   type TotemConformanceEdgeType,
   type TotemConformanceNodeType,
 } from "./visualizationFlow";
@@ -119,13 +125,54 @@ function TotemConformanceCanvas({
   selection,
   onSelect,
 }: TotemConformanceCanvasProps) {
-  const elements = useMemo(
+  const { fitView } = useReactFlow();
+  // React Flow owns the node positions from here on, so a box the user drags
+  // stays where they put it. Only the edges are rebuilt per dimension and
+  // selection — they carry the fitness colour and no position.
+  const [nodes, setNodes] = useState<TotemConformanceNodeType[]>(() =>
+    createTotemFlowNodes(model)
+  );
+  const seededModel = useRef(model);
+
+  useEffect(() => {
+    if (seededModel.current === model) return;
+    seededModel.current = model;
+    setNodes(createTotemFlowNodes(model));
+  }, [model]);
+
+  const onNodesChange = useCallback(
+    (changes: NodeChange<TotemConformanceNodeType>[]) =>
+      setNodes((current) => applyNodeChanges(changes, current)),
+    []
+  );
+
+  // Restores the generated layout after manual dragging, as the TOTeM Miner's
+  // own Relayout button does. fitView waits a frame so React Flow has taken
+  // the reset positions before it measures them.
+  const handleRelayout = useCallback(() => {
+    setNodes(createTotemFlowNodes(model));
+    requestAnimationFrame(() => fitView({ padding: 0.25 }));
+  }, [fitView, model]);
+
+  // Selection is applied on top of the live nodes rather than baked into them,
+  // so clicking a box never rebuilds the layout.
+  const selectedObjectTypeId =
+    selection?.kind === "objectType" ? selection.objectType : null;
+  const displayedNodes = useMemo(
     () =>
-      createTotemFlowElements(model, {
+      nodes.map((node) =>
+        node.selected === (node.id === selectedObjectTypeId)
+          ? node
+          : { ...node, selected: node.id === selectedObjectTypeId }
+      ),
+    [nodes, selectedObjectTypeId]
+  );
+
+  const edges = useMemo(
+    () =>
+      createTotemFlowEdges(model, {
         conformance: lookup,
         dimension: activeDimension,
-        selectedObjectTypeId:
-          selection?.kind === "objectType" ? selection.objectType : null,
         selectedRelationId:
           selection?.kind === "relation" ? selection.relationId : null,
       }),
@@ -145,18 +192,30 @@ function TotemConformanceCanvas({
       data-asset-id={result.asset_id}
     >
       <div className="flex min-h-11 shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b bg-background px-3 py-2">
-        <span className="text-xs font-medium text-foreground">
-          {activeDefinition.label} fitness
-        </span>
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="text-xs font-medium text-foreground">
+            {activeDefinition.label} fitness
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1.5 px-2 text-xs"
+            onClick={handleRelayout}
+            title="Restore the generated layout"
+          >
+            <RefreshCcw className="size-3.5" />
+            Relayout
+          </Button>
+        </div>
         <FitnessLegend />
       </div>
       <div className="min-h-0 min-w-0 flex-1">
         <ReactFlow<TotemConformanceNodeType, TotemConformanceEdgeType>
-          nodes={elements.nodes}
-          edges={elements.edges}
+          nodes={displayedNodes}
+          edges={edges}
+          onNodesChange={onNodesChange}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
-          nodesDraggable={false}
           nodesConnectable={false}
           elementsSelectable
           onNodeClick={(_, node) =>
