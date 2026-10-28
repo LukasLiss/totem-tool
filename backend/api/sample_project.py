@@ -27,6 +27,7 @@ from django.core.files.base import ContentFile
 from django.db import transaction
 
 from .asset_formats import SQL_QUERY_ASSET_SCHEMA, SQL_QUERY_ASSET_VERSION
+from .rich_text import plain_text_from_doc
 
 logger = logging.getLogger(__name__)
 
@@ -42,13 +43,6 @@ SAMPLE_PROJECT_NAME = "container-logistics-demo"      # also an upload directory
 SAMPLE_PROJECT_DISPLAY_NAME = "Meridian Freight Systems — Container Operations"
 SAMPLE_DASHBOARD_NAME = "Container Ops Overview"      # Dashboard.name caps at 30
 SAMPLE_LOGO_ASSET_NAME = "Meridian Freight Logo"
-
-SAMPLE_HEADLINE = """Meridian Freight Systems
-Container Operations Overview
-
-From order intake to departure, this dashboard follows the container lifecycle
-across our terminal network: customer orders, container handling, vehicle
-dispatch and turnaround performance."""
 
 # A stylised shipping container: Deep Blue body, Slate ridges and wordmark, an
 # Amber handling accent and an Emerald route swoosh -- the four object-type
@@ -267,14 +261,190 @@ def _bundled_sample_log_path() -> Path:
     return base / "sample_data" / SAMPLE_LOG_FILENAME
 
 
+# --- The dashboard's two text panels -----------------------------------------
+#
+# Text boxes store a TipTap/ProseMirror document in `rich_text` (#373). The
+# builders below assemble one; every value they emit has to survive
+# `validated_rich_text`, which rebuilds a document from a whitelist -- hence
+# lowercase hex colours and "NNpx" sizes. `SampleProjectRichTextTests` asserts
+# the round trip, so a typo here fails a test rather than being silently
+# dropped on the way into the database.
+#
+# A document owns all text-level formatting: once `rich_text` is set the box's
+# font_size/text_color/... fields are ignored entirely (componentMap.tsx renders
+# a rich box against the plain defaults), so nothing here sets them. Only
+# background_color and vertical_align stay box-level.
+#
+# Blocks render with no margins, so vertical space comes from empty paragraphs.
+#
+# No `heading` nodes: the toolbar has no heading control (one needs a markdown
+# "## " while typing), so a title here is bold plus a font size -- which keeps
+# everything in this dashboard reproducible from the toolbar the user has.
+
+SLATE = "#1e293b"       # body text, from docs/totem_design_system.md
+DEEP_BLUE = "#2563eb"   # accent
+MUTED = "#64748b"       # metadata
+
+
+def _run(text, *, bold=False, italic=False, size=None, color=None):
+    """One run of text. Mark order matches what the validator emits."""
+    marks = []
+    if bold:
+        marks.append({"type": "bold"})
+    if italic:
+        marks.append({"type": "italic"})
+    attrs = {}
+    if color is not None:
+        attrs["color"] = color
+    if size is not None:
+        attrs["fontSize"] = f"{size}px"
+    if attrs:
+        marks.append({"type": "textStyle", "attrs": attrs})
+    node = {"type": "text", "text": text}
+    if marks:
+        node["marks"] = marks
+    return node
+
+
+def _para(runs=(), align=None):
+    """A paragraph, or -- with no runs -- the blank line between two blocks.
+
+    `align` is worth setting on every paragraph that holds text: a rich box
+    inherits text-align from its container (only the plain-text path writes it
+    explicitly), so an unaligned document silently picks up whatever the card
+    does -- which is `center`, and makes a list look broken.
+    """
+    node = {"type": "paragraph"}
+    if align:
+        node["attrs"] = {"textAlign": align}
+    if runs:
+        node["content"] = list(runs)
+    return node
+
+
+def _ordered_list(items, align=None):
+    return {
+        "type": "orderedList",
+        "content": [
+            {"type": "listItem", "content": [_para(runs, align)]} for runs in items
+        ],
+    }
+
+
+def _rule():
+    return {"type": "horizontalRule"}
+
+
+def sample_headline_doc():
+    """The masthead: who this is, what the log covers, how big it is."""
+    return {
+        "type": "doc",
+        "content": [
+            _para([_run("Meridian Freight Systems",
+                        bold=True, size=30, color=SLATE)], "center"),
+            _para([_run("Container Operations Overview", size=17, color=DEEP_BLUE)],
+                  "center"),
+            _para(),
+            _rule(),
+            _para(),
+            _para([
+                _run("From "),
+                _run("order intake to departure", bold=True),
+                _run(
+                    ", this dashboard follows the container lifecycle across our "
+                    "terminal network — customer orders, container handling, "
+                    "vehicle dispatch and turnaround performance."
+                ),
+            ], "center"),
+            _para(),
+            _para([
+                _run(
+                    "Bundled sample log · 35,372 events · 13,882 objects "
+                    "· 7 object types · May 2023 – Aug 2024",
+                    size=12,
+                    color=MUTED,
+                )
+            ], "center"),
+        ],
+    }
+
+
+def sample_guide_doc():
+    """A short reading guide, below the widgets it describes."""
+    return {
+        "type": "doc",
+        "content": [
+            _para([_run("How to read this dashboard",
+                        bold=True, size=20, color=SLATE)], "left"),
+            _para(),
+            _ordered_list([
+                [
+                    _run("Headline KPIs", bold=True),
+                    _run(
+                        " — how many customer orders the network handled, how "
+                        "long one took end to end, and how often a container had to "
+                        "be rescheduled."
+                    ),
+                ],
+                [
+                    _run("Monthly Order Volume", bold=True),
+                    _run(
+                        " — order intake per month. The short bars at either "
+                        "end are partial months, not a collapse in demand."
+                    ),
+                ],
+                [
+                    _run("Terminal Workload by Activity", bold=True),
+                    _run(
+                        " — which of the log's 14 activities absorb the "
+                        "handling effort. The long tail is grouped into one slice "
+                        "so the ring stays readable."
+                    ),
+                ],
+                [
+                    _run("Process Areas", bold=True),
+                    _run(
+                        " — the seven object types in the log, arranged into "
+                        "levels by how they interact with one another."
+                    ),
+                ],
+            ], "left"),
+            _para(),
+            _rule(),
+            _para(),
+            {
+                "type": "blockquote",
+                "content": [
+                    _para([
+                        _run(
+                            "The bar and donut charts run stored queries: edit one "
+                            "under Project Assets → SQL Queries and the chart "
+                            "follows. The rest of the query store is there too — "
+                            "lead times, turnaround, the exception lists.",
+                            italic=True,
+                            size=13,
+                            color=MUTED,
+                        )
+                    ], "left")
+                ],
+            },
+        ],
+    }
+
+
+def _text_box(doc, **fields):
+    """A text box's fields. `text` is kept in step with the document so the
+    column stays meaningful for anything that still reads it."""
+    return {"rich_text": doc, "text": plain_text_from_doc(doc), **fields}
+
+
 def sample_dashboard_layout():
     """The sample dashboard, as (model name, component_name, geometry, fields).
 
-    Geometry is GridStack's own: a 12-column grid with 70px rows. Two branding
-    widgets across the top, then six representations of the log -- three KPIs, a
-    bar chart, a donut and the process areas. The header row is 5 rows tall
-    rather than the side panel's default 1 because the text card carries a
-    320px min-height, and 5 x 70px is the first size that clears it.
+    Geometry is GridStack's own: a 12-column grid with 70px rows. A logo and a
+    masthead across the top, then six representations of the log -- three KPIs,
+    a bar chart, a donut and the process areas -- and a reading guide under
+    them. The two text panels are rich-text documents; see the builders above.
 
     Returned lazily (not a module constant) so the models are imported inside
     the app registry rather than at import time.
@@ -294,10 +464,9 @@ def sample_dashboard_layout():
             "image_fit": "contain",
             "image_alignment": "center",
         }),
-        (TextBoxComponent, "TextBoxComponent", (3, 0, 9, 5), {
-            "text": SAMPLE_HEADLINE,
-            "font_size": 16,
-        }),
+        (TextBoxComponent, "TextBoxComponent", (3, 0, 9, 5), _text_box(
+            sample_headline_doc(), vertical_align="middle",
+        )),
         (KpiComponent, "KpiComponent", (0, 5, 4, 3), {
             "title": "Customer Orders Handled",
             "query": QUERY_CUSTOMER_ORDERS,
@@ -337,6 +506,11 @@ def sample_dashboard_layout():
         # No query and no title field: the process areas are discovered from the
         # log, and the card's heading is frontend chrome.
         (ProcessAreaComponent, "ProcessAreaComponent", (0, 14, 12, 7), {}),
+        # Below everything it describes, so the widgets lead and the guide
+        # follows. Appended at y=21, where the process areas end.
+        (TextBoxComponent, "TextBoxComponent", (0, 21, 12, 5), _text_box(
+            sample_guide_doc(),
+        )),
     ]
 
 

@@ -5772,6 +5772,21 @@ class SampleProjectSeedTests(TestCase):
         ]
         self.assertEqual(actual, expected)
 
+    def test_text_boxes_are_seeded_as_rich_text(self):
+        self._seed()
+
+        from .models import TextBoxComponent
+        from .rich_text import plain_text_from_doc, validated_rich_text
+
+        boxes = TextBoxComponent.objects.order_by("order")
+        self.assertEqual(boxes.count(), 2)
+        for box in boxes:
+            with self.subTest(order=box.order):
+                self.assertIsNotNone(box.rich_text)
+                # What is in the database is what the API would have accepted.
+                self.assertEqual(validated_rich_text(box.rich_text), box.rich_text)
+                self.assertEqual(box.text, plain_text_from_doc(box.rich_text))
+
     def test_image_component_points_at_the_seeded_logo(self):
         self._seed()
 
@@ -5934,3 +5949,113 @@ class SampleProjectSeedTests(TestCase):
         widget.refresh_from_db()
         self.assertIsNone(widget.query_asset_id)
         self.assertEqual(widget.query, sql_before)
+
+
+class SampleProjectRichTextTests(SimpleTestCase):
+    """The dashboard's two text panels (#373 rich text in the #368 sample).
+
+    The seeder writes straight through the ORM, so nothing makes these
+    documents pass the whitelist that every browser save goes through. These
+    tests are what does.
+    """
+
+    def _docs(self):
+        from .sample_project import sample_guide_doc, sample_headline_doc
+
+        return {"headline": sample_headline_doc(), "guide": sample_guide_doc()}
+
+    def test_documents_survive_the_whitelist_unchanged(self):
+        from .rich_text import validated_rich_text
+
+        for name, doc in self._docs().items():
+            with self.subTest(document=name):
+                # Not merely "valid": identical. A colour in the wrong case or
+                # a bare font size would be dropped here and nowhere else.
+                self.assertEqual(validated_rich_text(doc), doc)
+
+    def test_documents_carry_no_links(self):
+        from .rich_text import validated_rich_text
+
+        def marks(node):
+            yield from (mark.get("type") for mark in node.get("marks") or [])
+            for child in node.get("content") or []:
+                yield from marks(child)
+
+        for name, doc in self._docs().items():
+            with self.subTest(document=name):
+                found = set(marks(doc))
+                self.assertNotIn("link", found)
+                self.assertNotIn("dashboardLink", found)
+                # A dashboard link needs the project's ids to validate, so a
+                # document holding one could not round-trip above.
+                self.assertEqual(validated_rich_text(doc, None), doc)
+
+    def test_every_block_with_text_declares_its_alignment(self):
+        """A rich box inherits text-align from its card, which is `center`.
+
+        Only the plain-text path writes alignment explicitly, so a block that
+        leaves it unset picks that up -- which renders an ordered list with a
+        ragged left edge and the numbers stranded.
+        """
+        def blocks(node):
+            if node.get("type") in ("paragraph", "heading"):
+                yield node
+            for child in node.get("content") or []:
+                yield from blocks(child)
+
+        for name, doc in self._docs().items():
+            for block in blocks(doc):
+                if not block.get("content"):
+                    continue  # a spacer has no text to align
+                with self.subTest(document=name, block=block["type"]):
+                    self.assertIn(
+                        (block.get("attrs") or {}).get("textAlign"),
+                        ("left", "center", "right", "justify"),
+                    )
+
+    def test_documents_use_no_headings(self):
+        """A title here is bold plus a font size, not a heading node.
+
+        The toolbar has no heading control -- one needs a markdown "## " while
+        typing -- so a heading in the sample would be formatting the user can
+        see but not reproduce.
+        """
+        def types(node):
+            yield node.get("type")
+            for child in node.get("content") or []:
+                yield from types(child)
+
+        for name, doc in self._docs().items():
+            with self.subTest(document=name):
+                self.assertNotIn("heading", set(types(doc)))
+
+    def test_text_boxes_keep_text_in_step_with_their_document(self):
+        from .rich_text import plain_text_from_doc
+        from .sample_project import sample_dashboard_layout
+
+        for _model, name, _geometry, fields in sample_dashboard_layout():
+            if name != "TextBoxComponent":
+                continue
+            with self.subTest(text=fields["text"][:30]):
+                self.assertEqual(
+                    fields["text"], plain_text_from_doc(fields["rich_text"])
+                )
+                self.assertTrue(fields["text"].strip())
+
+    def test_text_boxes_leave_text_formatting_to_the_document(self):
+        """A box with a document ignores its own text-level fields.
+
+        componentMap.tsx renders a rich box against the plain defaults, so
+        setting these here would be dead configuration that reads as live.
+        """
+        from .sample_project import sample_dashboard_layout
+
+        dead = {
+            "font_size", "font_family", "font_weight", "italic",
+            "underline", "text_align", "text_color", "line_height",
+        }
+        for _model, name, _geometry, fields in sample_dashboard_layout():
+            if name != "TextBoxComponent":
+                continue
+            with self.subTest(text=fields["text"][:30]):
+                self.assertEqual(dead & set(fields), set())
