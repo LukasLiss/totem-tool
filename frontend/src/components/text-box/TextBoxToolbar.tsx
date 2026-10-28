@@ -2,8 +2,10 @@
  * Formatting toolbar for the Text Box (#373).
  *
  * Bold / italic / underline / colour / size / font act on the **current
- * selection** through TipTap commands; alignment acts on the paragraph the
- * cursor is in. Background colour and vertical alignment are the only
+ * selection** through TipTap commands; alignment and quote act on the
+ * paragraph the cursor is in, and the divider inserts a block at it. There is
+ * deliberately no heading control: a heading is bold plus a font size here.
+ * Lists have no button either -- `1. ` and `- ` while typing make them. Background colour and vertical alignment are the only
  * box-level settings left, because neither can be expressed per paragraph —
  * those are patched onto the GridStack node through `onFormatChange`.
  *
@@ -11,7 +13,7 @@
  * so what is highlighted is always what the selection actually carries.
  */
 import React, { useState } from 'react';
-import { Bold, Italic, Link2, Underline } from 'lucide-react';
+import { Bold, Italic, Link2, Minus, Quote, Underline } from 'lucide-react';
 import type { Editor } from '@tiptap/react';
 import { useEditorState } from '@tiptap/react';
 
@@ -400,6 +402,7 @@ export function TextBoxToolbar({
         bold: instance.isActive('bold'),
         italic: instance.isActive('italic'),
         underline: instance.isActive('underline'),
+        blockquote: instance.isActive('blockquote'),
         href: (instance.getAttributes('link') as { href?: string }).href ?? null,
         dashboardId: dashboardAttrs.dashboardId ?? null,
         // Nothing to act on when the caret is collapsed outside a link:
@@ -523,6 +526,33 @@ export function TextBoxToolbar({
           onClick={() => chain().toggleUnderline().run()}
         >
           <Underline />
+        </Button>
+        <Button
+          type="button"
+          size="icon"
+          variant={state?.blockquote ? 'secondary' : 'outline'}
+          aria-label="Quote"
+          aria-pressed={Boolean(state?.blockquote)}
+          title="Quote (this paragraph)"
+          disabled={disabled}
+          className="size-8"
+          onMouseDown={keepSelection}
+          onClick={() => chain().toggleBlockquote().run()}
+        >
+          <Quote />
+        </Button>
+        <Button
+          type="button"
+          size="icon"
+          variant="outline"
+          aria-label="Divider"
+          title="Divider"
+          disabled={disabled}
+          className="size-8"
+          onMouseDown={keepSelection}
+          onClick={() => chain().setHorizontalRule().run()}
+        >
+          <Minus />
         </Button>
         {editor && (
           <LinkField
