@@ -202,6 +202,7 @@ class ProviderErrorTests(TestCase):
         err = urllib.error.URLError('connection refused')
         with (
             mock.patch('urllib.request.urlopen', side_effect=err),
+            self.assertLogs('authentification.oauth', 'WARNING'),
             self.assertRaises(oauth.OAuthError) as ctx,
         ):
             oauth._request_json('https://api.github.com/user', token='t')

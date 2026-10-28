@@ -20,10 +20,16 @@ both is reported as disabled and its endpoints return an error.
 import json
 import logging
 import re
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+
+try:
+    import certifi
+except ImportError:
+    certifi = None
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -34,6 +40,13 @@ from .models import SocialAccount
 HTTP_TIMEOUT_SECONDS = 10
 
 logger = logging.getLogger(__name__)
+
+# The python.org macOS builds ship without trusted CA certificates (until
+# "Install Certificates.command" is run), so every HTTPS call to a provider
+# fails verification. certifi's bundle works the same on every platform.
+_SSL_CONTEXT = ssl.create_default_context(
+    cafile=certifi.where() if certifi else None
+)
 
 
 class OAuthError(Exception):
@@ -116,7 +129,9 @@ def _request_json(url, data=None, token=None):
     body = urllib.parse.urlencode(data).encode() if data is not None else None
     req = urllib.request.Request(url, data=body, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_SECONDS) as resp:
+        with urllib.request.urlopen(
+            req, timeout=HTTP_TIMEOUT_SECONDS, context=_SSL_CONTEXT
+        ) as resp:
             return json.loads(resp.read().decode())
     except urllib.error.HTTPError as exc:
         # The provider answered, but refused (e.g. Google's 400 for a wrong
@@ -126,6 +141,7 @@ def _request_json(url, data=None, token=None):
         logger.warning('OAuth request to %s failed: HTTP %s %s', url, exc.code, detail)
         raise OAuthError('provider_error', detail) from exc
     except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+        logger.warning('OAuth request to %s failed: %s', url, exc)
         raise OAuthError('provider_unreachable', str(exc)) from exc
 
 
