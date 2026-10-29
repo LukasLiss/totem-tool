@@ -7,6 +7,7 @@ import {
   useComputationStore,
 } from "@/store/computationStore";
 import { API_BASE_URL, getApiUrl } from "../config/api";
+import { LOCAL_MODE } from "@/lib/env";
 
 /**
  * Configure default Axios base URL from environment / config
@@ -123,6 +124,66 @@ async function guestReAuth() {
   return access;
 }
 
+// One refresh for everyone: concurrent callers share the in-flight promise.
+// In local mode a failed refresh (refresh token expired too) falls back to a
+// fresh Guest login, so the desktop app never ends up signed out.
+function sharedRefresh() {
+  if (!refreshInFlight) {
+    refreshInFlight = performRefresh()
+      .catch((err) => {
+        if (LOCAL_MODE) return guestReAuth();
+        throw err;
+      })
+      .finally(() => {
+        refreshInFlight = null;
+      });
+  }
+  return refreshInFlight;
+}
+
+const TOKEN_URL = /\/token\/(refresh\/)?$/;
+
+// True when the JWT's `exp` has passed (with a little slack, so a token about
+// to expire isn't sent and rejected in flight). Unparseable tokens count as
+// not expired and are left to the server to judge.
+function isExpired(token) {
+  try {
+    const payload = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    const { exp } = JSON.parse(atob(payload));
+    return typeof exp === "number" && exp * 1000 < Date.now() + 10_000;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Proactive refresh
+ * -----------------
+ * The stored access token outlives the app session, so after a restart or a
+ * long idle the first requests would carry an expired token, each come back
+ * 401 and only then be retried by the response interceptor below. Checking
+ * the expiry up front and refreshing once before sending avoids those 401s.
+ * If the refresh fails, the request goes out unchanged and the 401 handling
+ * below decides what happens (logout in normal mode).
+ */
+axios.interceptors.request.use(async (config) => {
+  if (config._skipAuthRefresh || TOKEN_URL.test(String(config.url ?? ""))) {
+    return config;
+  }
+  const token = localStorage.getItem("access_token");
+  if (!token || token === "null" || token === "undefined" || !isExpired(token)) {
+    return config;
+  }
+  try {
+    const newAccess = await sharedRefresh();
+    config.headers = config.headers || {};
+    config.headers["Authorization"] = `Bearer ${newAccess}`;
+  } catch {
+    /* fall through: the response interceptor handles the 401 */
+  }
+  return config;
+});
+
 /**
  * Computation tracking
  * --------------------
@@ -216,7 +277,7 @@ axios.interceptors.response.use(
       error.response.status === 401 &&
       !cfg._skipAuthRefresh &&
       !cfg._retried &&
-      !/\/token\/(refresh\/)?$/.test(url);
+      !TOKEN_URL.test(url);
     if (!willRetry) finishTrackedJob(cfg);
     // Only handle 401s, and never recurse on the token endpoints themselves
     // (login or refresh): a 401 from /token/ means bad credentials, and
@@ -226,7 +287,7 @@ axios.interceptors.response.use(
       error.response.status !== 401 ||
       cfg._skipAuthRefresh ||
       cfg._retried ||
-      /\/token\/(refresh\/)?$/.test(url)
+      TOKEN_URL.test(url)
     ) {
       return Promise.reject(error);
     }
@@ -234,30 +295,14 @@ axios.interceptors.response.use(
     // Mark the failed request so we don't retry it more than once.
     cfg._retried = true;
 
-    // Coalesce concurrent refreshes: only one /token/refresh/ in flight.
-    if (!refreshInFlight) {
-      refreshInFlight = performRefresh().finally(() => {
-        refreshInFlight = null;
-      });
-    }
-
     try {
-      const newAccess = await refreshInFlight;
+      const newAccess = await sharedRefresh();
       cfg.headers = cfg.headers || {};
       cfg.headers["Authorization"] = `Bearer ${newAccess}`;
       return axios(cfg);
     } catch (refreshError) {
-      if (import.meta.env.VITE_LOCAL_MODE) {
-        // Local mode: silently re-authenticate as Guest instead of redirecting.
-        try {
-          const newAccess = await guestReAuth();
-          cfg.headers = cfg.headers || {};
-          cfg.headers["Authorization"] = `Bearer ${newAccess}`;
-          return axios(cfg);
-        } catch {
-          return Promise.reject(refreshError);
-        }
-      }
+      // Local mode: even the Guest re-login failed; nothing to redirect to.
+      if (LOCAL_MODE) return Promise.reject(refreshError);
       // Normal mode: refresh token is gone or itself expired — force logout.
       localStorage.clear();
       delete axios.defaults.headers.common["Authorization"];
