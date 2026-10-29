@@ -3,7 +3,9 @@
 # See docs/DOCKER.md.
 
 # ---- Frontend build ---------------------------------------------------------
-FROM node:22-slim AS frontend
+# The output is plain JS/CSS, so build it natively on the build machine even
+# when the runtime image targets another architecture (avoids slow emulation).
+FROM --platform=$BUILDPLATFORM node:22-slim AS frontend
 
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
