@@ -7,6 +7,7 @@
 
 import React from "react";
 import type { LegendPosition, LegendValues } from "@/components/sql-widgets/chartLegendUtils";
+import { cn } from "@/lib/utils";
 
 const WIDTH = 240;
 const HEIGHT = 150;
@@ -55,6 +56,8 @@ interface PieChartSketchProps {
   legendPosition: LegendPosition;
   legendValues: LegendValues;
   showCategoryCount: boolean;
+  /** Sizing of the SVG; defaults to the full width, at most `max-w-sm`. */
+  className?: string;
 }
 
 const PieChartSketch: React.FC<PieChartSketchProps> = ({
@@ -65,6 +68,7 @@ const PieChartSketch: React.FC<PieChartSketchProps> = ({
   legendPosition,
   legendValues,
   showCategoryCount,
+  className,
 }) => {
   const legend = showLegend ? legendPosition : null;
   // One box per shown value: value or percent alone, or both side by side.
@@ -165,7 +169,7 @@ const PieChartSketch: React.FC<PieChartSketchProps> = ({
   return (
     <svg
       viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-      className="mx-auto block w-full max-w-sm"
+      className={cn("mx-auto block", className ?? "w-full max-w-sm")}
       role="img"
       aria-label="Layout sketch of the pie chart"
     >
