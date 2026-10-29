@@ -359,6 +359,20 @@ LOCAL_GUEST_USERNAME = 'Guest'
 LOCAL_GUEST_PASSWORD = 'guest'
 SEED_GUEST_USER = LOCAL_MODE or os.environ.get('SEED_GUEST_USER', '0') == '1'
 
+# True while the Django test runner is building/using the test database. The
+# sample-project seed below runs on post_migrate, which also fires during test
+# database setup -- without this a developer running the suite with LOCAL_MODE=1
+# would copy the sample event log into their real MEDIA_ROOT on every run. Tests
+# that exercise the seed re-enable the flag with override_settings.
+TESTING = 'test' in sys.argv or 'pytest' in sys.modules
+
+# The first-launch sample project (api/sample_project.py): a container-logistics
+# event log and a ready-made dashboard, so a fresh install has something to show.
+# Gated like SEED_GUEST_USER -- desktop installs only, never hosted deployments.
+SEED_SAMPLE_PROJECT = (
+    LOCAL_MODE or os.environ.get('SEED_SAMPLE_PROJECT', '0') == '1'
+) and not TESTING
+
 # ---------------------------------------------------------------------------
 # Login page mode
 # ---------------------------------------------------------------------------

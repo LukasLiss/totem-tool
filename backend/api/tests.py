@@ -5682,3 +5682,425 @@ class CacheClearPermissionTests(TestCase):
             response = self.client.post("/api/cache/clear/")
         self.assertEqual(response.status_code, 200)
         clear.assert_called_once()
+
+
+# --- First-launch sample project (issue #368) --------------------------------
+
+from pathlib import Path
+
+from django.conf import settings
+
+from .models import ImageAsset as _ImageAsset, SeedState
+from .asset_formats import (
+    SQL_QUERY_ASSET_SCHEMA as _SQL_SCHEMA,
+    validate_sql_query_asset_dict,
+)
+from .query_refs import resolve_query_references
+from .sample_project import (
+    LINKED_QUERY_BY_TITLE,
+    SAMPLE_DASHBOARD_NAME,
+    SAMPLE_LOGO_ASSET_NAME,
+    SAMPLE_PROJECT_DISPLAY_NAME,
+    SAMPLE_PROJECT_NAME,
+    SAMPLE_QUERIES,
+    SAMPLE_SEED_KEY,
+    _bundled_sample_log_path,
+    sample_dashboard_layout,
+    seed_sample_project,
+)
+
+# The floors the frontend enforces on each widget (MIN_SIZES in
+# frontend/src/gridstack/lib/gridstackprovider.tsx). Seeding writes geometry
+# straight to the DB, which bypasses that check entirely.
+_FRONTEND_MIN_SIZES = {
+    "TextBoxComponent": (2, 2),
+    "ImageComponent": (2, 2),
+    "KpiComponent": (2, 2),
+    "BarChartComponent": (3, 3),
+    "PieChartComponent": (2, 6),
+    "ProcessAreaComponent": (4, 4),
+}
+
+
+class SampleProjectSeedTests(TestCase):
+    """The sample project seeded on first launch (issue #368).
+
+    SEED_SAMPLE_PROJECT is deliberately false under the test runner, so every
+    test here turns it back on explicitly and points MEDIA_ROOT at a throwaway
+    directory -- the seed copies a 2.3 MB event log.
+    """
+
+    def setUp(self):
+        self.media = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.media, ignore_errors=True)
+
+    def _seed(self):
+        with self.settings(MEDIA_ROOT=self.media, SEED_SAMPLE_PROJECT=True):
+            seed_sample_project(sender=None)
+
+    def test_seeds_the_project_log_logo_and_dashboard(self):
+        self._seed()
+
+        project = Project.objects.get()
+        self.assertEqual(project.name, SAMPLE_PROJECT_NAME)
+        self.assertEqual(project.display_name, SAMPLE_PROJECT_DISPLAY_NAME)
+        self.assertEqual(
+            [u.username for u in project.users.all()],
+            [settings.LOCAL_GUEST_USERNAME],
+        )
+
+        self.assertTrue(EventLog.objects.get().file.name.endswith(".duckdb"))
+
+        logo = _ImageAsset.objects.get()
+        self.assertEqual(logo.name, SAMPLE_LOGO_ASSET_NAME)
+        self.assertEqual(logo.content_type, "image/svg+xml")
+
+        dashboard = Dashboard.objects.get()
+        self.assertEqual(dashboard.name, SAMPLE_DASHBOARD_NAME)
+        self.assertEqual(dashboard.project_id, project.pk)
+
+    def test_components_match_the_declared_layout(self):
+        self._seed()
+
+        expected = [
+            (component_name, geometry)
+            for _model, component_name, geometry, _fields in sample_dashboard_layout()
+        ]
+        actual = [
+            (component.component_name, (component.x, component.y, component.w, component.h))
+            for component in Dashboard.objects.get().components.order_by("order")
+        ]
+        self.assertEqual(actual, expected)
+
+    def test_text_boxes_are_seeded_as_rich_text(self):
+        self._seed()
+
+        from .models import TextBoxComponent
+        from .rich_text import plain_text_from_doc, validated_rich_text
+
+        boxes = TextBoxComponent.objects.order_by("order")
+        self.assertEqual(boxes.count(), 2)
+        for box in boxes:
+            with self.subTest(order=box.order):
+                self.assertIsNotNone(box.rich_text)
+                # What is in the database is what the API would have accepted.
+                self.assertEqual(validated_rich_text(box.rich_text), box.rich_text)
+                self.assertEqual(box.text, plain_text_from_doc(box.rich_text))
+
+    def test_image_component_points_at_the_seeded_logo(self):
+        self._seed()
+
+        from .models import ImageComponent
+
+        image = ImageComponent.objects.get()
+        self.assertEqual(image.image_asset_id, _ImageAsset.objects.get().pk)
+        # The legacy per-component upload stays unused.
+        self.assertFalse(image.image)
+
+    def test_widget_geometry_clears_the_frontend_minimums(self):
+        self._seed()
+
+        for component in Dashboard.objects.get().components.all():
+            min_w, min_h = _FRONTEND_MIN_SIZES[component.component_name]
+            with self.subTest(component=component.component_name):
+                self.assertGreaterEqual(component.w, min_w)
+                self.assertGreaterEqual(component.h, min_h)
+
+    def test_event_log_is_copied_into_media_root(self):
+        self._seed()
+
+        source = _bundled_sample_log_path()
+        # FieldFile.path resolves against MEDIA_ROOT at access time, so it has
+        # to be read back under the same override the seed ran with.
+        with self.settings(MEDIA_ROOT=self.media):
+            copied = EventLog.objects.get().file.path
+
+        self.assertTrue(
+            os.path.realpath(copied).startswith(os.path.realpath(self.media))
+        )
+        self.assertNotEqual(os.path.realpath(copied), os.path.realpath(source))
+        self.assertEqual(os.path.getsize(copied), os.path.getsize(source))
+
+    def test_seeding_twice_creates_one_project(self):
+        self._seed()
+        self._seed()
+
+        self.assertEqual(Project.objects.count(), 1)
+        self.assertEqual(Dashboard.objects.count(), 1)
+        self.assertEqual(SeedState.objects.filter(key=SAMPLE_SEED_KEY).count(), 1)
+
+    def test_does_nothing_when_the_flag_is_off(self):
+        with self.settings(MEDIA_ROOT=self.media, SEED_SAMPLE_PROJECT=False):
+            seed_sample_project(sender=None)
+
+        self.assertFalse(Project.objects.exists())
+        self.assertFalse(SeedState.objects.exists())
+
+    def test_deleted_sample_is_not_recreated(self):
+        self._seed()
+        event_log = EventLog.objects.get()
+
+        client = APIClient()
+        client.force_authenticate(user=User.objects.get(username=settings.LOCAL_GUEST_USERNAME))
+        with self.settings(MEDIA_ROOT=self.media):
+            response = client.delete(f"/api/files/{event_log.pk}/")
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Project.objects.exists())
+
+        self._seed()
+        self.assertFalse(Project.objects.exists())
+
+    def test_rename_survives_a_later_seed(self):
+        self._seed()
+        event_log = EventLog.objects.get()
+
+        client = APIClient()
+        client.force_authenticate(user=User.objects.get(username=settings.LOCAL_GUEST_USERNAME))
+        response = client.patch(
+            f"/api/files/{event_log.pk}/rename/",
+            {"name": "Q3 container review"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self._seed()
+        self.assertEqual(Project.objects.count(), 1)
+        self.assertEqual(Project.objects.get().display_name, "Q3 container review")
+
+    def test_missing_bundled_log_fails_soft_and_stays_retryable(self):
+        missing = Path(self.media) / "nope" / "container_logistics.duckdb"
+        with patch("api.sample_project._bundled_sample_log_path", return_value=missing):
+            with self.assertLogs("api.sample_project", level="ERROR"):
+                self._seed()
+
+        self.assertFalse(Project.objects.exists())
+        # No tombstone: a build that ships the file correctly must still seed.
+        self.assertFalse(SeedState.objects.exists())
+
+        self._seed()
+        self.assertEqual(Project.objects.count(), 1)
+
+    def test_failed_seed_removes_the_files_it_copied(self):
+        with patch(
+            "api.sample_project.sample_dashboard_layout",
+            side_effect=RuntimeError("boom"),
+        ):
+            with self.assertLogs("api.sample_project", level="ERROR"):
+                self._seed()
+
+        self.assertFalse(Project.objects.exists())
+        self.assertFalse(SeedState.objects.exists())
+        # The rollback took the rows; the log and logo must not outlive them,
+        # or every retrying launch would leave another 2.3 MB copy behind.
+        leftover = [
+            os.path.join(root, name)
+            for root, _dirs, names in os.walk(self.media)
+            for name in names
+        ]
+        self.assertEqual(leftover, [])
+
+        self._seed()
+        self.assertEqual(Project.objects.count(), 1)
+
+    def test_skipped_when_the_seed_table_is_missing(self):
+        # post_migrate also fires after `migrate api <earlier>` has unapplied
+        # the migration that creates SeedState.
+        from django.db import connection
+
+        with patch.object(connection.introspection, "table_names", return_value=[]):
+            self._seed()
+
+        self.assertFalse(Project.objects.exists())
+
+    def test_upgraded_install_with_projects_is_not_seeded(self):
+        existing = Project.objects.create(name="my-own-log")
+
+        self._seed()
+
+        self.assertEqual(list(Project.objects.all()), [existing])
+        self.assertTrue(SeedState.objects.filter(key=SAMPLE_SEED_KEY).exists())
+
+        # Marked as done, so it stays out even once the user's projects are gone.
+        existing.delete()
+        self._seed()
+        self.assertFalse(Project.objects.exists())
+
+    def test_seeds_the_stored_query_library(self):
+        self._seed()
+
+        project = Project.objects.get()
+        assets = ProjectAsset.objects.filter(
+            project=project, asset_type=ProjectAsset.AssetType.QUERY
+        )
+        self.assertEqual(
+            sorted(assets.values_list("name", flat=True)),
+            sorted(name for name, _d, _s in SAMPLE_QUERIES),
+        )
+        for asset in assets:
+            with self.subTest(query=asset.name):
+                # Exactly what POST /api/assets/ would enforce on an upload.
+                validate_sql_query_asset_dict(asset.content_json)
+                self.assertEqual(asset.content_json["schema"], _SQL_SCHEMA)
+                self.assertTrue(asset.content_json["description"].strip())
+                self.assertEqual(asset.created_by_id, project.users.get().pk)
+
+    def test_stored_query_references_resolve(self):
+        """A seeded query may build on another by name; all must resolve."""
+        self._seed()
+
+        stored = {
+            asset.name: asset.content_json["query"]
+            for asset in ProjectAsset.objects.filter(
+                asset_type=ProjectAsset.AssetType.QUERY
+            )
+        }
+        composed = 0
+        for name, sql in stored.items():
+            with self.subTest(query=name):
+                resolved = resolve_query_references(sql, stored)
+                if resolved != sql:
+                    composed += 1
+        # The library is meant to demonstrate composition, not just contain it
+        # by accident -- if this drops to zero the demo value is gone.
+        self.assertGreaterEqual(composed, 1)
+
+    def test_linked_widgets_share_the_stored_query(self):
+        self._seed()
+
+        from .models import BarChartComponent, PieChartComponent
+
+        for model in (BarChartComponent, PieChartComponent):
+            widget = model.objects.get()
+            with self.subTest(widget=widget.component_name):
+                expected = LINKED_QUERY_BY_TITLE[widget.title]
+                self.assertIsNotNone(widget.query_asset_id)
+                self.assertEqual(widget.query_asset.name, expected)
+                # The widget keeps the same SQL inline, so deleting the asset
+                # (which nulls the FK) leaves it rendering exactly as before.
+                self.assertEqual(
+                    widget.query.strip(),
+                    widget.query_asset.content_json["query"].strip(),
+                )
+
+    def test_deleting_a_linked_query_leaves_the_widget_working(self):
+        self._seed()
+
+        from .models import BarChartComponent
+
+        widget = BarChartComponent.objects.get()
+        sql_before = widget.query
+        widget.query_asset.delete()
+
+        widget.refresh_from_db()
+        self.assertIsNone(widget.query_asset_id)
+        self.assertEqual(widget.query, sql_before)
+
+
+class SampleProjectRichTextTests(SimpleTestCase):
+    """The dashboard's two text panels (#373 rich text in the #368 sample).
+
+    The seeder writes straight through the ORM, so nothing makes these
+    documents pass the whitelist that every browser save goes through. These
+    tests are what does.
+    """
+
+    def _docs(self):
+        from .sample_project import sample_guide_doc, sample_headline_doc
+
+        return {"headline": sample_headline_doc(), "guide": sample_guide_doc()}
+
+    def test_documents_survive_the_whitelist_unchanged(self):
+        from .rich_text import validated_rich_text
+
+        for name, doc in self._docs().items():
+            with self.subTest(document=name):
+                # Not merely "valid": identical. A colour in the wrong case or
+                # a bare font size would be dropped here and nowhere else.
+                self.assertEqual(validated_rich_text(doc), doc)
+
+    def test_documents_carry_no_links(self):
+        from .rich_text import validated_rich_text
+
+        def marks(node):
+            yield from (mark.get("type") for mark in node.get("marks") or [])
+            for child in node.get("content") or []:
+                yield from marks(child)
+
+        for name, doc in self._docs().items():
+            with self.subTest(document=name):
+                found = set(marks(doc))
+                self.assertNotIn("link", found)
+                self.assertNotIn("dashboardLink", found)
+                # A dashboard link needs the project's ids to validate, so a
+                # document holding one could not round-trip above.
+                self.assertEqual(validated_rich_text(doc, None), doc)
+
+    def test_every_block_with_text_declares_its_alignment(self):
+        """A rich box inherits text-align from its card, which is `center`.
+
+        Only the plain-text path writes alignment explicitly, so a block that
+        leaves it unset picks that up -- which renders an ordered list with a
+        ragged left edge and the numbers stranded.
+        """
+        def blocks(node):
+            if node.get("type") in ("paragraph", "heading"):
+                yield node
+            for child in node.get("content") or []:
+                yield from blocks(child)
+
+        for name, doc in self._docs().items():
+            for block in blocks(doc):
+                if not block.get("content"):
+                    continue  # a spacer has no text to align
+                with self.subTest(document=name, block=block["type"]):
+                    self.assertIn(
+                        (block.get("attrs") or {}).get("textAlign"),
+                        ("left", "center", "right", "justify"),
+                    )
+
+    def test_documents_use_no_headings(self):
+        """A title here is bold plus a font size, not a heading node.
+
+        The toolbar has no heading control -- one needs a markdown "## " while
+        typing -- so a heading in the sample would be formatting the user can
+        see but not reproduce.
+        """
+        def types(node):
+            yield node.get("type")
+            for child in node.get("content") or []:
+                yield from types(child)
+
+        for name, doc in self._docs().items():
+            with self.subTest(document=name):
+                self.assertNotIn("heading", set(types(doc)))
+
+    def test_text_boxes_keep_text_in_step_with_their_document(self):
+        from .rich_text import plain_text_from_doc
+        from .sample_project import sample_dashboard_layout
+
+        for _model, name, _geometry, fields in sample_dashboard_layout():
+            if name != "TextBoxComponent":
+                continue
+            with self.subTest(text=fields["text"][:30]):
+                self.assertEqual(
+                    fields["text"], plain_text_from_doc(fields["rich_text"])
+                )
+                self.assertTrue(fields["text"].strip())
+
+    def test_text_boxes_leave_text_formatting_to_the_document(self):
+        """A box with a document ignores its own text-level fields.
+
+        componentMap.tsx renders a rich box against the plain defaults, so
+        setting these here would be dead configuration that reads as live.
+        """
+        from .sample_project import sample_dashboard_layout
+
+        dead = {
+            "font_size", "font_family", "font_weight", "italic",
+            "underline", "text_align", "text_color", "line_height",
+        }
+        for _model, name, _geometry, fields in sample_dashboard_layout():
+            if name != "TextBoxComponent":
+                continue
+            with self.subTest(text=fields["text"][:30]):
+                self.assertEqual(dead & set(fields), set())
