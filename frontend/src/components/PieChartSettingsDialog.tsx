@@ -83,13 +83,15 @@ const VALUE_OPTIONS = [
 ] as const;
 
 /** A setting with its label on the left and the control on the right. */
-const SettingRow = ({ label, htmlFor, children }: {
+const SettingRow = ({ label, htmlFor, disabled = false, children }: {
   label: string;
   htmlFor?: string;
+  /** Greys out the label, for a control that doesn't apply right now. */
+  disabled?: boolean;
   children: React.ReactNode;
 }) => (
   <div className="flex min-h-9 items-center justify-between gap-4">
-    <Label htmlFor={htmlFor} className="shrink-0">
+    <Label htmlFor={htmlFor} className={cn("shrink-0", disabled && "opacity-50")}>
       {label}
     </Label>
     {children}
@@ -308,17 +310,22 @@ function SettingsBody({ widgetId, initial, onApply, onCancel, fileId, projectId 
                   onChange={(v) => set("chartType", v)}
                 />
               </SettingRow>
-              {draft.chartType === "donut" && (
-                <SettingRow label="Center text" htmlFor={`pie-center-${widgetId}`}>
-                  <Input
-                    id={`pie-center-${widgetId}`}
-                    value={draft.ringText}
-                    onChange={(e) => set("ringText", e.target.value)}
-                    placeholder="e.g. events"
-                    className="h-8 max-w-56"
-                  />
-                </SettingRow>
-              )}
+              {/* Only a donut has a center; for a pie the field stays visible but disabled. */}
+              <SettingRow
+                label="Center text"
+                htmlFor={`pie-center-${widgetId}`}
+                disabled={draft.chartType !== "donut"}
+              >
+                <Input
+                  id={`pie-center-${widgetId}`}
+                  value={draft.ringText}
+                  onChange={(e) => set("ringText", e.target.value)}
+                  placeholder={draft.chartType === "donut" ? "e.g. events" : "Donut only"}
+                  disabled={draft.chartType !== "donut"}
+                  title={draft.chartType === "donut" ? undefined : "Only a donut chart has a center"}
+                  className="h-8 max-w-56"
+                />
+              </SettingRow>
               <SettingRow label="Legend">
                 <SegmentedControl
                   ariaLabel="Legend"
