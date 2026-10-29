@@ -162,7 +162,9 @@ function startFrontendServer() {
 
   return new Promise((resolve, reject) => {
     const expressApp = express();
-    const frontendPath = path.join(process.resourcesPath, 'frontend-build');
+    // Packaged via `files` in package.json, so it lives next to main.js
+    // (Resources/app/resources/frontend-build), not in process.resourcesPath.
+    const frontendPath = path.join(__dirname, 'resources', 'frontend-build');
 
     expressApp.use(express.static(frontendPath));
     // SPA fallback for client-side routes
