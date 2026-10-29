@@ -116,6 +116,80 @@ def _validated_int(raw, default, minimum, maximum):
     return default if value is None else int(round(value))
 
 
+# Allowed values in a pie or bar chart's ``chart_style`` (mirrors
+# chartLegendUtils.ts and chartColors.ts in the frontend).
+_LEGEND_POSITIONS = {"bottom", "columns", "callouts"}
+_LEGEND_VALUES = {"none", "value", "percent", "both"}
+_COLOR_MODES = {"single", "category"}
+_COLOR_SCHEMES = {"greyscale", "categorical", "shades"}
+_MAX_CATEGORIES_LIMIT = 500
+_MAX_COLOR_OVERRIDES = 500
+_MAX_CATEGORY_LABEL_LENGTH = 200
+
+
+def _validated_chart_style(raw):
+    """A pie or bar chart's display options, keeping only known keys with valid values.
+
+    Colors end up in inline styles and SVG fills on every dashboard that
+    shows the chart, so only ``#rgb`` / ``#rrggbb`` literals are kept;
+    unknown keys and invalid values are dropped, which the frontend reads as
+    "use the default".
+    """
+    if not isinstance(raw, dict):
+        return {}
+    style = {}
+
+    legend_raw = raw.get("legend")
+    if isinstance(legend_raw, dict):
+        legend = {}
+        if legend_raw.get("position") in _LEGEND_POSITIONS:
+            legend["position"] = legend_raw["position"]
+        if legend_raw.get("values") in _LEGEND_VALUES:
+            legend["values"] = legend_raw["values"]
+        if legend:
+            style["legend"] = legend
+
+    if isinstance(raw.get("show_category_count"), bool):
+        style["show_category_count"] = raw["show_category_count"]
+
+    max_categories = raw.get("max_categories")
+    if (
+        isinstance(max_categories, int)
+        and not isinstance(max_categories, bool)
+        and 1 <= max_categories <= _MAX_CATEGORIES_LIMIT
+    ):
+        style["max_categories"] = max_categories
+
+    colors_raw = raw.get("colors")
+    if isinstance(colors_raw, dict):
+        colors = {}
+        if colors_raw.get("mode") in _COLOR_MODES:
+            colors["mode"] = colors_raw["mode"]
+        if is_hex_color(colors_raw.get("single")):
+            colors["single"] = colors_raw["single"].strip()
+        if colors_raw.get("scheme") in _COLOR_SCHEMES:
+            colors["scheme"] = colors_raw["scheme"]
+        if is_hex_color(colors_raw.get("base")):
+            colors["base"] = colors_raw["base"].strip()
+        if isinstance(colors_raw.get("stable"), bool):
+            colors["stable"] = colors_raw["stable"]
+        overrides_raw = colors_raw.get("overrides")
+        if isinstance(overrides_raw, dict):
+            overrides = {
+                label: color.strip()
+                for label, color in list(overrides_raw.items())[:_MAX_COLOR_OVERRIDES]
+                if isinstance(label, str)
+                and len(label) <= _MAX_CATEGORY_LABEL_LENGTH
+                and is_hex_color(color)
+            }
+            if overrides:
+                colors["overrides"] = overrides
+        if colors:
+            style["colors"] = colors
+
+    return style
+
+
 def _validated_legacy_image_path(raw, project):
     """Return ``raw`` (minus the ``/files/`` prefix) only if it names an existing
     file under MEDIA_ROOT inside the project's own upload directory."""
@@ -613,6 +687,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     show_tooltip=item.get('show_tooltip', True),
                     label_column=item.get('label_column', ''),
                     value_column=item.get('value_column', ''),
+                    chart_style=_validated_chart_style(item.get('chart_style')),
                 )
             elif component_name == 'KpiComponent':
                 KpiComponent.objects.create(
@@ -645,6 +720,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     value_column=item.get('value_column') or '',
                     horizontal=bool(item.get('horizontal', False)),
                     show_values=bool(item.get('show_values', False)),
+                    chart_style=_validated_chart_style(item.get('chart_style')),
                 )
             elif component_name == 'ScatterPlotComponent':
                 ScatterPlotComponent.objects.create(

@@ -7,7 +7,7 @@
 
 import React from "react";
 import { AlertCircle, RefreshCw } from "lucide-react";
-import { Card } from "@/components/ui/card";
+import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -178,8 +178,24 @@ export function SegmentedControl<T extends string>({
 }
 
 /* ------------------------------------------------------------------ */
-/* View-mode placeholders                                              */
+/* View-mode pieces                                                    */
 /* ------------------------------------------------------------------ */
+
+/**
+ * A chart widget's title above the chart: the same size for every chart,
+ * cut off with an ellipsis when too long (the full title shows on hover).
+ * Renders nothing without a title.
+ */
+export function ChartTitle({ title }: { title: string }) {
+  if (!title) return null;
+  return (
+    <CardHeader className="pb-0 text-center">
+      <CardTitle className="truncate text-base" title={title}>
+        {title}
+      </CardTitle>
+    </CardHeader>
+  );
+}
 
 export function WidgetMessage({
   children,

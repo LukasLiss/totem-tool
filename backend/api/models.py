@@ -407,6 +407,10 @@ class PieChartComponent(DashboardComponent):
     value_column = models.CharField(max_length=100, blank=True, default="")
     show_legend = models.BooleanField(default=True)
     show_tooltip = models.BooleanField(default=True)
+    # Display options edited in the frontend's settings popup: legend style
+    # and values, category count footer, max categories, colors. Validated
+    # on save (see _validated_chart_style in views/dashboards.py).
+    chart_style = models.JSONField(default=dict, blank=True)
 
 
 class KpiComponent(DashboardComponent):
@@ -435,6 +439,10 @@ class BarChartComponent(DashboardComponent):
     value_column = models.CharField(max_length=100, blank=True, default="")
     horizontal = models.BooleanField(default=False)
     show_values = models.BooleanField(default=False)
+    # Display options edited in the frontend's settings popup: max categories
+    # and colors. Validated on save (see _validated_chart_style in
+    # views/dashboards.py).
+    chart_style = models.JSONField(default=dict, blank=True)
 
 
 class ScatterPlotComponent(DashboardComponent):

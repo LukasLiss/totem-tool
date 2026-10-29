@@ -1,43 +1,53 @@
 /**
  * BarChartComponent — one bar per result row. The query supplies a label
  * column and a numeric value column; the widget can draw bars vertically
- * or horizontally and optionally print the value on each bar.
+ * or horizontally, optionally print the value on each bar, show only the
+ * largest bars, and color them (one color, or per category). In edit mode
+ * the tile shows a layout sketch and the settings open in a popup.
  */
 
 import React, { useEffect, useMemo, useState } from "react";
-import { Bar, BarChart, CartesianGrid, LabelList, XAxis, YAxis } from "recharts";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  LabelList,
+  Rectangle,
+  XAxis,
+  YAxis,
+  type BarShapeProps,
+} from "recharts";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   ChartContainer,
   ChartTooltip,
   ChartTooltipContent,
   type ChartConfig,
 } from "@/components/ui/chart";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import type { LinkedQuery } from "@/react_component/sql/linkedQuery";
-import { BAR_CHART_DEFAULT_QUERY, BAR_CHART_EXPECTED_RESULT } from "./constants";
+import { BAR_CHART_DEFAULT_QUERY, CHART_SKETCH_HINT } from "./constants";
 import { useSqlQueryData } from "@/react_component/sql/useSqlQueryData";
-import {
-  ColumnInput,
-  QuerySection,
-  WidgetMessage,
-} from "./shared";
+import { ChartTitle, WidgetMessage } from "./shared";
+import WidgetDraftTile from "@/components/WidgetDraftTile";
 import {
   firstNumericColumn,
   linkedQueryOf,
   toNumber,
-  useColumnDiscovery,
   type SqlWidgetNodeFields,
   type SqlWidgetProps,
 } from "./sqlWidgetUtils";
+import { categoryFills, previewColors, type ChartColors } from "./chartColors";
+import { limitCategories } from "./chartData";
+import type { ChartStyle } from "./chartLegendUtils";
+import BarChartSketch from "./BarChartSketch";
+import BarChartSettingsDialog, { type BarChartSettings } from "./BarChartSettingsDialog";
 
 export interface BarChartNodeFields extends SqlWidgetNodeFields {
   label_column?: string;
   value_column?: string;
   horizontal?: boolean;
   show_values?: boolean;
+  chart_style?: ChartStyle;
 }
 
 
@@ -55,6 +65,9 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
   const [valueColumn, setValueColumn] = useState(node.value_column ?? "");
   const [horizontal, setHorizontal] = useState(node.horizontal ?? false);
   const [showValues, setShowValues] = useState(node.show_values ?? false);
+  const [colors, setColors] = useState<ChartColors>(node.chart_style?.colors ?? {});
+  const [maxCategories, setMaxCategories] = useState<number | null>(node.chart_style?.max_categories ?? null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
     setTitle(node.title ?? "");
@@ -64,12 +77,54 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
     setValueColumn(node.value_column ?? "");
     setHorizontal(node.horizontal ?? false);
     setShowValues(node.show_values ?? false);
+    setColors(node.chart_style?.colors ?? {});
+    setMaxCategories(node.chart_style?.max_categories ?? null);
   }, [node]);
 
-  const patch = (updates: Record<string, unknown>) => onUpdate?.(updates);
   const fileId = selectedFile?.id;
   const projectId = selectedFile?.project;
-  const discovery = useColumnDiscovery(fileId, query, linked?.id);
+
+  // Bar charts default to a single color.
+  const barColors: ChartColors = useMemo(() => ({ mode: "single", ...colors }), [colors]);
+
+  const settings: BarChartSettings = {
+    title,
+    query,
+    linked,
+    labelColumn,
+    valueColumn,
+    horizontal,
+    showValues,
+    colors,
+    maxCategories,
+  };
+
+  const applySettings = (next: BarChartSettings) => {
+    setTitle(next.title);
+    setQuery(next.query);
+    setLinked(next.linked);
+    setLabelColumn(next.labelColumn);
+    setValueColumn(next.valueColumn);
+    setHorizontal(next.horizontal);
+    setShowValues(next.showValues);
+    setColors(next.colors);
+    setMaxCategories(next.maxCategories);
+    onUpdate?.({
+      title: next.title,
+      query: next.query,
+      query_asset: next.linked?.id ?? null,
+      query_asset_name: next.linked?.name ?? null,
+      label_column: next.labelColumn,
+      value_column: next.valueColumn,
+      horizontal: next.horizontal,
+      show_values: next.showValues,
+      chart_style: {
+        ...node.chart_style,
+        colors: next.colors,
+        max_categories: next.maxCategories ?? undefined,
+      },
+    });
+  };
 
   const data = useSqlQueryData({
     fileId,
@@ -82,103 +137,51 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
   const { chartData, valueKey } = useMemo(() => {
     const valueKey = valueColumn || firstNumericColumn(data.rows, data.columns) || data.columns[1] || "";
     const labelKey = labelColumn || data.columns.find((c) => c !== valueKey) || data.columns[0] || "";
-    const chartData = data.rows.map((r) => ({
-      label: r[labelKey] == null ? "NULL" : String(r[labelKey]),
-      value: toNumber(r[valueKey]) ?? 0,
-    }));
+    const bars = limitCategories(
+      data.rows.map((r) => ({
+        label: r[labelKey] == null ? "NULL" : String(r[labelKey]),
+        value: toNumber(r[valueKey]) ?? 0,
+      })),
+      maxCategories,
+      { groupRest: false }
+    );
+    const fills = categoryFills(bars, barColors);
+    const chartData = bars.map((bar, i) => ({ ...bar, fill: fills[i] }));
     return { chartData, valueKey };
-  }, [data.rows, data.columns, labelColumn, valueColumn]);
+  }, [data.rows, data.columns, labelColumn, valueColumn, maxCategories, barColors]);
 
   const chartConfig: ChartConfig = useMemo(
-    () => ({ value: { label: valueKey || "value", color: "var(--chart-1)" } }),
+    () => ({ value: { label: valueKey || "value", color: "var(--foreground)" } }),
     [valueKey]
   );
 
   if (isEditMode) {
+    // In edit mode the tile shows a layout sketch; the settings open in a popup.
     return (
-      <Card className="h-full w-full overflow-auto rounded-none">
-        <CardHeader>
-          <CardTitle>Bar Chart (by SQL)</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-4">
-          <div className="grid gap-1.5">
-            <Label htmlFor={`bar-title-${node.component_id}`}>Title</Label>
-            <Input
-              id={`bar-title-${node.component_id}`}
-              value={title}
-              onChange={(e) => {
-                setTitle(e.target.value);
-                patch({ title: e.target.value });
-              }}
-              placeholder="Events per activity"
-            />
-          </div>
-          <QuerySection
-            widgetId={node.component_id}
-            query={query}
-            onQueryChange={(q) => {
-              setQuery(q);
-              patch({ query: q });
-            }}
-            linkedQuery={linked}
-            onLinkChange={(l) => {
-              setLinked(l);
-              patch({ query_asset: l?.id ?? null, query_asset_name: l?.name ?? null });
-            }}
-            fileId={fileId}
-            projectId={projectId}
-            expectedResult={BAR_CHART_EXPECTED_RESULT}
-            editorTitle="Bar chart query"
-            discovery={discovery}
+      <WidgetDraftTile
+        typeLabel="Bar chart"
+        hint={CHART_SKETCH_HINT}
+        onConfigure={() => setSettingsOpen(true)}
+        sketch={
+          <BarChartSketch
+            title={title}
+            horizontal={horizontal}
+            showValues={showValues}
+            colors={previewColors(barColors)}
+            className="h-full w-full"
           />
-          <div className="grid grid-cols-2 gap-3">
-            <ColumnInput
-              id={`bar-label-${node.component_id}`}
-              label="Label column"
-              value={labelColumn}
-              onChange={(v) => {
-                setLabelColumn(v);
-                patch({ label_column: v });
-              }}
-              columns={discovery.columns}
-              placeholder="first text column"
-            />
-            <ColumnInput
-              id={`bar-value-${node.component_id}`}
-              label="Value column"
-              value={valueColumn}
-              onChange={(v) => {
-                setValueColumn(v);
-                patch({ value_column: v });
-              }}
-              columns={discovery.columns}
-              placeholder="first numeric column"
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor={`bar-horizontal-${node.component_id}`}>Horizontal bars</Label>
-            <Switch
-              id={`bar-horizontal-${node.component_id}`}
-              checked={horizontal}
-              onCheckedChange={(v) => {
-                setHorizontal(v);
-                patch({ horizontal: v });
-              }}
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor={`bar-values-${node.component_id}`}>Show values on bars</Label>
-            <Switch
-              id={`bar-values-${node.component_id}`}
-              checked={showValues}
-              onCheckedChange={(v) => {
-                setShowValues(v);
-                patch({ show_values: v });
-              }}
-            />
-          </div>
-        </CardContent>
-      </Card>
+        }
+      >
+        <BarChartSettingsDialog
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          widgetId={node.component_id}
+          settings={settings}
+          onApply={applySettings}
+          fileId={fileId}
+          projectId={projectId}
+        />
+      </WidgetDraftTile>
     );
   }
 
@@ -191,11 +194,7 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
 
   return (
     <Card className="flex h-full w-full flex-col overflow-hidden rounded-none">
-      {title && (
-        <CardHeader className="pb-0">
-          <CardTitle className="truncate text-sm">{title}</CardTitle>
-        </CardHeader>
-      )}
+      <ChartTitle title={title} />
       <CardContent className="min-h-0 flex-1 p-3">
         <ChartContainer config={chartConfig} className="aspect-auto h-full w-full">
           <BarChart
@@ -235,7 +234,15 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
               cursor={{ fill: "var(--muted)" }}
               content={<ChartTooltipContent labelKey="label" nameKey="value" />}
             />
-            <Bar dataKey="value" fill="var(--color-value)" radius={4} name={valueKey}>
+            <Bar
+              dataKey="value"
+              radius={4}
+              name={valueKey}
+              // Each bar in its own color (from its data row); replaces the deprecated <Cell>.
+              shape={({ x, y, width, height, payload }: BarShapeProps) => (
+                <Rectangle x={x} y={y} width={width} height={height} radius={4} fill={payload?.fill} />
+              )}
+            >
               {showValues && (
                 <LabelList
                   dataKey="value"

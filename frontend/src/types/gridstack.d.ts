@@ -88,7 +88,7 @@ declare module 'gridstack' {
     title?: string;
     show_legend?: boolean;
     show_tooltip?: boolean;
-    // Chart styling options, not yet persisted by the backend
+    // PieChartComponent display options (legend, colors, …), stored as JSON
     chart_style?: ChartStyle;
     label_column?: string;
     value_column?: string;

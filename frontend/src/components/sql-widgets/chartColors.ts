@@ -7,6 +7,14 @@
 export type ColorScheme = "greyscale" | "categorical" | "shades";
 
 export interface ChartColors {
+  /**
+   * "single": every category in `single` (bar charts, their default);
+   * "category": a color per category from `scheme` (pie charts always).
+   * Overrides apply in both modes.
+   */
+  mode?: "single" | "category";
+  /** The color of "single" mode; the theme's text color (black) when unset. */
+  single?: string;
   scheme?: ColorScheme;
   /** Base color for the "shades" scheme. */
   base?: string;
@@ -21,6 +29,11 @@ export interface ChartColors {
 
 export const DEFAULT_COLOR_SCHEME: ColorScheme = "greyscale";
 export const DEFAULT_SHADES_BASE = "#2d62ef";
+// "single" mode default: the text color, black in light mode (white in dark
+// mode, where black bars would disappear on the background).
+export const DEFAULT_SINGLE_COLOR = "var(--foreground)";
+// What the color picker starts at for DEFAULT_SINGLE_COLOR (it needs a hex value).
+export const DEFAULT_SINGLE_PICKER = "#000000";
 
 export const COLOR_SCHEME_OPTIONS: { value: ColorScheme; label: string }[] = [
   { value: "greyscale", label: "Greyscale" },
@@ -136,6 +149,10 @@ export function categoryFills(
 
 /** One color per label, in label order. */
 export function resolveChartColors(labels: string[], colors: ChartColors | undefined): string[] {
+  if (colors?.mode === "single") {
+    const single = colors.single ?? DEFAULT_SINGLE_COLOR;
+    return labels.map((label) => colors.overrides?.[label] ?? single);
+  }
   const scheme = colors?.scheme ?? DEFAULT_COLOR_SCHEME;
   const count = labels.length;
   const palette = PALETTES[scheme];

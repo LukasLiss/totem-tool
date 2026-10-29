@@ -382,6 +382,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           value_column: node.value_column ?? "",
           horizontal: node.horizontal ?? false,
           show_values: node.show_values ?? false,
+          chart_style: node.chart_style ?? {},
         };
       } else if (component_name === "ScatterPlotComponent") {
         props = {
@@ -405,6 +406,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           value_column: node.value_column ?? '',
           show_legend: node.show_legend ?? true,
           show_tooltip: node.show_tooltip ?? true,
+          chart_style: node.chart_style ?? {},
         };
       } else if (component_name === "OCHandoverComponent") {
         props = {
@@ -600,6 +602,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             value_column: item.value_column,
             show_legend: item.show_legend,
             show_tooltip: item.show_tooltip,
+            chart_style: item.chart_style,
             // OCCNComponent properties
             relative_occurrence_threshold: item.relative_occurrence_threshold,
             object_types: item.object_types,
@@ -696,6 +699,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node.value_column = item.value_column;
               node.show_legend = item.show_legend;
               node.show_tooltip = item.show_tooltip;
+              node.chart_style = item.chart_style;
               // NewOCDFGComponent properties
               node.show_controls = item.show_controls;
               node.initial_interaction_locked = item.initial_interaction_locked;

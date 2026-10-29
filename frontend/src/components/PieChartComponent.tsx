@@ -2,24 +2,25 @@
 
 import React, { useState, useEffect } from 'react';
 import { Label as PieLabel, Pie, PieChart, type PieLabelRenderProps } from "recharts";
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
-import { Settings2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { GridStackNode } from 'gridstack';
 import type { LinkedQuery } from "@/react_component/sql/linkedQuery";
 import { useSqlQueryData } from "@/react_component/sql/useSqlQueryData";
 import { linkedQueryOf } from "@/components/sql-widgets/sqlWidgetUtils";
+import { ChartTitle } from "@/components/sql-widgets/shared";
 import { ChartValueLegend, PieCallout } from "@/components/sql-widgets/chartLegend";
+import { limitCategories, rowsToCategories } from "@/components/sql-widgets/chartData";
+import { CHART_SKETCH_HINT } from "@/components/sql-widgets/constants";
 import {
   fitPieCallouts,
-  limitCategories,
   type ChartStyle,
   type LegendPosition,
   type LegendValues,
 } from "@/components/sql-widgets/chartLegendUtils";
 import { categoryFills, previewColors, type ChartColors } from "@/components/sql-widgets/chartColors";
 import PieChartSketch from "./PieChartSketch";
+import WidgetDraftTile from "./WidgetDraftTile";
 import PieChartSettingsDialog, { type PieChartSettings } from "./PieChartSettingsDialog";
 import { SelectedFile } from '@/contexts/SelectedFileContext';
 
@@ -163,14 +164,9 @@ const PieChartComponent: React.FC<ComponentProps> = ({
   const error = data.error;
   const chartData = React.useMemo(() => {
     if (!labelColumn || !valueColumn) return [];
-    const slices = limitCategories(
-      data.rows.map((row) => ({
-        label: String(row[labelColumn]),
-        value: parseFloat(String(row[valueColumn])) || 0,
-      })),
-      maxCategories
-    );
-    const fills = categoryFills(slices, colors);
+    const slices = limitCategories(rowsToCategories(data.rows, labelColumn, valueColumn), maxCategories);
+    // A pie chart always colors per category.
+    const fills = categoryFills(slices, { ...colors, mode: "category" });
     return slices.map((slice, index): Record<string, unknown> => ({
       [labelColumn]: slice.label,
       [valueColumn]: slice.value,
@@ -311,25 +307,12 @@ const PieChartComponent: React.FC<ComponentProps> = ({
   if (isEditMode) {
     // In edit mode the tile shows a layout sketch; the settings open in a popup.
     return (
-      <Card
-        className="w-full h-full rounded-none flex flex-col gap-0 overflow-hidden py-0"
-        onDoubleClick={() => setSettingsOpen(true)}
-      >
-        <div className="flex items-center justify-between gap-2 px-3 pt-2">
-          <span className="truncate text-xs font-medium text-muted-foreground">Pie chart</span>
-          <Button
-            type="button"
-            size="icon"
-            variant="ghost"
-            className="size-7"
-            title="Configure pie chart"
-            aria-label="Configure pie chart"
-            onClick={() => setSettingsOpen(true)}
-          >
-            <Settings2 className="size-4" />
-          </Button>
-        </div>
-        <div className="min-h-0 flex-1 px-3">
+      <WidgetDraftTile
+        typeLabel="Pie chart"
+        hint={CHART_SKETCH_HINT}
+        notice={labelColumn && valueColumn ? undefined : "No query and columns set yet."}
+        onConfigure={() => setSettingsOpen(true)}
+        sketch={
           <PieChartSketch
             title={title}
             chartType={chartType}
@@ -341,15 +324,8 @@ const PieChartComponent: React.FC<ComponentProps> = ({
             colors={previewColors(colors)}
             className="h-full w-full"
           />
-        </div>
-        <div className="flex flex-col items-center gap-1.5 px-3 pt-1 pb-3">
-          {!(labelColumn && valueColumn) && (
-            <p className="text-center text-xs text-muted-foreground">No query and columns set yet.</p>
-          )}
-          <Button type="button" size="sm" variant="outline" onClick={() => setSettingsOpen(true)}>
-            Configure
-          </Button>
-        </div>
+        }
+      >
         <PieChartSettingsDialog
           open={settingsOpen}
           onOpenChange={setSettingsOpen}
@@ -359,7 +335,7 @@ const PieChartComponent: React.FC<ComponentProps> = ({
           fileId={fileId}
           projectId={projectId}
         />
-      </Card>
+      </WidgetDraftTile>
     );
   }
 
@@ -406,11 +382,7 @@ const PieChartComponent: React.FC<ComponentProps> = ({
 
   return (
     <Card className="w-full h-full rounded-none flex flex-col overflow-hidden">
-      {title && (
-        <CardHeader className="items-center pb-0">
-          <CardTitle>{title}</CardTitle>
-        </CardHeader>
-      )}
+      <ChartTitle title={title} />
       <CardContent className="flex-1 flex flex-col items-center gap-3 pb-0 min-h-0">
         <div ref={setChartArea} className="w-full min-h-0 flex-1 flex items-center justify-center">
         <ChartContainer

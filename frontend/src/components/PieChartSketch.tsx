@@ -10,7 +10,7 @@ import type { LegendPosition, LegendValues } from "@/components/sql-widgets/char
 import { cn } from "@/lib/utils";
 
 const WIDTH = 240;
-const HEIGHT = 150;
+const HEIGHT = 190;
 // Fixed slice sizes for the sketch, largest first.
 const SHARES = [0.34, 0.24, 0.18, 0.14, 0.1];
 // Slice shades, as opacity of the muted foreground color.
@@ -95,7 +95,7 @@ const PieChartSketch: React.FC<PieChartSketchProps> = ({
   const cx = WIDTH / 2;
   const cy = (top + pieBottom) / 2;
   // Callouts need room around the pie; without legend the pie stays at a draft-like size.
-  const r = legend === "callouts" ? Math.min((pieBottom - top) / 2 - 10, 36) : Math.min((pieBottom - top) / 2, 50);
+  const r = legend === "callouts" ? Math.min((pieBottom - top) / 2 - 10, 46) : Math.min((pieBottom - top) / 2, 64);
   const ri = chartType === "donut" ? r * 0.6 : 0;
 
   const slices = SHARES.reduce<{ a0: number; a1: number }[]>((acc, share) => {
