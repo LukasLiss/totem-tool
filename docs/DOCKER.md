@@ -26,6 +26,11 @@ docker run -d -p 8000:8000 -v totem-data:/data \
   ghcr.io/lukasliss/totem-tool:latest
 ```
 
+`latest` is the newest release; pin a version such as `:0.9.1` to control
+upgrades, or use `:main` for the unreleased development state. Images are
+published for both `linux/amd64` and `linux/arm64` (e.g. Apple Silicon, ARM
+servers).
+
 ## Logins
 
 You need at least one of the following; the container logs a warning if none is set.
