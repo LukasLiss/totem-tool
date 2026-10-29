@@ -13,10 +13,12 @@ import { linkedQueryOf } from "@/components/sql-widgets/sqlWidgetUtils";
 import { ChartValueLegend, PieCallout } from "@/components/sql-widgets/chartLegend";
 import {
   fitPieCallouts,
+  limitCategories,
   type ChartStyle,
   type LegendPosition,
   type LegendValues,
 } from "@/components/sql-widgets/chartLegendUtils";
+import { categoryFills, previewColors, type ChartColors } from "@/components/sql-widgets/chartColors";
 import PieChartSketch from "./PieChartSketch";
 import PieChartSettingsDialog, { type PieChartSettings } from "./PieChartSettingsDialog";
 import { SelectedFile } from '@/contexts/SelectedFileContext';
@@ -124,6 +126,8 @@ const PieChartComponent: React.FC<ComponentProps> = ({
   const [legendPosition, setLegendPosition] = useState<LegendPosition>(node.chart_style?.legend?.position ?? 'bottom');
   const [legendValues, setLegendValues] = useState<LegendValues>(node.chart_style?.legend?.values ?? 'none');
   const [showCategoryCount, setShowCategoryCount] = useState(node.chart_style?.show_category_count ?? true);
+  const [colors, setColors] = useState<ChartColors>(node.chart_style?.colors ?? {});
+  const [maxCategories, setMaxCategories] = useState<number | null>(node.chart_style?.max_categories ?? null);
 
   // Sync with node when it changes
   useEffect(() => {
@@ -138,6 +142,8 @@ const PieChartComponent: React.FC<ComponentProps> = ({
     setLegendPosition(node.chart_style?.legend?.position ?? 'bottom');
     setLegendValues(node.chart_style?.legend?.values ?? 'none');
     setShowCategoryCount(node.chart_style?.show_category_count ?? true);
+    setColors(node.chart_style?.colors ?? {});
+    setMaxCategories(node.chart_style?.max_categories ?? null);
   }, [node]);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -155,17 +161,24 @@ const PieChartComponent: React.FC<ComponentProps> = ({
   });
   const isLoading = data.loading;
   const error = data.error;
-  const chartData = React.useMemo(
-    () =>
-      labelColumn && valueColumn
-        ? data.rows.map((row, index): Record<string, unknown> => ({
-            [labelColumn]: row[labelColumn],
-            [valueColumn]: parseFloat(String(row[valueColumn])) || 0,
-            fill: `var(--chart-${(index % 5) + 1})`,
-          }))
-        : [],
-    [data.rows, labelColumn, valueColumn]
-  );
+  const chartData = React.useMemo(() => {
+    if (!labelColumn || !valueColumn) return [];
+    const slices = limitCategories(
+      data.rows.map((row) => ({
+        label: String(row[labelColumn]),
+        value: parseFloat(String(row[valueColumn])) || 0,
+      })),
+      maxCategories
+    );
+    const fills = categoryFills(slices, colors);
+    return slices.map((slice, index): Record<string, unknown> => ({
+      [labelColumn]: slice.label,
+      [valueColumn]: slice.value,
+      fill: fills[index],
+    }));
+  }, [data.rows, labelColumn, valueColumn, colors, maxCategories]);
+  // Categories in the query result, before grouping into "Other".
+  const categoryCount = labelColumn && valueColumn ? data.rows.length : 0;
 
   // The applied settings, edited as a draft in the settings popup.
   const settings: PieChartSettings = {
@@ -180,6 +193,8 @@ const PieChartComponent: React.FC<ComponentProps> = ({
     legendPosition,
     legendValues,
     showCategoryCount,
+    colors,
+    maxCategories,
   };
 
   const applySettings = (next: PieChartSettings) => {
@@ -194,6 +209,8 @@ const PieChartComponent: React.FC<ComponentProps> = ({
     setLegendPosition(next.legendPosition);
     setLegendValues(next.legendValues);
     setShowCategoryCount(next.showCategoryCount);
+    setColors(next.colors);
+    setMaxCategories(next.maxCategories);
     onUpdate?.({
       title: next.title,
       query: next.query,
@@ -207,6 +224,8 @@ const PieChartComponent: React.FC<ComponentProps> = ({
       chart_style: {
         ...node.chart_style,
         show_category_count: next.showCategoryCount,
+        colors: next.colors,
+        max_categories: next.maxCategories ?? undefined,
         legend: {
           ...node.chart_style?.legend,
           position: next.legendPosition,
@@ -224,11 +243,11 @@ const PieChartComponent: React.FC<ComponentProps> = ({
       }
     };
 
-    chartData.forEach((item, index) => {
+    chartData.forEach((item) => {
       const key = String(item[labelColumn]);
       config[key] = {
         label: key,
-        color: `var(--chart-${(index % 5) + 1})`,
+        color: String(item.fill),
       };
     });
 
@@ -319,6 +338,7 @@ const PieChartComponent: React.FC<ComponentProps> = ({
             legendPosition={legendPosition}
             legendValues={legendValues}
             showCategoryCount={showCategoryCount}
+            colors={previewColors(colors)}
             className="h-full w-full"
           />
         </div>
@@ -466,7 +486,8 @@ const PieChartComponent: React.FC<ComponentProps> = ({
       {showCategoryCount && (
         <CardFooter className="flex-col gap-2 text-sm">
           <div className="leading-none text-muted-foreground">
-            {chartData.length} categories
+            {categoryCount} categories
+            {maxCategories && categoryCount > maxCategories ? `, largest ${maxCategories} shown` : ""}
           </div>
         </CardFooter>
       )}

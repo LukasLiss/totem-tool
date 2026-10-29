@@ -4,12 +4,17 @@
  * callout goes, and how large the pie can be so all callouts fit).
  */
 
-export type LegendPosition = "bottom" | "columns" | "callouts";
+import type { ChartColors } from "./chartColors";
+
+export type LegendPosition ="bottom" | "columns" | "callouts";
 export type LegendValues = "none" | "value" | "percent" | "both";
 
 export interface ChartStyle {
   /** Pie chart footer with the number of categories; shown unless false. */
   show_category_count?: boolean;
+  /** Show only the largest N categories and group the rest as "Other"; all when unset. */
+  max_categories?: number;
+  colors?: ChartColors;
   legend?: {
     position?: LegendPosition;
     values?: LegendValues;
@@ -21,6 +26,32 @@ export interface LegendItem {
   color: string;
   /** Omitted when the chart has no per-entry value to show. */
   value?: number;
+}
+
+export const OTHER_LABEL = "Other";
+
+export interface CategorySlice {
+  label: string;
+  value: number;
+  /** The "Other" slice that sums up the categories beyond the limit. */
+  other?: boolean;
+}
+
+/**
+ * Keeps the `max` largest categories (in their original order) and sums up
+ * the rest into one "Other" slice at the end; unchanged when `max` is unset
+ * or there are not more categories than that.
+ */
+export function limitCategories(slices: CategorySlice[], max?: number | null): CategorySlice[] {
+  if (!max || max < 1 || slices.length <= max) return slices;
+  const largest = new Set(
+    slices
+      .map((_, i) => i)
+      .sort((a, b) => slices[b].value - slices[a].value)
+      .slice(0, max)
+  );
+  const rest = slices.reduce((sum, slice, i) => (largest.has(i) ? sum : sum + slice.value), 0);
+  return [...slices.filter((_, i) => largest.has(i)), { label: OTHER_LABEL, value: rest, other: true }];
 }
 
 export function formatPercent(share: number): string {

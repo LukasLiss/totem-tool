@@ -24,7 +24,22 @@ import type { LinkedQuery } from "@/react_component/sql/linkedQuery";
 import { ColumnInput, QuerySection, SegmentedControl } from "@/components/sql-widgets/shared";
 import { useColumnDiscovery } from "@/components/sql-widgets/sqlWidgetUtils";
 import { PIE_CHART_EXPECTED_RESULT } from "@/components/sql-widgets/constants";
-import type { LegendPosition, LegendValues } from "@/components/sql-widgets/chartLegendUtils";
+import {
+  limitCategories,
+  type LegendPosition,
+  type LegendValues,
+} from "@/components/sql-widgets/chartLegendUtils";
+import {
+  COLOR_SCHEME_OPTIONS,
+  DEFAULT_COLOR_SCHEME,
+  DEFAULT_SHADES_BASE,
+  categoryFills,
+  previewColors,
+  supportsStableColors,
+  type ChartColors,
+} from "@/components/sql-widgets/chartColors";
+import { useSqlQueryData } from "@/react_component/sql/useSqlQueryData";
+import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import PieChartSketch from "./PieChartSketch";
 
@@ -40,6 +55,9 @@ export interface PieChartSettings {
   legendPosition: LegendPosition;
   legendValues: LegendValues;
   showCategoryCount: boolean;
+  colors: ChartColors;
+  /** Largest N categories shown, the rest grouped as "Other"; null = all. */
+  maxCategories: number | null;
 }
 
 type Tab = "data" | "style";
@@ -76,6 +94,28 @@ const SettingRow = ({ label, htmlFor, children }: {
     </Label>
     {children}
   </div>
+);
+
+/** A color swatch that opens the browser's color picker when clicked. */
+const ColorSwatchInput = ({ color, value, onChange, label }: {
+  /** What the swatch shows (any CSS color). */
+  color: string;
+  /** Start value of the picker, #rrggbb. */
+  value: string;
+  onChange: (hex: string) => void;
+  label: string;
+}) => (
+  <span className="relative inline-flex size-5 shrink-0 overflow-hidden rounded border shadow-xs">
+    <span className="size-full" style={{ backgroundColor: color }} />
+    <input
+      type="color"
+      aria-label={label}
+      title={label}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="absolute inset-0 size-full cursor-pointer opacity-0"
+    />
+  </span>
 );
 
 /** Column picker: a dropdown once the query's columns are known, a text field before. */
@@ -146,6 +186,40 @@ function SettingsBody({ widgetId, initial, onApply, onCancel, fileId, projectId 
   }, [discover, fileId, initial.query, initial.linked]);
 
   const legend = draft.showLegend ? draft.legendPosition : "none";
+
+  // The real categories, for per-category colors; only loaded on the Style tab.
+  const categoryData = useSqlQueryData({
+    fileId,
+    query: draft.query,
+    queryAssetId: draft.linked?.id,
+    enabled: tab === "style" && Boolean(draft.labelColumn && draft.valueColumn),
+    limit: 500,
+  });
+  // The slices the chart will show: grouped into "Other" like the real chart.
+  const categorySlices = React.useMemo(
+    () =>
+      draft.labelColumn && draft.valueColumn
+        ? limitCategories(
+            categoryData.rows.map((row) => ({
+              label: String(row[draft.labelColumn]),
+              value: parseFloat(String(row[draft.valueColumn])) || 0,
+            })),
+            draft.maxCategories
+          )
+        : [],
+    [categoryData.rows, draft.labelColumn, draft.valueColumn, draft.maxCategories]
+  );
+  const categories = categorySlices.map((slice) => slice.label);
+  const categoryColors = categoryFills(categorySlices, draft.colors);
+  const scheme = draft.colors.scheme ?? DEFAULT_COLOR_SCHEME;
+  const overrides = draft.colors.overrides ?? {};
+  const setColors = (colors: Partial<ChartColors>) => set("colors", { ...draft.colors, ...colors });
+  const setOverride = (label: string, color: string | null) => {
+    const next = { ...overrides };
+    if (color) next[label] = color;
+    else delete next[label];
+    setColors({ overrides: next });
+  };
 
   return (
     <>
@@ -273,6 +347,143 @@ function SettingsBody({ widgetId, initial, onApply, onCancel, fileId, projectId 
                   onCheckedChange={(v) => set("showCategoryCount", v)}
                 />
               </SettingRow>
+              <SettingRow label="Max categories" htmlFor={`pie-max-categories-${widgetId}`}>
+                <span className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">rest grouped as “Other”</span>
+                  <Input
+                    id={`pie-max-categories-${widgetId}`}
+                    type="number"
+                    min={1}
+                    step={1}
+                    inputMode="numeric"
+                    placeholder="All"
+                    value={draft.maxCategories ?? ""}
+                    onChange={(e) => {
+                      const n = parseInt(e.target.value, 10);
+                      set("maxCategories", Number.isFinite(n) && n > 0 ? n : null);
+                    }}
+                    className="h-8 w-20"
+                  />
+                </span>
+              </SettingRow>
+
+              <div className="space-y-2 border-t pt-4">
+                <Label>Colors</Label>
+                <div role="radiogroup" aria-label="Color scheme" className="grid grid-cols-3 gap-2">
+                  {COLOR_SCHEME_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={scheme === option.value}
+                      onClick={() => setColors({ scheme: option.value })}
+                      className={cn(
+                        "flex flex-col gap-1.5 rounded-md border p-2 text-left text-xs transition-colors",
+                        scheme === option.value
+                          ? "border-foreground ring-1 ring-foreground"
+                          : "hover:bg-muted/50"
+                      )}
+                    >
+                      <span className="flex h-3 overflow-hidden rounded-sm">
+                        {previewColors({ scheme: option.value, base: draft.colors.base }).map((color, i) => (
+                          <span key={i} className="flex-1" style={{ backgroundColor: color }} />
+                        ))}
+                      </span>
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+                {supportsStableColors(scheme) && (
+                  <div className="space-y-0.5">
+                    <SettingRow label="Same color per category" htmlFor={`pie-stable-colors-${widgetId}`}>
+                      <Switch
+                        id={`pie-stable-colors-${widgetId}`}
+                        checked={Boolean(draft.colors.stable)}
+                        onCheckedChange={(v) => setColors({ stable: v })}
+                      />
+                    </SettingRow>
+                    <p className="text-xs text-muted-foreground">
+                      The color follows the category name instead of its position, so a category
+                      keeps its color across logs and when the data changes.
+                    </p>
+                  </div>
+                )}
+                {scheme === "shades" && (
+                  <SettingRow label="Base color">
+                    <span className="flex items-center gap-2 font-mono text-xs text-muted-foreground">
+                      {draft.colors.base ?? DEFAULT_SHADES_BASE}
+                      <ColorSwatchInput
+                        label="Base color"
+                        color={draft.colors.base ?? DEFAULT_SHADES_BASE}
+                        value={draft.colors.base ?? DEFAULT_SHADES_BASE}
+                        onChange={(hex) => setColors({ base: hex })}
+                      />
+                    </span>
+                  </SettingRow>
+                )}
+              </div>
+
+              <div className="space-y-2 pt-2">
+                <div className="flex items-center justify-between">
+                  <Label>Category colors</Label>
+                  {Object.keys(overrides).length > 0 && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2 text-xs"
+                      onClick={() => setColors({ overrides: {} })}
+                    >
+                      Reset all
+                    </Button>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  <span className="font-medium text-foreground">
+                    Click the colored square next to a category to choose its own color.
+                  </span>{" "}
+                  It then keeps that color regardless of the scheme above — for example, make one
+                  category red in a grey chart to highlight it.
+                </p>
+                {!(draft.labelColumn && draft.valueColumn) ? (
+                  <p className="text-xs text-muted-foreground">Set up the query and columns in the Data tab first.</p>
+                ) : categoryData.loading ? (
+                  <p className="text-xs text-muted-foreground">Loading categories…</p>
+                ) : categoryData.error ? (
+                  <p className="text-xs text-destructive">{categoryData.error}</p>
+                ) : categories.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">The query returned no categories.</p>
+                ) : (
+                  <div className="max-h-56 divide-y overflow-y-auto rounded-md border">
+                    {categories.map((label, i) => (
+                      <div key={`${label}-${i}`} className="flex items-center gap-2 px-2 py-1.5 text-xs">
+                        <ColorSwatchInput
+                          label={`Color for ${label}`}
+                          color={categoryColors[i]}
+                          value={overrides[label] ?? "#808080"}
+                          onChange={(hex) => setOverride(label, hex)}
+                        />
+                        <span className="min-w-0 flex-1 truncate" title={label}>
+                          {label}
+                        </span>
+                        {overrides[label] && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="size-6"
+                            title="Use the scheme color again"
+                            aria-label={`Reset color for ${label}`}
+                            onClick={() => setOverride(label, null)}
+                          >
+                            <X className="size-3.5" />
+                          </Button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -287,6 +498,7 @@ function SettingsBody({ widgetId, initial, onApply, onCancel, fileId, projectId 
             legendPosition={draft.legendPosition}
             legendValues={draft.legendValues}
             showCategoryCount={draft.showCategoryCount}
+            colors={previewColors(draft.colors, categories)}
             className="w-full max-w-xs md:max-w-md"
           />
         </div>

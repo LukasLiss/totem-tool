@@ -1,7 +1,7 @@
 /**
- * PieChartSketch — a grey wireframe of the pie chart widget for its edit
- * form. It only shows the layout the settings produce (title, pie or donut,
- * legend style, values, category count), with placeholder shapes instead of
+ * PieChartSketch — a wireframe of the pie chart widget for its edit form. It
+ * only shows the layout the settings produce (title, pie or donut, legend
+ * style, values, category count, colors), with placeholder shapes instead of
  * real labels and numbers.
  */
 
@@ -40,9 +40,14 @@ const TextBar = ({ x, y, width, height = 4, opacity = 0.3 }: {
   opacity?: number;
 }) => <rect x={x} y={y - height / 2} width={width} height={height} rx={height / 2} fill={INK} opacity={opacity} />;
 
-const Swatch = ({ x, y, index }: { x: number; y: number; index: number }) => (
-  <rect x={x} y={y - 2} width={4} height={4} rx={1} fill={INK} opacity={SHADES[index]} />
-);
+/** Fill of slice `index`: the chart's color if given, else a grey shade. */
+const sliceFill = (index: number, colors?: string[]) =>
+  colors?.[index] ? { fill: colors[index], opacity: 1 } : { fill: INK, opacity: SHADES[index] };
+
+const Swatch = ({ x, y, index, colors }: { x: number; y: number; index: number; colors?: string[] }) => {
+  const { fill, opacity } = sliceFill(index, colors);
+  return <rect x={x} y={y - 2} width={4} height={4} rx={1} fill={fill} opacity={opacity} />;
+};
 
 // Longer titles are cut off with an ellipsis so they fit the sketch width.
 const TITLE_MAX_CHARS = 40;
@@ -56,6 +61,8 @@ interface PieChartSketchProps {
   legendPosition: LegendPosition;
   legendValues: LegendValues;
   showCategoryCount: boolean;
+  /** Colors of the five sketch slices; grey shades when omitted. */
+  colors?: string[];
   /** Sizing of the SVG; defaults to the full width, at most `max-w-sm`. */
   className?: string;
 }
@@ -68,6 +75,7 @@ const PieChartSketch: React.FC<PieChartSketchProps> = ({
   legendPosition,
   legendValues,
   showCategoryCount,
+  colors,
   className,
 }) => {
   const legend = showLegend ? legendPosition : null;
@@ -102,7 +110,7 @@ const PieChartSketch: React.FC<PieChartSketchProps> = ({
 
   const legendEntry = (x: number, y: number, index: number, valuesX?: number) => (
     <g key={index}>
-      <Swatch x={x} y={y} index={index} />
+      <Swatch x={x} y={y} index={index} colors={colors} />
       <TextBar x={x + 7} y={y} width={LABEL_LENGTHS[index]} />
       {valueBoxes(valuesX ?? x + 7 + LABEL_LENGTHS[index] + 3, y)}
     </g>
@@ -183,8 +191,8 @@ const PieChartSketch: React.FC<PieChartSketchProps> = ({
         <path
           key={i}
           d={slicePath(cx, cy, r, ri, a0, a1)}
-          fill={INK}
-          fillOpacity={SHADES[i]}
+          fill={sliceFill(i, colors).fill}
+          fillOpacity={sliceFill(i, colors).opacity}
           stroke="var(--card)"
           strokeWidth={1.5}
         />
