@@ -15,8 +15,7 @@ import { Toaster, toast } from "sonner";
 import { SplashAnimation } from "./components/SplashAnimation";
 import { setBypassCache } from "./interceptors/axios";
 import { getUserSettings } from "./api/settingsApi";
-
-const LOCAL_MODE = Boolean(import.meta.env.VITE_LOCAL_MODE);
+import { LOCAL_MODE } from "./lib/env";
 
 async function guestLogin() {
   const { data } = await axios.post(

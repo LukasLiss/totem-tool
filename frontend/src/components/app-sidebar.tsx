@@ -27,13 +27,12 @@ import { getDashboards } from "@/api/dashboardApi";
 import { invalidateProjectDashboards } from "@/components/text-box/useProjectDashboards";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-
-// In the desktop build the only account is the auto-logged-in Guest, so
-// "Log out" would just drop the user's place and log them straight back in.
-const LOCAL_MODE = Boolean(import.meta.env.VITE_LOCAL_MODE);
+import { LOCAL_MODE } from "@/lib/env";
+import { useLogout } from "@/hooks/use-logout";
 
 export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   const navigate = useNavigate();
+  const logout = useLogout();
   // Hooks must run unconditionally; the context has a non-null default.
   const { selectedFile } = useContext(SelectedFileContext);
   const [, setFiles] = useState<SelectedFile[]>([]);
@@ -120,7 +119,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
         {!LOCAL_MODE && (
           <SidebarMenuButton
             tooltip="Log out"
-            onClick={() => navigate("/logout")}
+            onClick={logout}
           >
             <LogOut />
             <span>Log out</span>
