@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import axios from "axios";
 import { Login } from "./react_component/login";
 import { Logout } from "./react_component/logout";
+import { OAuthCallback } from "./react_component/oauthCallback";
 import { Title } from "./Title";
 import UploadView from "./UploadView";
 import { SelectedFileContext, type SelectedFile } from "./contexts/SelectedFileContext";
@@ -15,8 +16,7 @@ import { Toaster, toast } from "sonner";
 import { SplashAnimation } from "./components/SplashAnimation";
 import { setBypassCache } from "./interceptors/axios";
 import { getUserSettings } from "./api/settingsApi";
-
-const LOCAL_MODE = Boolean(import.meta.env.VITE_LOCAL_MODE);
+import { LOCAL_MODE } from "./lib/env";
 
 async function guestLogin() {
   const { data } = await axios.post(
@@ -128,6 +128,10 @@ function AppRoutes({ selectedFile, setSelectedFile }) {
             <Route
               path="/login"
               element={LOCAL_MODE ? <Navigate to="/upload" replace /> : <Login />}
+            />
+            <Route
+              path="/oauth/callback"
+              element={LOCAL_MODE ? <Navigate to="/upload" replace /> : <OAuthCallback />}
             />
             <Route path="/logout" element={<Logout />} />
             <Route path="/upload" element={<UploadView />} />
