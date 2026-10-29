@@ -5,6 +5,7 @@ from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.core import signing
+from django.core.management import CommandError, call_command
 from django.test import TestCase, override_settings
 
 from . import oauth
@@ -207,3 +208,47 @@ class ProviderErrorTests(TestCase):
         ):
             oauth._request_json('https://api.github.com/user', token='t')
         self.assertEqual(ctx.exception.code, 'provider_unreachable')
+
+
+class EmailLoginTests(TestCase):
+    def setUp(self):
+        User.objects.create_user('alice', email='Alice@example.com', password='pw-12345')
+
+    def _token(self, username, password='pw-12345'):
+        return self.client.post(
+            '/token/', {'username': username, 'password': password},
+            content_type='application/json',
+        )
+
+    def test_username_and_email_both_log_in(self):
+        self.assertEqual(self._token('alice').status_code, 200)
+        self.assertEqual(self._token('alice@EXAMPLE.com').status_code, 200)
+
+    def test_wrong_password_by_email_is_rejected(self):
+        self.assertEqual(self._token('alice@example.com', 'nope').status_code, 401)
+
+    def test_shared_email_is_rejected(self):
+        User.objects.create_user('alice2', email='alice@example.com', password='pw-12345')
+        self.assertEqual(self._token('alice@example.com').status_code, 401)
+
+
+class EnsureInitialUserTests(TestCase):
+    def _run(self, **env):
+        with mock.patch.dict('os.environ', env, clear=False):
+            call_command('ensure_initial_user', stdout=io.StringIO())
+
+    def test_creates_then_resets_password(self):
+        self._run(TOTEM_USER_EMAIL='admin@example.org', TOTEM_USER_PASSWORD='first')
+        self._run(TOTEM_USER_EMAIL='admin@example.org', TOTEM_USER_PASSWORD='second')
+        user = User.objects.get(username='admin@example.org')
+        self.assertEqual(user.email, 'admin@example.org')
+        self.assertTrue(user.check_password('second'))
+        self.assertFalse(user.is_staff)
+
+    def test_noop_when_unset(self):
+        self._run(TOTEM_USER_EMAIL='', TOTEM_USER_PASSWORD='')
+        self.assertFalse(User.objects.exists())
+
+    def test_half_configured_is_an_error(self):
+        with self.assertRaises(CommandError):
+            self._run(TOTEM_USER_EMAIL='admin@example.org', TOTEM_USER_PASSWORD='')
