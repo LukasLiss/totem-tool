@@ -6,6 +6,7 @@ import type {
   TextVerticalAlign,
 } from '@/components/text-box/textBoxFormat';
 import type { RichTextDoc } from '@/components/text-box/richText';
+import type { ChartStyle } from '@/components/sql-widgets/chartLegendUtils';
 
 declare module 'gridstack' {
   interface GridStackWidget {
@@ -87,6 +88,8 @@ declare module 'gridstack' {
     title?: string;
     show_legend?: boolean;
     show_tooltip?: boolean;
+    // Chart styling options, not yet persisted by the backend
+    chart_style?: ChartStyle;
     label_column?: string;
     value_column?: string;
     // FilterStackComponent

@@ -1,18 +1,33 @@
 "use client"
 
 import React, { useState, useEffect } from 'react';
-import { Label as PieLabel, Pie, PieChart } from "recharts";
+import { Label as PieLabel, Pie, PieChart, type PieLabelRenderProps } from "recharts";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { GridStackNode } from 'gridstack';
 import type { LinkedQuery } from "@/react_component/sql/linkedQuery";
 import { useSqlQueryData } from "@/react_component/sql/useSqlQueryData";
 import { ColumnInput, QuerySection } from "@/components/sql-widgets/shared";
 import { linkedQueryOf, useColumnDiscovery } from "@/components/sql-widgets/sqlWidgetUtils";
 import { PIE_CHART_EXPECTED_RESULT } from "@/components/sql-widgets/constants";
+import { ChartValueLegend, PieCallout } from "@/components/sql-widgets/chartLegend";
+import {
+  fitPieCallouts,
+  type ChartStyle,
+  type LegendPosition,
+  type LegendValues,
+} from "@/components/sql-widgets/chartLegendUtils";
+import PieChartSketch from "./PieChartSketch";
 import { SelectedFile } from '@/contexts/SelectedFileContext';
+
+// Matches the `max-h-[450px]` of the chart container below.
+const CHART_MAX_HEIGHT = 450;
+// Donut hole size relative to the outer radius (recharts' 50% / 80% defaults).
+const DONUT_INNER_SHARE = 0.625;
 
 
 // Define props interface for components (extend as needed)
@@ -30,6 +45,7 @@ interface ComponentProps {
     show_tooltip?: boolean;
     label_column?: string;
     value_column?: string;
+    chart_style?: ChartStyle;
   };
   onUpdate?: (updates: Partial<GridStackNode>) => void;
   isEditMode?: boolean;
@@ -51,6 +67,10 @@ const PieChartComponent: React.FC<ComponentProps> = ({
   const [title, setTitle] = useState(node.title || '');
   const [labelColumn, setLabelColumn] = useState(node.label_column || '');
   const [valueColumn, setValueColumn] = useState(node.value_column || '');
+  const [showLegend, setShowLegend] = useState(node.show_legend ?? true);
+  const [legendPosition, setLegendPosition] = useState<LegendPosition>(node.chart_style?.legend?.position ?? 'bottom');
+  const [legendValues, setLegendValues] = useState<LegendValues>(node.chart_style?.legend?.values ?? 'none');
+  const [showCategoryCount, setShowCategoryCount] = useState(node.chart_style?.show_category_count ?? true);
 
   // Sync with node when it changes
   useEffect(() => {
@@ -61,6 +81,10 @@ const PieChartComponent: React.FC<ComponentProps> = ({
     setTitle(node.title || '');
     setLabelColumn(node.label_column || '');
     setValueColumn(node.value_column || '');
+    setShowLegend(node.show_legend ?? true);
+    setLegendPosition(node.chart_style?.legend?.position ?? 'bottom');
+    setLegendValues(node.chart_style?.legend?.values ?? 'none');
+    setShowCategoryCount(node.chart_style?.show_category_count ?? true);
   }, [node]);
 
   const fileId = selectedFile?.id;
@@ -127,6 +151,27 @@ const PieChartComponent: React.FC<ComponentProps> = ({
     onUpdate?.({ value_column: value });
   };
 
+  const handleShowLegendChange = (value: boolean) => {
+    setShowLegend(value);
+    onUpdate?.({ show_legend: value });
+  };
+
+  const handleShowCategoryCountChange = (value: boolean) => {
+    setShowCategoryCount(value);
+    onUpdate?.({ chart_style: { ...node.chart_style, show_category_count: value } });
+  };
+
+  const updateLegendStyle = (legend: NonNullable<ChartStyle['legend']>) => {
+    if (legend.position) setLegendPosition(legend.position);
+    if (legend.values) setLegendValues(legend.values);
+    onUpdate?.({
+      chart_style: {
+        ...node.chart_style,
+        legend: { ...node.chart_style?.legend, ...legend },
+      },
+    });
+  };
+
   // Generate chart config dynamically
   const chartConfig: ChartConfig = React.useMemo(() => {
     const config: ChartConfig = {
@@ -149,6 +194,48 @@ const PieChartComponent: React.FC<ComponentProps> = ({
   const totalValue = React.useMemo(() => {
     return chartData.reduce((acc, curr) => acc + (Number(curr[valueColumn]) || 0), 0);
   }, [chartData, valueColumn]);
+
+  const legendItems = React.useMemo(
+    () =>
+      chartData.map((item) => ({
+        label: String(item[labelColumn]),
+        value: Number(item[valueColumn]) || 0,
+        color: String(item.fill),
+      })),
+    [chartData, labelColumn, valueColumn]
+  );
+
+  // Callouts need the chart's pixel size to shrink the pie until they fit.
+  const [chartArea, setChartArea] = useState<HTMLDivElement | null>(null);
+  const [chartSize, setChartSize] = useState<{ width: number; height: number } | null>(null);
+  useEffect(() => {
+    if (!chartArea) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      setChartSize({ width, height: Math.min(height, CHART_MAX_HEIGHT) });
+    });
+    observer.observe(chartArea);
+    return () => observer.disconnect();
+  }, [chartArea]);
+
+  const showCallouts = showLegend && legendPosition === 'callouts';
+  const calloutFit = React.useMemo(
+    () =>
+      showCallouts && chartSize && chartSize.width > 0 && chartSize.height > 0
+        ? fitPieCallouts(legendItems, legendValues, chartSize.width, chartSize.height)
+        : null,
+    [showCallouts, chartSize, legendItems, legendValues]
+  );
+  const calloutShares = React.useMemo(
+    () => legendItems.map((item) => (totalValue ? item.value / totalValue : 0)),
+    [legendItems, totalValue]
+  );
+  const calloutLabel = React.useCallback(
+    (props: PieLabelRenderProps) => (
+      <PieCallout {...props} values={legendValues} shares={calloutShares} twoLines={calloutFit?.twoLines} />
+    ),
+    [legendValues, calloutShares, calloutFit]
+  );
 
   if (isEditMode) {
     return (
@@ -222,11 +309,72 @@ const PieChartComponent: React.FC<ComponentProps> = ({
               placeholder="Center text for donut chart"
             />
           </div>
+          <div className="flex items-center justify-between">
+            <Label htmlFor={`pie-category-count-${node.component_id}`}>Show number of categories</Label>
+            <Switch
+              id={`pie-category-count-${node.component_id}`}
+              checked={showCategoryCount}
+              onCheckedChange={handleShowCategoryCountChange}
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <Label htmlFor={`pie-legend-${node.component_id}`}>Show legend</Label>
+            <Switch
+              id={`pie-legend-${node.component_id}`}
+              checked={showLegend}
+              onCheckedChange={handleShowLegendChange}
+            />
+          </div>
+          {showLegend && (
+            <>
+              <div>
+                <label className="block text-sm font-medium mb-1">Legend Style</label>
+                <div className="flex justify-center gap-2">
+                  {([['bottom', 'Bottom'], ['columns', 'Columns'], ['callouts', 'Callouts']] as const).map(([value, text]) => (
+                    <Button
+                      key={value}
+                      variant={legendPosition === value ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => updateLegendStyle({ position: value })}
+                    >
+                      {text}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Legend Values</label>
+                <div className="flex justify-center gap-2">
+                  {([['none', 'None'], ['value', 'Value'], ['percent', 'Percent'], ['both', 'Both']] as const).map(([value, text]) => (
+                    <Button
+                      key={value}
+                      variant={legendValues === value ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => updateLegendStyle({ values: value })}
+                    >
+                      {text}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+          <div className="border-t pt-4">
+            <PieChartSketch
+              title={title}
+              chartType={chartType}
+              showCenterText={Boolean(ringText)}
+              showLegend={showLegend}
+              legendPosition={legendPosition}
+              legendValues={legendValues}
+              showCategoryCount={showCategoryCount}
+            />
+          </div>
 
         </CardContent>
       </Card>
 
-      
+
     );
   }
 
@@ -278,10 +426,11 @@ const PieChartComponent: React.FC<ComponentProps> = ({
           <CardTitle>{title}</CardTitle>
         </CardHeader>
       )}
-      <CardContent className="flex-1 flex justify-center items-center pb-0 min-h-0">
+      <CardContent className="flex-1 flex flex-col items-center gap-3 pb-0 min-h-0">
+        <div ref={setChartArea} className="w-full min-h-0 flex-1 flex items-center justify-center">
         <ChartContainer
           config={chartConfig}
-          className="w-full h-full max-h-[450px]"
+          className="w-full h-full aspect-auto max-h-[450px]"
         >
           <PieChart>
               <ChartTooltip
@@ -292,7 +441,11 @@ const PieChartComponent: React.FC<ComponentProps> = ({
               data={chartData}
               dataKey={valueColumn}
               nameKey={labelColumn}
-              innerRadius={chartType === 'donut' ? "50%" : 0}
+              // With callouts the pie shrinks to leave room for their lines and text
+              outerRadius={calloutFit ? calloutFit.radius : "80%"}
+              innerRadius={chartType === 'donut' ? (calloutFit ? calloutFit.radius * DONUT_INNER_SHARE : "50%") : 0}
+              label={showCallouts ? calloutLabel : false}
+              labelLine={false}
               strokeWidth={5}
             >
               {chartType === 'donut' && ringText && (
@@ -329,12 +482,23 @@ const PieChartComponent: React.FC<ComponentProps> = ({
             </Pie>
           </PieChart>
         </ChartContainer>
+        </div>
+        {showLegend && legendPosition !== 'callouts' && (
+          <ChartValueLegend
+            items={legendItems}
+            layout={legendPosition}
+            values={legendValues}
+            className="w-full max-h-[40%] shrink-0 overflow-y-auto"
+          />
+        )}
       </CardContent>
+      {showCategoryCount && (
         <CardFooter className="flex-col gap-2 text-sm">
           <div className="leading-none text-muted-foreground">
             {chartData.length} categories
           </div>
         </CardFooter>
+      )}
     </Card>
   );
 };
