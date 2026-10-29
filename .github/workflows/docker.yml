@@ -1,0 +1,79 @@
+name: Docker image
+
+# Builds the all-in-one server image (Dockerfile, see docs/DOCKER.md) on every
+# PR to catch broken builds, and publishes it to GitHub Container Registry
+# (ghcr.io/<owner>/<repo>) from main and from version tags.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=sha
+
+      - name: Build (and push outside PRs)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: ${{ github.event_name == 'pull_request' }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test
+        run: |
+          image=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
+          docker run -d --name totem -p 8000:8000 \
+            -e TOTEM_USER_EMAIL=ci@example.org -e TOTEM_USER_PASSWORD=ci-password "$image"
+          for i in $(seq 1 60); do
+            curl -fsS http://localhost:8000/auth/login-options/ && break
+            sleep 2
+          done
+          curl -fsS http://localhost:8000/auth/login-options/ | grep -q '"password_login":true'
+          curl -fsS http://localhost:8000/upload | grep -q '<div id="root"'
+          curl -fsS -X POST -H 'Content-Type: application/json' \
+            -d '{"username":"ci@example.org","password":"ci-password"}' \
+            http://localhost:8000/token/ | grep -q '"access"'
+
+      - name: Container logs
+        if: always()
+        run: docker logs totem || true

@@ -1,0 +1,28 @@
+# One-command TOTeM server:  docker compose up -d   →  http://localhost:8000
+# Put settings in a .env file next to this one (see docker/.env.example);
+# docs/DOCKER.md explains each variable.
+services:
+  totem:
+    build: .
+    ports:
+      - "${TOTEM_PORT:-8000}:8000"
+    environment:
+      # Public address of the app, e.g. https://totem.example.org. Used for
+      # the OAuth callback and the allowed host name.
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8000}
+      # Optional email/password account, created or updated on every start.
+      TOTEM_USER_EMAIL: ${TOTEM_USER_EMAIL:-}
+      TOTEM_USER_PASSWORD: ${TOTEM_USER_PASSWORD:-}
+      # Optional OAuth login/registration. Callback URLs to register:
+      #   <PUBLIC_URL>/auth/oauth/github/callback/
+      #   <PUBLIC_URL>/auth/oauth/google/callback/
+      GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
+      GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+    volumes:
+      - totem-data:/data
+    restart: unless-stopped
+
+volumes:
+  totem-data:

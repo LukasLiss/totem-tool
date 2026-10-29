@@ -207,6 +207,8 @@ else:
     }
 
 
+AUTHENTICATION_BACKENDS = ['authentification.backends.EmailOrUsernameBackend']
+
 # Password validation
 # https://docs.djangoproject.com/en/4.2/ref/settings/#auth-password-validators
 
@@ -245,6 +247,15 @@ STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 if HAS_WHITENOISE:
     STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+
+# Built frontend (frontend/dist) to serve from Django itself, so one process
+# hosts the whole app on one origin. Set by the Docker image; unset in
+# development, where Vite serves the frontend on :3000.
+FRONTEND_DIST_DIR = os.environ.get('TOTEM_FRONTEND_DIR', '')
+if FRONTEND_DIST_DIR and HAS_WHITENOISE:
+    # Serves /assets/*, favicon etc. at the site root; index.html for the
+    # client-side routes comes from the catch-all in totem_backend/urls.py.
+    WHITENOISE_ROOT = FRONTEND_DIST_DIR
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field

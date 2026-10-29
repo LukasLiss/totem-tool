@@ -1,0 +1,20 @@
+.git
+.github
+.claude
+**/node_modules
+**/__pycache__
+**/*.pyc
+**/.venv
+**/.pytest_cache
+build
+dist
+electron
+frontend/dist
+# Local runtime data and secrets must never end up in the image.
+.env
+**/.env
+backend/db.sqlite3
+backend/user_files
+backend/cache
+backend/staticfiles
+backend/.secret_key

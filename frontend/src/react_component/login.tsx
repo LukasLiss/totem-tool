@@ -153,11 +153,12 @@ export const Login = () => {
     <form onSubmit={submit}>
       <div className="grid gap-6">
         <div className="grid gap-3">
-          <Label htmlFor="username">Username</Label>
+          <Label htmlFor="username">Email or username</Label>
           <Input
             id="username"
-            type="username"
-            placeholder="Enter Username"
+            type="text"
+            autoComplete="username"
+            placeholder="Enter email or username"
             required
             onChange={(e) => setUsername(e.target.value)}
           />
