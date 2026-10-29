@@ -24,7 +24,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.files import File
 from django.core.files.base import ContentFile
-from django.db import transaction
+from django.db import connection, transaction
 
 from .asset_formats import SQL_QUERY_ASSET_SCHEMA, SQL_QUERY_ASSET_VERSION
 from .rich_text import plain_text_from_doc
@@ -527,7 +527,10 @@ def _sample_user():
     return user
 
 
-def _create_sample_project(user, source_log: Path):
+def _create_sample_project(user, source_log: Path, written: list):
+    """Build the sample project. Every file saved to storage is appended to
+    ``written`` as it lands, so the caller can remove it again if the
+    transaction rolls back -- a rollback undoes rows, not files."""
     from .models import (
         Dashboard,
         EventLog,
@@ -549,6 +552,7 @@ def _create_sample_project(user, source_log: Path):
     event_log = EventLog(project=project)
     with open(source_log, "rb") as handle:
         event_log.file.save(SAMPLE_LOG_FILENAME, File(handle), save=False)
+    written.append(event_log.file)
     event_log.save()
 
     logo = ImageAsset(
@@ -562,6 +566,7 @@ def _create_sample_project(user, source_log: Path):
         ContentFile(SAMPLE_LOGO_SVG.encode("utf-8")),
         save=False,
     )
+    written.append(logo.image)
     logo.save()
 
     # The query store. Created before the dashboard so the widgets below can
@@ -612,7 +617,12 @@ def seed_sample_project(sender, **kwargs):
     if not getattr(settings, "SEED_SAMPLE_PROJECT", False):
         return
 
-    from .models import SeedState
+    from .models import Project, SeedState
+
+    # post_migrate also fires after migrating *backwards*; unapplying the
+    # migration that creates SeedState must not make `migrate` itself fail.
+    if SeedState._meta.db_table not in connection.introspection.table_names():
+        return
 
     if SeedState.objects.filter(key=SAMPLE_SEED_KEY).exists():
         return
@@ -627,17 +637,32 @@ def seed_sample_project(sender, **kwargs):
         )
         return
 
+    written = []
     try:
         with transaction.atomic():
             # Re-check inside the transaction: two processes can run migrate at
             # once, and the unique key is what actually settles the race.
             if SeedState.objects.filter(key=SAMPLE_SEED_KEY).exists():
                 return
-            project = _create_sample_project(_sample_user(), source_log)
+            # The sample is for a fresh install. An install upgraded from a
+            # version without it already has the user's own projects, so it is
+            # marked as seeded instead of having a demo project dropped into it.
+            if Project.objects.exists():
+                SeedState.objects.create(key=SAMPLE_SEED_KEY)
+                logger.info("Existing projects found; not seeding the sample project")
+                return
+            project = _create_sample_project(_sample_user(), source_log, written)
             SeedState.objects.create(key=SAMPLE_SEED_KEY)
     except Exception:
         # Rolling back takes the tombstone with it, so the next launch retries
-        # rather than leaving a half-built project behind forever.
+        # rather than leaving a half-built project behind forever. The files
+        # already copied into MEDIA_ROOT are not part of the transaction, and a
+        # retry would save fresh copies under new names, so remove them here.
+        for field_file in written:
+            try:
+                field_file.storage.delete(field_file.name)
+            except Exception:
+                logger.exception("Could not remove %s after a failed seed", field_file.name)
         logger.exception("Could not seed the sample project")
         return
 

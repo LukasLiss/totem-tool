@@ -5880,6 +5880,51 @@ class SampleProjectSeedTests(TestCase):
         self._seed()
         self.assertEqual(Project.objects.count(), 1)
 
+    def test_failed_seed_removes_the_files_it_copied(self):
+        with patch(
+            "api.sample_project.sample_dashboard_layout",
+            side_effect=RuntimeError("boom"),
+        ):
+            with self.assertLogs("api.sample_project", level="ERROR"):
+                self._seed()
+
+        self.assertFalse(Project.objects.exists())
+        self.assertFalse(SeedState.objects.exists())
+        # The rollback took the rows; the log and logo must not outlive them,
+        # or every retrying launch would leave another 2.3 MB copy behind.
+        leftover = [
+            os.path.join(root, name)
+            for root, _dirs, names in os.walk(self.media)
+            for name in names
+        ]
+        self.assertEqual(leftover, [])
+
+        self._seed()
+        self.assertEqual(Project.objects.count(), 1)
+
+    def test_skipped_when_the_seed_table_is_missing(self):
+        # post_migrate also fires after `migrate api <earlier>` has unapplied
+        # the migration that creates SeedState.
+        from django.db import connection
+
+        with patch.object(connection.introspection, "table_names", return_value=[]):
+            self._seed()
+
+        self.assertFalse(Project.objects.exists())
+
+    def test_upgraded_install_with_projects_is_not_seeded(self):
+        existing = Project.objects.create(name="my-own-log")
+
+        self._seed()
+
+        self.assertEqual(list(Project.objects.all()), [existing])
+        self.assertTrue(SeedState.objects.filter(key=SAMPLE_SEED_KEY).exists())
+
+        # Marked as done, so it stays out even once the user's projects are gone.
+        existing.delete()
+        self._seed()
+        self.assertFalse(Project.objects.exists())
+
     def test_seeds_the_stored_query_library(self):
         self._seed()
 
