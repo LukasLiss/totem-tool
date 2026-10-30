@@ -47,7 +47,7 @@ export type ChartSettingsTab = "data" | "style";
 /* ------------------------------------------------------------------ */
 
 /**
- * The modal itself, the same size as the SQL editor popup. Its content is
+ * The modal itself, as wide as the SQL editor popup. Its content is
  * unmounted while closed, so a settings body inside starts from the applied
  * settings on every open.
  */
@@ -58,8 +58,9 @@ export function ChartSettingsDialog({ open, onOpenChange, children }: {
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      {/* Same size as the SQL editor popup (SqlQueryEditorDialog). */}
-      <DialogContent className="flex h-[88vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(1200px,94vw)]">
+      {/* As wide as the SQL editor popup (SqlQueryEditorDialog), and as tall up to
+          three quarters of that width, so it keeps a landscape shape on tall screens. */}
+      <DialogContent className="flex h-[min(88vh,calc(min(1200px,94vw)*0.75))] flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(1200px,94vw)]">
         {children}
       </DialogContent>
     </Dialog>
