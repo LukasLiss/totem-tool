@@ -50,6 +50,12 @@ export interface SqlQueryFieldProps {
     query: string,
     linkedQuery: LinkedQuery | null
   ) => void;
+  /**
+   * rows per page for the SQL editor's page selector: it starts at this
+   * value, and onRowLimitChange gets the selection when the user applies
+   */
+  rowLimit?: number;
+  onRowLimitChange?: (rowLimit: number) => void;
 }
 
 export function SqlQueryField({
@@ -66,6 +72,8 @@ export function SqlQueryField({
   id,
   grow = false,
   onRunResult,
+  rowLimit,
+  onRowLimitChange,
 }: SqlQueryFieldProps) {
   const [editorOpen, setEditorOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -147,12 +155,16 @@ export function SqlQueryField({
         linkedQuery={onLinkChange ? linkedQuery : null}
         expectedResult={expectedResult}
         title={editorTitle}
-        onApply={(query, link, result) => {
+        rowLimit={rowLimit}
+        onApply={(query, link, result, selectedRowLimit) => {
           onChange(query);
           if (onLinkChange && (link?.id ?? null) !== (linkedQuery?.id ?? null)) {
             onLinkChange(link);
           }
           if (result) onRunResult?.(result, query, onLinkChange ? link : null);
+          if (selectedRowLimit !== undefined && selectedRowLimit !== rowLimit) {
+            onRowLimitChange?.(selectedRowLimit);
+          }
         }}
       />
       {onLinkChange && (

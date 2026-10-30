@@ -62,6 +62,9 @@ import LogStatisticsSketch from './LogStatisticsSketch';
 import LogStatisticsSettingsDialog from './LogStatisticsSettingsDialog';
 import { selectionFromNode, type LogStatisticsSelection } from './logStatisticsUtils';
 import WidgetDraftTile from './WidgetDraftTile';
+import SqlTableSketch from './SqlTableSketch';
+import { discoveryKey, useColumnDiscovery } from './sql-widgets/sqlWidgetUtils';
+import SqlTableSettingsDialog, { type SqlTableSettings } from './SqlTableSettingsDialog';
 import { Label } from '@/components/ui/label';
 import {
   DropdownMenu,
@@ -1959,6 +1962,65 @@ export const SqlQueryComponent: React.FC<ComponentProps> = ({
     setLinkedQuery(link);
     onUpdate?.({ query_asset: link?.id ?? null, query_asset_name: link?.name ?? null });
   };
+
+  // Edit mode: a draft of the result table, the settings in a popup. The
+  // applied values are mirrored in local state for the draft, like the link.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [applied, setApplied] = useState({ name: value.name, query: value.query, rowLimit: value.rowLimit });
+  useEffect(() => {
+    setApplied({ name: value.name, query: value.query, rowLimit: value.rowLimit });
+  }, [value.name, value.query, value.rowLimit]);
+
+  // The draft's column names: looked up with a one-row query in edit mode,
+  // again whenever the query or the link changes.
+  const discovery = useColumnDiscovery(selectedFile?.id, applied.query, linkedQuery?.id);
+  const { discover } = discovery;
+  useEffect(() => {
+    if (isEditMode && selectedFile?.id && (applied.query.trim() || linkedQuery)) void discover();
+  }, [isEditMode, discover, selectedFile?.id, applied.query, linkedQuery]);
+  const draftColumns =
+    discovery.resultFor === discoveryKey(applied.query, linkedQuery?.id) ? discovery.columns : undefined;
+
+  const applySettings = (next: SqlTableSettings) => {
+    setApplied({ name: next.name, query: next.query, rowLimit: next.rowLimit });
+    setLinkedQuery(next.linked);
+    onUpdate?.({
+      name: next.name,
+      query: next.query,
+      row_limit: next.rowLimit,
+      query_asset: next.linked?.id ?? null,
+      query_asset_name: next.linked?.name ?? null,
+    });
+  };
+
+  if (isEditMode) {
+    return (
+      <WidgetDraftTile
+        typeLabel="SQL editor"
+        hint="Layout preview of the result table: grey bars for the values, and the paging with your rows per page. The real result is shown when you leave edit mode."
+        onConfigure={() => setSettingsOpen(true)}
+        sketch={
+          <SqlTableSketch
+            name={applied.name}
+            linked={Boolean(linkedQuery)}
+            columns={draftColumns}
+            rowsPerPage={applied.rowLimit}
+            className="h-full w-full"
+          />
+        }
+      >
+        <SqlTableSettingsDialog
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          widgetId={node.component_id}
+          settings={{ ...applied, linked: linkedQuery }}
+          onApply={applySettings}
+          fileId={selectedFile?.id}
+          projectId={selectedFile?.project}
+        />
+      </WidgetDraftTile>
+    );
+  }
 
   return (
     <SqlQueryEditor

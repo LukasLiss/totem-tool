@@ -69,14 +69,16 @@ export function ChartSettingsDialog({ open, onOpenChange, children }: {
 /**
  * Header, title field, Data / Style tabs on the left, the sketch on the
  * right (above on narrow screens), Cancel / Apply below. Widgets without a
- * title or without data leave out `onTitleChange` or `dataTab`; without a
- * Data tab the tab bar is left out and the style settings show directly.
+ * title, data or style settings leave out `onTitleChange`, `dataTab` or
+ * `styleTab`; with only one of the two tabs, the tab bar is left out and its
+ * settings show directly.
  */
 export function ChartSettingsLayout({
   heading,
   idPrefix,
   title,
   onTitleChange,
+  titlePlaceholder = "Chart title",
   tab,
   onTabChange,
   dataTab,
@@ -91,10 +93,13 @@ export function ChartSettingsLayout({
   idPrefix: string;
   title?: string;
   onTitleChange?: (title: string) => void;
+  /** Shown in the empty Title field; what the widget shows without a title. */
+  titlePlaceholder?: string;
   tab?: ChartSettingsTab;
   onTabChange?: (tab: ChartSettingsTab) => void;
   dataTab?: React.ReactNode;
-  styleTab: React.ReactNode;
+  /** Leave out when a widget has only data settings: the Data tab then shows without tabs. */
+  styleTab?: React.ReactNode;
   sketch: React.ReactNode;
   /** Caption below the sketch; defaults to the chart explanation. */
   sketchHint?: string;
@@ -118,12 +123,14 @@ export function ChartSettingsLayout({
                 id={`${idPrefix}-title`}
                 value={title ?? ""}
                 onChange={(e) => onTitleChange(e.target.value)}
-                placeholder="Chart title"
+                placeholder={titlePlaceholder}
               />
             </div>
           )}
 
-          {dataTab ? (
+          {dataTab && !styleTab ? (
+            <div className="flex min-h-0 flex-1 flex-col gap-4">{dataTab}</div>
+          ) : dataTab ? (
             <>
               <div role="tablist" className="flex shrink-0 gap-5 border-b">
                 {([["data", "Data"], ["style", "Style"]] as const).map(([value, text]) => (
@@ -266,6 +273,8 @@ export function ChartDataTab({
   expectedResult,
   editorTitle,
   discovery,
+  rowLimit,
+  onRowLimitChange,
 }: {
   widgetId: number;
   idPrefix: string;
@@ -276,13 +285,19 @@ export function ChartDataTab({
   columnFields: ColumnField[];
   fileId?: number;
   projectId?: number;
-  expectedResult: ExpectedResult;
+  /** What the widget reads from the result; omit when any result is fine. */
+  expectedResult?: ExpectedResult | null;
   editorTitle: string;
   discovery: ColumnDiscovery;
+  /** rows per page for the SQL editor's page selector (see SqlQueryField) */
+  rowLimit?: number;
+  onRowLimitChange?: (rowLimit: number) => void;
 }) {
   return (
     <>
       <QuerySection
+        rowLimit={rowLimit}
+        onRowLimitChange={onRowLimitChange}
         className="flex min-h-0 flex-col"
         growQuery
         widgetId={widgetId}
@@ -296,6 +311,7 @@ export function ChartDataTab({
         editorTitle={editorTitle}
         discovery={discovery}
       />
+      {columnFields.length > 0 && (
       <div className="grid shrink-0 grid-cols-2 gap-4">
         {columnFields.map((field) => (
           <ColumnSelect
@@ -310,6 +326,7 @@ export function ChartDataTab({
           />
         ))}
       </div>
+      )}
     </>
   );
 }

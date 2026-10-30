@@ -34,6 +34,8 @@ export function QuerySection({
   discovery,
   growQuery = false,
   className,
+  rowLimit,
+  onRowLimitChange,
 }: {
   widgetId: number;
   query: string;
@@ -42,12 +44,16 @@ export function QuerySection({
   onLinkChange: (l: LinkedQuery | null) => void;
   fileId?: number;
   projectId?: number;
-  expectedResult: ExpectedResult;
+  /** What the widget reads from the result; omit when any result is fine. */
+  expectedResult?: ExpectedResult | null;
   editorTitle: string;
   discovery: ColumnDiscovery;
   /** let the query box grow to the whole query (see SqlQueryField `grow`) */
   growQuery?: boolean;
   className?: string;
+  /** rows per page for the SQL editor's page selector (see SqlQueryField) */
+  rowLimit?: number;
+  onRowLimitChange?: (rowLimit: number) => void;
 }) {
   return (
     <div className={cn("grid gap-2", className)}>
@@ -73,13 +79,15 @@ export function QuerySection({
         onLinkChange={onLinkChange}
         fileId={fileId}
         projectId={projectId}
-        expectedResult={expectedResult}
+        expectedResult={expectedResult ?? null}
         editorTitle={editorTitle}
         grow={growQuery}
         // A result run in the SQL editor fills in the columns without querying again.
         onRunResult={(result, q, link) => discovery.accept(result, q, link?.id)}
+        rowLimit={rowLimit}
+        onRowLimitChange={onRowLimitChange}
       />
-      {expectedResult.description && (
+      {expectedResult?.description && (
         <p className="text-xs text-muted-foreground">{expectedResult.description}</p>
       )}
       {discovery.error && (
