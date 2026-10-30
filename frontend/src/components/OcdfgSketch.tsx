@@ -9,12 +9,22 @@
  * start locked). The graph depends on the log, so it is a fixed example.
  */
 
-import React from "react";
+import React, { useRef } from "react";
 import { cn } from "@/lib/utils";
 import { mapTypesToColors } from "@/utils/objectColors";
+import SketchLockBadge from "./SketchLockBadge";
+import { useSvgUnitsPerPixel } from "./sketchScale";
 
-// Wider when the flow runs left to right, so the five layers keep their spacing.
-const WIDTH_TB = 300;
+// Top to bottom: as wide as the graph (three columns of nodes), plus room
+// on the right for the lock badge.
+const TB_GRAPH_WIDTH = 186;
+// Room on the left for the controls panel (title, legend, toolbar).
+const CONTROLS_WIDTH = 72;
+const LOCK_ROOM = 24;
+// Top to bottom: room above and below, so the nearly square graph doesn't
+// draw larger than the wide ones when a tile's height is what limits it.
+const TB_PAD_Y = 24;
+// Left to right: wide enough for the five layers to keep their spacing.
 const WIDTH_LR = 360;
 const HEIGHT = 220;
 const INK = "var(--muted-foreground)";
@@ -57,13 +67,18 @@ const OcdfgSketch: React.FC<{
   className?: string;
 }> = ({ layoutDirection, showControls, interactionLocked, className }) => {
   const lr = layoutDirection === "LR";
-  const width = lr ? WIDTH_LR : WIDTH_TB;
-  // The controls panel takes the left edge; the graph uses the rest.
-  const left = showControls ? 72 : 8;
+  // The controls panel takes the left edge. The graph's room is the same
+  // either way, so it keeps its size: without the panel it just moves to the middle.
+  const left = showControls ? CONTROLS_WIDTH : CONTROLS_WIDTH / 2;
+  const width = lr ? WIDTH_LR : CONTROLS_WIDTH + TB_GRAPH_WIDTH + LOCK_ROOM;
+  const svgRef = useRef<SVGSVGElement>(null);
+  const padY = lr ? 0 : TB_PAD_Y;
+  const viewHeight = HEIGHT + 2 * padY;
+  const unitsPerPixel = useSvgUnitsPerPixel(svgRef, width, viewHeight);
   const place = ({ layer, slot }: SketchNode): [number, number] =>
     lr
-      ? [left + 16 + layer * ((width - left - 40) / 4), HEIGHT / 2 + slot * 62]
-      : [(left + width) / 2 + slot * 62, 16 + layer * 47];
+      ? [left + 16 + layer * ((width - CONTROLS_WIDTH - 40) / 4), HEIGHT / 2 + slot * 62]
+      : [left + TB_GRAPH_WIDTH / 2 + slot * 62, 16 + layer * 47];
   const size = (node: SketchNode) => (node.kind === "terminal" ? TERMINAL : ACTIVITY);
 
   const arcs = ARCS.map(([from, to, type], i) => {
@@ -102,7 +117,8 @@ const OcdfgSketch: React.FC<{
 
   return (
     <svg
-      viewBox={`0 0 ${width} ${HEIGHT}`}
+      ref={svgRef}
+      viewBox={`0 ${-padY} ${width} ${viewHeight}`}
       className={cn("mx-auto block", className ?? "w-full max-w-sm")}
       role="img"
       aria-label="Layout sketch of the object-centric directly-follows graph"
@@ -160,13 +176,7 @@ const OcdfgSketch: React.FC<{
       )}
 
       {/* Interactions start locked: a lock badge top right, with or without the controls. */}
-      {interactionLocked && (
-        <g transform={`translate(${width - 12} 12)`}>
-          <circle r={7} fill="#ffffff" stroke="#e2e8f0" strokeWidth={0.7} />
-          <path d="M-1.6,-0.4 V-1.8 A1.6,1.6 0 0 1 1.6,-1.8 V-0.4" fill="none" stroke="#475569" strokeWidth={0.8} strokeLinecap="round" />
-          <rect x={-2.5} y={-0.4} width={5} height={3.6} rx={0.6} fill="#475569" />
-        </g>
-      )}
+      {interactionLocked && <SketchLockBadge right={width} top={-padY} unitsPerPixel={unitsPerPixel} />}
     </svg>
   );
 };

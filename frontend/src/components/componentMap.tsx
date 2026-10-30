@@ -39,6 +39,7 @@ import DottedChartSketch from './DottedChartSketch';
 import DottedChartSettingsBody from './DottedChartSettingsDialog';
 import ProcessAreaSketch from './ProcessAreaSketch';
 import TotemModelSketch from './TotemModelSketch';
+import { GRAPH_SKETCH_MAX_WIDTH } from './sketchScale';
 import OcdfgSketch from './OcdfgSketch';
 import OcdfgSettingsBody from './OcdfgSettingsDialog';
 import OcpnSketch from './OcpnSketch';
@@ -1022,6 +1023,7 @@ export const ProcessAreaComponent: React.FC<ComponentProps> = ({
     return (
       <WidgetDraftTile
         typeLabel="Process area"
+        sketchMaxWidth={GRAPH_SKETCH_MAX_WIDTH}
         hint={PROCESS_AREA_SKETCH_HINT}
         notice={selectedFile?.id ? undefined : "Select an event log file to see the visualization."}
         onConfigure={() => setSettingsOpen(true)}
@@ -1067,6 +1069,7 @@ export const TotemMinerComponent: React.FC<ComponentProps> = ({
     return (
       <WidgetDraftTile
         typeLabel="TOTeM Miner"
+        sketchMaxWidth={GRAPH_SKETCH_MAX_WIDTH}
         hint="Layout preview: object types as colored boxes and the relations between them, with their labels and cardinalities. The model itself is discovered from the log; all labels are placeholders."
         sketch={<TotemModelSketch className="h-full w-full" />}
       />
@@ -1323,6 +1326,7 @@ export const NewOCDFGComponent: React.FC<ComponentProps> = ({
     return (
       <WidgetDraftTile
         typeLabel="OCDFG"
+        sketchMaxWidth={GRAPH_SKETCH_MAX_WIDTH}
         hint={OCDFG_SKETCH_HINT}
         onConfigure={() => setSettingsOpen(true)}
         sketch={
@@ -1414,6 +1418,7 @@ export const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
     return (
       <WidgetDraftTile
         typeLabel="OCDFG (variants)"
+        sketchMaxWidth={GRAPH_SKETCH_MAX_WIDTH}
         hint={OCDFG_SKETCH_HINT}
         onConfigure={() => setSettingsOpen(true)}
         sketch={
@@ -1528,6 +1533,7 @@ export const OCCNComponent: React.FC<ComponentProps> = ({
     return (
       <WidgetDraftTile
         typeLabel="OC causal net"
+        sketchMaxWidth={GRAPH_SKETCH_MAX_WIDTH}
         hint={OCCN_SKETCH_HINT}
         onConfigure={() => setSettingsOpen(true)}
         sketch={
@@ -1626,6 +1632,7 @@ export const OCPNComponent: React.FC<ComponentProps> = ({
     return (
       <WidgetDraftTile
         typeLabel="OC Petri net"
+        sketchMaxWidth={GRAPH_SKETCH_MAX_WIDTH}
         hint={OCPN_SKETCH_HINT}
         onConfigure={() => setSettingsOpen(true)}
         sketch={<OcpnSketch className="h-full w-full" />}

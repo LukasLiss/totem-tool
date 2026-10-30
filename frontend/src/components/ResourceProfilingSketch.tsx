@@ -37,6 +37,8 @@ const TRANSPARENT_OPACITY = 0.45;
 const HULL_PADDING = 9;
 // The cluster whose profile the tooltip shows.
 const TOOLTIP_CLUSTER = 1;
+// The tooltip's size against the clusters.
+const TOOLTIP_SCALE = 0.85;
 const INK = "var(--muted-foreground)";
 
 // Section titles as in the explorer's tooltip.
@@ -236,7 +238,8 @@ const ResourceProfilingSketch: React.FC<{
         ))
       )}
 
-      {/* The draft tooltip with one section per feature group. */}
+      {/* The draft tooltip with one section per feature group, a little smaller and kept in the top right corner. */}
+      <g transform={`translate(${cardX + cardWidth} ${cardTop}) scale(${TOOLTIP_SCALE}) translate(${-(cardX + cardWidth)} ${-cardTop})`}>
       <rect
         x={cardX}
         y={cardTop}
@@ -259,6 +262,7 @@ const ResourceProfilingSketch: React.FC<{
         {computeClusters ? "CLUSTER 2 — AVG. PROFILE" : "RESOURCE"}
       </text>
       {sectionShapes}
+      </g>
     </svg>
   );
 };
