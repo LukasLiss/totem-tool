@@ -458,6 +458,10 @@ class ScatterPlotComponent(DashboardComponent):
     series_column = models.CharField(max_length=100, blank=True, default="")
     x_label = models.CharField(max_length=100, blank=True, default="")
     y_label = models.CharField(max_length=100, blank=True, default="")
+    # Display options edited in the frontend's settings popup: legend, max
+    # series and colors. Validated on save (see _validated_chart_style in
+    # views/dashboards.py).
+    chart_style = models.JSONField(default=dict, blank=True)
 
 
 class OCPNComponent(DashboardComponent):

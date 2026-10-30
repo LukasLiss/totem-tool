@@ -1,36 +1,32 @@
 /**
  * ScatterPlotComponent — one point per result row from numeric x / y
- * columns, optionally colored by a series column.
+ * columns, optionally grouped into series by a series column. The largest
+ * series (up to "Max series") get their own color, the rest is drawn as one
+ * grey "Other" series; colors and the legend are configurable. In edit mode
+ * the tile shows a layout sketch and the settings open in a popup.
  */
 
 import React, { useEffect, useMemo, useState } from "react";
-import { CartesianGrid, Scatter, ScatterChart, XAxis, YAxis, ZAxis } from "recharts";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { CartesianGrid, Scatter, ScatterChart, XAxis, YAxis, type ScatterShapeProps } from "recharts";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   ChartContainer,
-  ChartLegend,
-  ChartLegendContent,
   ChartTooltip,
   ChartTooltipContent,
   type ChartConfig,
 } from "@/components/ui/chart";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import type { LinkedQuery } from "@/react_component/sql/linkedQuery";
-import { SCATTER_DEFAULT_QUERY, SCATTER_EXPECTED_RESULT } from "./constants";
+import { CHART_SKETCH_HINT, SCATTER_DEFAULT_QUERY } from "./constants";
 import { useSqlQueryData } from "@/react_component/sql/useSqlQueryData";
-import {
-  ColumnInput,
-  QuerySection,
-  WidgetMessage,
-} from "./shared";
-import {
-  linkedQueryOf,
-  toNumber,
-  useColumnDiscovery,
-  type SqlWidgetNodeFields,
-  type SqlWidgetProps,
-} from "./sqlWidgetUtils";
+import { ChartTitle, WidgetMessage } from "./shared";
+import { linkedQueryOf, type SqlWidgetNodeFields, type SqlWidgetProps } from "./sqlWidgetUtils";
+import { categoryFills, previewColors, type ChartColors } from "./chartColors";
+import { ChartValueLegend } from "./chartLegend";
+import type { ChartStyle, LegendPosition, PointSize } from "./chartLegendUtils";
+import { POINT_RADIUS_PX, TRANSPARENT_POINT_OPACITY, buildScatterSeries, scatterColors } from "./scatterUtils";
+import WidgetDraftTile from "@/components/WidgetDraftTile";
+import ScatterPlotSketch from "./ScatterPlotSketch";
+import ScatterPlotSettingsDialog, { type ScatterPlotSettings } from "./ScatterPlotSettingsDialog";
 
 export interface ScatterPlotNodeFields extends SqlWidgetNodeFields {
   x_column?: string;
@@ -38,12 +34,8 @@ export interface ScatterPlotNodeFields extends SqlWidgetNodeFields {
   series_column?: string;
   x_label?: string;
   y_label?: string;
+  chart_style?: ChartStyle;
 }
-
-
-
-const SERIES_COLORS = 5;
-const MAX_SERIES = 12;
 
 const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
   node,
@@ -59,6 +51,12 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
   const [seriesColumn, setSeriesColumn] = useState(node.series_column ?? "");
   const [xLabel, setXLabel] = useState(node.x_label ?? "");
   const [yLabel, setYLabel] = useState(node.y_label ?? "");
+  const [legendPosition, setLegendPosition] = useState<LegendPosition>(node.chart_style?.legend?.position ?? "bottom");
+  const [pointSize, setPointSize] = useState<PointSize>(node.chart_style?.point_size ?? "medium");
+  const [transparentPoints, setTransparentPoints] = useState(node.chart_style?.transparent_points ?? false);
+  const [colors, setColors] = useState<ChartColors>(node.chart_style?.colors ?? {});
+  const [maxSeries, setMaxSeries] = useState<number | null>(node.chart_style?.max_categories ?? null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
     setTitle(node.title ?? "");
@@ -69,12 +67,66 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
     setSeriesColumn(node.series_column ?? "");
     setXLabel(node.x_label ?? "");
     setYLabel(node.y_label ?? "");
+    setLegendPosition(node.chart_style?.legend?.position ?? "bottom");
+    setPointSize(node.chart_style?.point_size ?? "medium");
+    setTransparentPoints(node.chart_style?.transparent_points ?? false);
+    setColors(node.chart_style?.colors ?? {});
+    setMaxSeries(node.chart_style?.max_categories ?? null);
   }, [node]);
 
-  const patch = (updates: Record<string, unknown>) => onUpdate?.(updates);
   const fileId = selectedFile?.id;
   const projectId = selectedFile?.project;
-  const discovery = useColumnDiscovery(fileId, query, linked?.id);
+
+  const settings: ScatterPlotSettings = {
+    title,
+    query,
+    linked,
+    xColumn,
+    yColumn,
+    seriesColumn,
+    xLabel,
+    yLabel,
+    legendPosition,
+    pointSize,
+    transparentPoints,
+    colors,
+    maxSeries,
+  };
+
+  const applySettings = (next: ScatterPlotSettings) => {
+    setTitle(next.title);
+    setQuery(next.query);
+    setLinked(next.linked);
+    setXColumn(next.xColumn);
+    setYColumn(next.yColumn);
+    setSeriesColumn(next.seriesColumn);
+    setXLabel(next.xLabel);
+    setYLabel(next.yLabel);
+    setLegendPosition(next.legendPosition);
+    setPointSize(next.pointSize);
+    setTransparentPoints(next.transparentPoints);
+    setColors(next.colors);
+    setMaxSeries(next.maxSeries);
+    onUpdate?.({
+      title: next.title,
+      query: next.query,
+      query_asset: next.linked?.id ?? null,
+      query_asset_name: next.linked?.name ?? null,
+      x_column: next.xColumn,
+      y_column: next.yColumn,
+      series_column: next.seriesColumn,
+      x_label: next.xLabel,
+      y_label: next.yLabel,
+      chart_style: {
+        ...node.chart_style,
+        legend: { ...node.chart_style?.legend, position: next.legendPosition },
+        point_size: next.pointSize,
+        transparent_points: next.transparentPoints,
+        colors: next.colors,
+        max_categories: next.maxSeries ?? undefined,
+      },
+    });
+  };
 
   const data = useSqlQueryData({
     fileId,
@@ -84,133 +136,48 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
     limit: 5000,
   });
 
-  const { series, xKey, yKey, seriesKey, config } = useMemo(() => {
-    const numericCols = data.columns.filter((c) =>
-      data.rows.some((r) => toNumber(r[c]) != null)
-    );
-    const xKey = xColumn || numericCols[0] || data.columns[0] || "";
-    const yKey = yColumn || numericCols.find((c) => c !== xKey) || data.columns[1] || "";
-    const seriesKey = seriesColumn || "";
-    const groups = new Map<string, { x: number; y: number }[]>();
-    for (const r of data.rows) {
-      const x = toNumber(r[xKey]);
-      const y = toNumber(r[yKey]);
-      if (x == null || y == null) continue;
-      const key = seriesKey ? (r[seriesKey] == null ? "NULL" : String(r[seriesKey])) : "points";
-      if (!groups.has(key)) {
-        if (groups.size >= MAX_SERIES) continue;
-        groups.set(key, []);
-      }
-      groups.get(key)!.push({ x, y });
-    }
-    const series = Array.from(groups.entries()).map(([name, points], i) => ({
-      name,
-      points,
-      color: `var(--chart-${(i % SERIES_COLORS) + 1})`,
-    }));
+  const { series, xKey, yKey, seriesKey, config, legendItems } = useMemo(() => {
+    const built = buildScatterSeries(data.rows, data.columns, { xColumn, yColumn, seriesColumn, maxSeries });
+    const fills = categoryFills(built.slices, scatterColors(colors, Boolean(built.seriesKey)));
+    const series = built.series.map((s, i) => ({ ...s, color: fills[i] }));
     const config: ChartConfig = {};
     series.forEach((s) => {
       config[s.name] = { label: s.name, color: s.color };
     });
-    return { series, xKey, yKey, seriesKey, config };
-  }, [data.rows, data.columns, xColumn, yColumn, seriesColumn]);
+    const legendItems = series.map((s) => ({ label: s.name, color: s.color }));
+    return { ...built, series, config, legendItems };
+  }, [data.rows, data.columns, xColumn, yColumn, seriesColumn, maxSeries, colors]);
 
   if (isEditMode) {
     return (
-      <Card className="h-full w-full overflow-auto rounded-none">
-        <CardHeader>
-          <CardTitle>Scatter Plot (by SQL)</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-4">
-          <div className="grid gap-1.5">
-            <Label htmlFor={`scatter-title-${node.component_id}`}>Title</Label>
-            <Input
-              id={`scatter-title-${node.component_id}`}
-              value={title}
-              onChange={(e) => {
-                setTitle(e.target.value);
-                patch({ title: e.target.value });
-              }}
-              placeholder="Events vs. distinct activities per object"
-            />
-          </div>
-          <QuerySection
-            widgetId={node.component_id}
-            query={query}
-            onQueryChange={(q) => {
-              setQuery(q);
-              patch({ query: q });
-            }}
-            linkedQuery={linked}
-            onLinkChange={(l) => {
-              setLinked(l);
-              patch({ query_asset: l?.id ?? null, query_asset_name: l?.name ?? null });
-            }}
-            fileId={fileId}
-            projectId={projectId}
-            expectedResult={SCATTER_EXPECTED_RESULT}
-            editorTitle="Scatter plot query"
-            discovery={discovery}
+      <WidgetDraftTile
+        typeLabel="Scatter plot"
+        hint={CHART_SKETCH_HINT}
+        onConfigure={() => setSettingsOpen(true)}
+        sketch={
+          <ScatterPlotSketch
+            title={title}
+            xLabel={xLabel}
+            yLabel={yLabel}
+            hasSeries={seriesColumn !== ""}
+            legendPosition={legendPosition}
+            pointSize={pointSize}
+            transparentPoints={transparentPoints}
+            colors={previewColors(scatterColors(colors, seriesColumn !== ""))}
+            className="h-full w-full"
           />
-          <div className="grid grid-cols-2 gap-3">
-            <ColumnInput
-              id={`scatter-x-${node.component_id}`}
-              label="X column"
-              value={xColumn}
-              onChange={(v) => {
-                setXColumn(v);
-                patch({ x_column: v });
-              }}
-              columns={discovery.columns}
-              placeholder="first numeric column"
-            />
-            <ColumnInput
-              id={`scatter-y-${node.component_id}`}
-              label="Y column"
-              value={yColumn}
-              onChange={(v) => {
-                setYColumn(v);
-                patch({ y_column: v });
-              }}
-              columns={discovery.columns}
-              placeholder="second numeric column"
-            />
-            <ColumnInput
-              id={`scatter-series-${node.component_id}`}
-              label="Series column (optional)"
-              value={seriesColumn}
-              onChange={(v) => {
-                setSeriesColumn(v);
-                patch({ series_column: v });
-              }}
-              columns={discovery.columns}
-              placeholder="none"
-              hint={`Up to ${MAX_SERIES} distinct values are colored.`}
-            />
-            <div className="grid gap-1.5">
-              <Label htmlFor={`scatter-xlabel-${node.component_id}`}>Axis labels</Label>
-              <Input
-                id={`scatter-xlabel-${node.component_id}`}
-                value={xLabel}
-                onChange={(e) => {
-                  setXLabel(e.target.value);
-                  patch({ x_label: e.target.value });
-                }}
-                placeholder="x axis"
-              />
-              <Input
-                aria-label="y axis label"
-                value={yLabel}
-                onChange={(e) => {
-                  setYLabel(e.target.value);
-                  patch({ y_label: e.target.value });
-                }}
-                placeholder="y axis"
-              />
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+        }
+      >
+        <ScatterPlotSettingsDialog
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          widgetId={node.component_id}
+          settings={settings}
+          onApply={applySettings}
+          fileId={fileId}
+          projectId={projectId}
+        />
+      </WidgetDraftTile>
     );
   }
 
@@ -221,15 +188,13 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
     return <WidgetMessage>No numeric points to display. Configure the query and columns in edit mode.</WidgetMessage>;
   }
 
+  const showLegend = Boolean(seriesKey) && (legendPosition === "bottom" || legendPosition === "columns");
+
   return (
     <Card className="flex h-full w-full flex-col overflow-hidden rounded-none">
-      {title && (
-        <CardHeader className="pb-0">
-          <CardTitle className="truncate text-sm">{title}</CardTitle>
-        </CardHeader>
-      )}
-      <CardContent className="min-h-0 flex-1 p-3">
-        <ChartContainer config={config} className="aspect-auto h-full w-full">
+      <ChartTitle title={title} />
+      <CardContent className="flex min-h-0 flex-1 flex-col gap-2 p-3">
+        <ChartContainer config={config} className="aspect-auto min-h-0 w-full flex-1">
           <ScatterChart margin={{ top: 8, right: 16, bottom: xLabel ? 24 : 8, left: yLabel ? 16 : 4 }}>
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis
@@ -246,19 +211,39 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
               tickLine={false}
               label={yLabel ? { value: yLabel, angle: -90, position: "insideLeft", fontSize: 11 } : undefined}
             />
-            <ZAxis range={[36, 36]} />
             <ChartTooltip
               cursor={{ strokeDasharray: "3 3" }}
               content={<ChartTooltipContent hideLabel={!seriesKey} />}
             />
-            {seriesKey && <ChartLegend content={<ChartLegendContent />} />}
             {series.map((s) => (
-              <Scatter key={s.name} name={s.name} data={s.points} fill={s.color} />
+              <Scatter
+                key={s.name}
+                name={s.name}
+                data={s.points}
+                fill={s.color}
+                // Points drawn here with the chosen size and transparency.
+                shape={({ cx, cy }: ScatterShapeProps) => (
+                  <circle
+                    cx={cx}
+                    cy={cy}
+                    r={POINT_RADIUS_PX[pointSize]}
+                    fill={s.color}
+                    fillOpacity={transparentPoints ? TRANSPARENT_POINT_OPACITY : 1}
+                  />
+                )}
+              />
             ))}
           </ScatterChart>
         </ChartContainer>
+        {showLegend && (
+          <ChartValueLegend
+            items={legendItems}
+            layout={legendPosition === "columns" ? "columns" : "bottom"}
+            className="max-h-[35%] w-full shrink-0 overflow-y-auto"
+          />
+        )}
         {data.truncated && (
-          <p className="pt-1 text-[11px] text-muted-foreground">showing the first 5,000 rows</p>
+          <p className="text-[11px] text-muted-foreground">showing the first 5,000 rows</p>
         )}
       </CardContent>
     </Card>

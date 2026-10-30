@@ -6,8 +6,10 @@
 
 import type { ChartColors } from "./chartColors";
 
-export type LegendPosition ="bottom" | "columns" | "callouts";
-export type LegendValues = "none" | "value" | "percent" | "both";
+// "none" hides the legend (scatter plot; the pie chart uses show_legend instead).
+export type LegendPosition = "none" | "bottom" | "columns" | "callouts";
+export type PointSize = "small" | "medium" | "large";
+export type LegendValues ="none" | "value" | "percent" | "both";
 
 /** Display options of a chart widget, stored as `chart_style` (pie and bar chart). */
 export interface ChartStyle {
@@ -19,6 +21,10 @@ export interface ChartStyle {
    */
   max_categories?: number;
   colors?: ChartColors;
+  /** Scatter plot: size of the points; medium when unset. */
+  point_size?: PointSize;
+  /** Scatter plot: see-through points, so dense areas show where many overlap. */
+  transparent_points?: boolean;
   legend?: {
     position?: LegendPosition;
     values?: LegendValues;

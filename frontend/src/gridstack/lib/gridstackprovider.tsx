@@ -394,6 +394,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           series_column: node.series_column ?? "",
           x_label: node.x_label ?? "",
           y_label: node.y_label ?? "",
+          chart_style: node.chart_style ?? {},
         };
       } else if (component_name === "PieChartComponent") {
         props = {

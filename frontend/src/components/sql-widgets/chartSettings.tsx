@@ -336,17 +336,29 @@ export function SettingRow({ label, htmlFor, disabled = false, children }: {
   );
 }
 
-/** "Max categories" with a number field; empty means all. */
-export function MaxCategoriesRow({ id, value, onChange, hint }: {
+/** "Max categories" with a number field; empty means `placeholder` (all, by default). */
+export function MaxCategoriesRow({
+  id,
+  value,
+  onChange,
+  hint,
+  label = "Max categories",
+  placeholder = "All",
+  disabled = false,
+}: {
   id: string;
   value: number | null;
   onChange: (value: number | null) => void;
   /** What happens to the remaining categories, e.g. "rest grouped as “Other”". */
   hint: string;
+  label?: string;
+  /** Shown when empty: what an empty field means, e.g. "All" or a default number. */
+  placeholder?: string;
+  disabled?: boolean;
 }) {
   return (
-    <SettingRow label="Max categories" htmlFor={id}>
-      <span className="flex items-center gap-2">
+    <SettingRow label={label} htmlFor={id} disabled={disabled}>
+      <span className={cn("flex items-center gap-2", disabled && "opacity-50")}>
         <span className="text-xs text-muted-foreground">{hint}</span>
         <Input
           id={id}
@@ -354,7 +366,8 @@ export function MaxCategoriesRow({ id, value, onChange, hint }: {
           min={1}
           step={1}
           inputMode="numeric"
-          placeholder="All"
+          disabled={disabled}
+          placeholder={placeholder}
           value={value ?? ""}
           onChange={(e) => {
             const n = parseInt(e.target.value, 10);
@@ -407,6 +420,7 @@ export function ColorSettings({
   onChange,
   categories,
   singleColorLabel,
+  singleOnly = false,
 }: {
   idPrefix: string;
   colors: ChartColors;
@@ -417,8 +431,13 @@ export function ColorSettings({
    * for its color, e.g. "Bar color". Single color is then the default.
    */
   singleColorLabel?: string;
+  /**
+   * Only the single color, without "Color by" and category colors (e.g. a
+   * scatter plot without a series column has no categories to color).
+   */
+  singleOnly?: boolean;
 }) {
-  const mode = singleColorLabel ? colors.mode ?? "single" : "category";
+  const mode = singleOnly ? "single" : singleColorLabel ? colors.mode ?? "single" : "category";
   const scheme = colors.scheme ?? DEFAULT_COLOR_SCHEME;
   const overrides = colors.overrides ?? {};
   const fills = categoryFills(categories.slices, { ...colors, mode });
@@ -434,7 +453,7 @@ export function ColorSettings({
     <>
       <div className="space-y-2 border-t pt-4">
         <Label>Colors</Label>
-        {singleColorLabel && (
+        {singleColorLabel && !singleOnly && (
           <SettingRow label="Color by">
             <SegmentedControl
               ariaLabel="Color by"
@@ -512,6 +531,7 @@ export function ColorSettings({
         )}
       </div>
 
+      {!singleOnly && (
       <div className="space-y-2 pt-2">
         <div className="flex items-center justify-between">
           <Label>Category colors</Label>
@@ -573,6 +593,7 @@ export function ColorSettings({
           </div>
         )}
       </div>
+      )}
     </>
   );
 }

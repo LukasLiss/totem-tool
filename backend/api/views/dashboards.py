@@ -116,19 +116,21 @@ def _validated_int(raw, default, minimum, maximum):
     return default if value is None else int(round(value))
 
 
-# Allowed values in a pie or bar chart's ``chart_style`` (mirrors
+# Allowed values in a pie, bar or scatter chart's ``chart_style`` (mirrors
 # chartLegendUtils.ts and chartColors.ts in the frontend).
-_LEGEND_POSITIONS = {"bottom", "columns", "callouts"}
+# "none" hides the legend (scatter plot; the pie chart uses show_legend).
+_LEGEND_POSITIONS = {"none", "bottom", "columns", "callouts"}
 _LEGEND_VALUES = {"none", "value", "percent", "both"}
 _COLOR_MODES = {"single", "category"}
 _COLOR_SCHEMES = {"greyscale", "categorical", "shades"}
+_POINT_SIZES = {"small", "medium", "large"}
 _MAX_CATEGORIES_LIMIT = 500
 _MAX_COLOR_OVERRIDES = 500
 _MAX_CATEGORY_LABEL_LENGTH = 200
 
 
 def _validated_chart_style(raw):
-    """A pie or bar chart's display options, keeping only known keys with valid values.
+    """A pie, bar or scatter chart's display options, keeping only known keys with valid values.
 
     Colors end up in inline styles and SVG fills on every dashboard that
     shows the chart, so only ``#rgb`` / ``#rrggbb`` literals are kept;
@@ -151,6 +153,12 @@ def _validated_chart_style(raw):
 
     if isinstance(raw.get("show_category_count"), bool):
         style["show_category_count"] = raw["show_category_count"]
+
+    # Scatter plot points.
+    if raw.get("point_size") in _POINT_SIZES:
+        style["point_size"] = raw["point_size"]
+    if isinstance(raw.get("transparent_points"), bool):
+        style["transparent_points"] = raw["transparent_points"]
 
     max_categories = raw.get("max_categories")
     if (
@@ -738,6 +746,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     series_column=item.get('series_column') or '',
                     x_label=item.get('x_label') or '',
                     y_label=item.get('y_label') or '',
+                    chart_style=_validated_chart_style(item.get('chart_style')),
                 )
             elif component_name == 'OCHandoverComponent':
                 OCHandoverComponent.objects.create(

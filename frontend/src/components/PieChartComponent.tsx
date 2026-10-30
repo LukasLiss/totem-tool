@@ -446,7 +446,7 @@ const PieChartComponent: React.FC<ComponentProps> = ({
           </PieChart>
         </ChartContainer>
         </div>
-        {showLegend && legendPosition !== 'callouts' && (
+        {showLegend && (legendPosition === 'bottom' || legendPosition === 'columns') && (
           <ChartValueLegend
             items={legendItems}
             layout={legendPosition}
