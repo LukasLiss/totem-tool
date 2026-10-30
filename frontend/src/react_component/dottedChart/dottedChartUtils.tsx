@@ -1,5 +1,6 @@
 import type { ReactElement } from "react";
 import { Cross, Diamond, Triangle } from "lucide-react";
+import { OTHER_COLOR, PALETTE, SHAPES } from "./dottedChartStyle";
 
 export type AxisOption =
   | { type: "time" }
@@ -52,24 +53,8 @@ export interface ChartPoint extends OCEvent {
 }
 
 export const OTHER_COLOR_KEY = "Other";
-const OTHER_COLOR = "#d4d4d8";
-
-const PALETTE = [
-  "var(--chart-1)",
-  "var(--chart-2)",
-  "#16a34a",
-  "#dc2626",
-  "#9333ea",
-  "#0891b2",
-  "#ca8a04",
-  "#db2777",
-  "#475569",
-  "#65a30d",
-];
 
 const EXPLICIT_COLOR_LIMIT = 9;
-
-const SHAPES = ["circle", "square", "triangle", "diamond", "cross"] as const;
 
 type ShapeName = (typeof SHAPES)[number];
 

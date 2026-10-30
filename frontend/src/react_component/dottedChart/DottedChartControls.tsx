@@ -12,10 +12,17 @@ import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
 import type { AxisOption, RowOrderOption } from "./dottedChartUtils";
 import {
-  DEFAULT_DOTTED_CHART_OPTIONS,
-  useDottedChartOptions,
-  type DottedChartOption,
-} from "./useDottedChartOptions";
+  OBJECT_TYPE_CONTROL_VALUE,
+  ROW_ORDER_OPTIONS,
+  axisToControlValue,
+  axisToPrimaryControlValue,
+  collapseObjectTypeOptions,
+  controlValueToAxis,
+  getObjectTypeValue,
+  withCurrentOption,
+  type AxisControlValue,
+} from "./dottedChartAxisOptions";
+import { useDottedChartOptions, type DottedChartOption } from "./useDottedChartOptions";
 
 export type DottedChartConfig = {
   xAxis: AxisOption;
@@ -32,13 +39,6 @@ type DottedChartControlsProps = {
   onConfigChange: (config: DottedChartConfig) => void;
   className?: string;
 };
-
-type AxisControlValue = string;
-const OBJECT_TYPE_CONTROL_VALUE = "__object_type__";
-const ROW_ORDER_OPTIONS: Array<{ label: string; value: RowOrderOption }> = [
-  { label: "First occurrence", value: "first_occurrence" },
-  { label: "Last occurrence", value: "last_occurrence" },
-];
 
 export function DottedChartControls({
   fileId,
@@ -240,82 +240,4 @@ function AxisSelect({
       </select>
     </div>
   );
-}
-
-function axisToControlValue(axis: AxisOption): AxisControlValue {
-  if (axis.type === "event_attribute") return axis.name;
-  return axis.type;
-}
-
-function axisToPrimaryControlValue(axis: AxisOption): AxisControlValue {
-  const value = axisToControlValue(axis);
-  if (value.startsWith("object_type:")) return OBJECT_TYPE_CONTROL_VALUE;
-  return value;
-}
-
-function controlValueToAxis(value: AxisControlValue): AxisOption {
-  if (isBuiltinAxis(value)) return { type: value };
-  return { type: "event_attribute", name: value };
-}
-
-function withCurrentOption(options: DottedChartOption[], axis: AxisOption): DottedChartOption[] {
-  const currentValue = axisToPrimaryControlValue(axis);
-  if (options.some((option) => option.value === currentValue)) return options;
-  const fallback = findDefaultOption(currentValue);
-  if (fallback) return [fallback, ...options];
-  return [
-    {
-      label: currentValue,
-      value: currentValue,
-      kind: axis.type === "event_attribute" ? "categorical" : "none",
-    },
-    ...options,
-  ];
-}
-
-function collapseObjectTypeOptions(options: DottedChartOption[]): DottedChartOption[] {
-  const collapsed: DottedChartOption[] = [];
-  let hasObjectTypes = false;
-
-  options.forEach((option) => {
-    if (option.value.startsWith("object_type:")) {
-      hasObjectTypes = true;
-      return;
-    }
-    collapsed.push(option);
-  });
-
-  if (!hasObjectTypes) return collapsed;
-
-  const insertAfterActivity = collapsed.findIndex((option) => option.value === "activity");
-  const objectTypeOption = {
-    label: "Object Type",
-    value: OBJECT_TYPE_CONTROL_VALUE,
-    kind: "categorical" as const,
-  };
-
-  if (insertAfterActivity === -1) return [objectTypeOption, ...collapsed];
-  return [
-    ...collapsed.slice(0, insertAfterActivity + 1),
-    objectTypeOption,
-    ...collapsed.slice(insertAfterActivity + 1),
-  ];
-}
-
-function getObjectTypeValue(axis: AxisOption, options: DottedChartOption[]): AxisControlValue {
-  const value = axisToControlValue(axis);
-  if (value.startsWith("object_type:")) return value;
-  return options[0]?.value ?? "";
-}
-
-function findDefaultOption(value: string): DottedChartOption | undefined {
-  return Object.values(DEFAULT_DOTTED_CHART_OPTIONS)
-    .flat()
-    .find((option) => option.value === value);
-}
-
-function isBuiltinAxis(
-  value: string
-): value is "time" | "timestamp" | "timestamp_unix" | "since_start" | "activity" | "none" {
-  return ["time", "timestamp", "timestamp_unix", "since_start", "activity", "none"].includes(value);
 }

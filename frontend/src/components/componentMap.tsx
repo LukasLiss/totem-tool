@@ -40,10 +40,12 @@ import {
 } from '@/react_component/processAreaParams';
 import { ReactFlowProvider } from "@xyflow/react";
 import DottedChart from '@/react_component/DottedChart';
-import {
-  DottedChartControls,
-  type DottedChartConfig,
-} from '@/react_component/dottedChart/DottedChartControls';
+import type { DottedChartConfig } from '@/react_component/dottedChart/DottedChartControls';
+import { axisOptionLabel } from '@/react_component/dottedChart/dottedChartAxisOptions';
+import { useDottedChartOptions } from '@/react_component/dottedChart/useDottedChartOptions';
+import DottedChartSketch from './DottedChartSketch';
+import DottedChartSettingsBody from './DottedChartSettingsDialog';
+import { ChartSettingsDialog } from './sql-widgets/chartSettings';
 import {
   axisOptionToParam,
   type AxisOption,
@@ -1348,6 +1350,9 @@ export const LogStatisticsComponent: React.FC<ComponentProps> = ({
 
 
 
+const DOTTED_CHART_SKETCH_HINT =
+  "Layout preview: events as dots along the x axis, one row per y value in the chosen order, colored and shaped as selected. Positions and labels are placeholders.";
+
 const DOTTED_CHART_DEFAULT_CONFIG: DottedChartConfig = {
   xAxis: { type: "time" },
   yAxis: { type: "activity" },
@@ -1369,6 +1374,17 @@ export const OCDottedChartComponent: React.FC<ComponentProps> = ({
   const effectiveFileId = selectedFile?.id;
   const config = nodeToDottedChartConfig(node);
 
+  // Edit mode: the settings as last applied, for the draft (onUpdate changes
+  // the node without re-rendering), synced when the saved settings change.
+  const configJson = JSON.stringify(config);
+  const [editConfig, setEditConfig] = useState<DottedChartConfig>(config);
+  useEffect(() => { setEditConfig(JSON.parse(configJson)); }, [configJson]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // The column options (for the popup's dropdowns and the draft's axis captions), only loaded in edit mode.
+  const { options, loading: loadingOptions, error: optionsError } = useDottedChartOptions(
+    isEditMode ? effectiveFileId : undefined,
+  );
+
   const handleConfigChange = (nextConfig: DottedChartConfig) => {
     onUpdate?.({
       x_axis: axisOptionToPersistedValue(nextConfig.xAxis),
@@ -1381,25 +1397,40 @@ export const OCDottedChartComponent: React.FC<ComponentProps> = ({
   };
 
   if (isEditMode) {
+    // The tile shows a draft of the chart; the settings open in a popup.
     return (
-      <Card className="w-full h-full rounded-none">
-        <CardHeader>
-          <CardTitle>OC Dotted Chart Settings</CardTitle>
-          <CardDescription>Configure the dashboard widget.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4 overflow-auto">
-          <DottedChartControls
-            fileId={effectiveFileId}
-            config={config}
-            onConfigChange={handleConfigChange}
+      <WidgetDraftTile
+        typeLabel="OC dotted chart"
+        hint={DOTTED_CHART_SKETCH_HINT}
+        notice={effectiveFileId ? undefined : "Select an event log in the application sidebar to render this widget."}
+        onConfigure={() => setSettingsOpen(true)}
+        sketch={
+          <DottedChartSketch
+            config={editConfig}
+            xLabel={axisOptionLabel(options.x_axis, editConfig.xAxis)}
+            yLabel={axisOptionLabel(options.y_axis, editConfig.yAxis)}
+            className="h-full w-full"
           />
-          {!effectiveFileId && (
-            <p className="text-sm text-muted-foreground">
-              Select an event log in the application sidebar to render this widget.
-            </p>
-          )}
-        </CardContent>
-      </Card>
+        }
+      >
+        <ChartSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+          <DottedChartSettingsBody
+            id={`dotted-chart-${node.component_id}`}
+            initial={editConfig}
+            options={options}
+            loadingOptions={loadingOptions}
+            optionsError={optionsError}
+            fileId={effectiveFileId}
+            sketchHint={DOTTED_CHART_SKETCH_HINT}
+            onApply={(next) => {
+              setEditConfig(next);
+              handleConfigChange(next);
+              setSettingsOpen(false);
+            }}
+            onCancel={() => setSettingsOpen(false)}
+          />
+        </ChartSettingsDialog>
+      </WidgetDraftTile>
     );
   }
 
