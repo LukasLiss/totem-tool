@@ -21,13 +21,7 @@ import {
   type ImageAsset as ImageAssetInfo,
 } from '@/api/imageAssetsApi';
 import VariantsExplorer from '@/react_component/VariantsExplorer';
-import {
-  EXTRACTION_OPTIONS,
-  ISO_OPTIONS,
-  type Extraction,
-  type IsoStrategy,
-} from '@/react_component/variants/types';
-import { MultiSelectPopover } from '@/react_component/variants/MultiSelectPopover';
+import type { Extraction, IsoStrategy } from '@/react_component/variants/types';
 import { fetchActivities, fetchObjectTypes } from '@/react_component/variants/variantsApi';
 import ProcessArea from '@/react_component/ProcessArea';
 import {
@@ -51,6 +45,8 @@ import OcpnSketch from './OcpnSketch';
 import OcpnSettingsBody from './OcpnSettingsDialog';
 import OccnSketch from './OccnSketch';
 import OccnSettingsBody from './OccnSettingsDialog';
+import VariantsSketch from './VariantsSketch';
+import VariantsSettingsBody from './VariantsSettingsDialog';
 import ProcessAreaSettingsBody from './ProcessAreaSettingsDialog';
 import { ChartSettingsDialog } from './sql-widgets/chartSettings';
 import {
@@ -64,7 +60,6 @@ import NewOCDFGVariantsVisualizer from '@/react_component/NewOCDFGVariantsVisual
 import OCPNVisualizer from '@/react_component/OCPNVisualizer';
 import { toast } from "sonner";
 import OCCNVisualizer from '@/react_component/OCCNVisualizer';
-import { Switch } from '@/components/ui/switch';
 import LogStatistics from './LogStatistics';
 import LogStatisticsSketch from './LogStatisticsSketch';
 import LogStatisticsSettingsDialog from './LogStatisticsSettingsDialog';
@@ -770,6 +765,9 @@ export const ImageComponent: React.FC<ComponentProps> = ({
 };
 
 
+const VARIANTS_SKETCH_HINT =
+  "Layout preview: the explorer's toolbar and its variants with their support, the first one expanded into one lane per object with its events in the object type colors. The variants themselves are computed from the log; labels are placeholders.";
+
 // VariantsComponent: Wrapper for VariantsExplorer with configurable settings
 export const VariantsComponent: React.FC<ComponentProps> = ({
   node,
@@ -796,6 +794,7 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
   const [availableTypes, setAvailableTypes] = useState<string[]>([]);
   const [availableActivities, setAvailableActivities] = useState<string[]>([]);
   const [loadingTypes, setLoadingTypes] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Sync with node when it changes (e.g. dashboard reloads with persisted values).
   const nodeBusinessObjectTypes = JSON.stringify(node.business_object_types ?? []);
@@ -881,186 +880,37 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
   };
 
   if (isEditMode) {
-    // EDIT MODE: Configuration form
-    const extractionOpt = EXTRACTION_OPTIONS.find((o) => o.value === extraction);
-    const isoOpt = ISO_OPTIONS.find((o) => o.value === iso);
-    const leadingTypeIgnored = extraction === 'connected' || extraction === 'resource_aware';
-    const resourceAware = extraction === 'resource_aware';
-
+    // EDIT MODE: the tile shows a draft of the explorer; the settings open in a popup.
     return (
-      <Card className="w-full h-full rounded-none">
-        <CardHeader>
-          <CardTitle>Variants Explorer Settings</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4 overflow-auto">
-          {/* Automatic Loading Toggle */}
-          <div className="flex items-center justify-between">
-            <Label htmlFor="auto-loading">Automatic variant computation</Label>
-            <Switch
-              id="auto-loading"
-              checked={automaticLoading}
-              onCheckedChange={handleAutomaticLoadingChange}
-            />
-          </div>
-
-          {/* Leading Object Type Dropdown */}
-          <div className="space-y-2">
-            <Label>Leading object type</Label>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="outline"
-                  className="w-full justify-between"
-                  disabled={leadingTypeIgnored}
-                  title={
-                    leadingTypeIgnored
-                      ? 'Ignored when extraction is "Connected components"'
-                      : undefined
-                  }
-                >
-                  {leadingTypeIgnored
-                    ? `— (ignored for ${extractionOpt?.label ?? extraction})`
-                    : (leadingType || 'Select object type (optional)')}
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-56">
-                <DropdownMenuRadioGroup value={leadingType} onValueChange={handleLeadingTypeChange}>
-                  <DropdownMenuRadioItem value="">None (use default)</DropdownMenuRadioItem>
-                  {availableTypes.map((type) => (
-                    <DropdownMenuRadioItem key={type} value={type}>{type}</DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            {loadingTypes && <p className="text-sm text-muted-foreground">Loading types...</p>}
-            {!selectedFile?.id && <p className="text-sm text-muted-foreground">Select a file to see available types</p>}
-          </div>
-
-          {/* Extraction strategy */}
-          <div className="space-y-2">
-            <Label>Extraction strategy</Label>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="w-full justify-between font-normal">
-                  <span className="truncate">
-                    {extractionOpt?.label ?? extraction}
-                  </span>
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-[320px]">
-                <DropdownMenuLabel>Extraction</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuRadioGroup value={extraction} onValueChange={handleExtractionChange}>
-                  {EXTRACTION_OPTIONS.map((opt) => (
-                    <DropdownMenuRadioItem
-                      key={opt.value}
-                      value={opt.value}
-                      className="items-start py-2"
-                    >
-                      <div className="flex flex-col">
-                        <span className="text-sm">{opt.label}</span>
-                        <span className="text-xs text-muted-foreground">{opt.hint}</span>
-                      </div>
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            {extractionOpt && (
-              <p className="text-xs text-muted-foreground">{extractionOpt.hint}</p>
-            )}
-          </div>
-
-          {resourceAware && (
-            <>
-              <div className="space-y-2">
-                <Label>Business object types</Label>
-                <MultiSelectPopover
-                  label="Business object types"
-                  options={availableTypes}
-                  selected={businessObjectTypes}
-                  onChange={handleBusinessObjectTypesChange}
-                  placeholder="Select object types"
-                  allLabel="All object types"
-                  loading={loadingTypes}
-                  disabled={!selectedFile?.id}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Object types left out are treated as resources.
-                </p>
-              </div>
-              <div className="space-y-2">
-                <Label>Business activities</Label>
-                <MultiSelectPopover
-                  label="Business activities"
-                  options={availableActivities}
-                  selected={businessActivities}
-                  onChange={handleBusinessActivitiesChange}
-                  placeholder="All activities"
-                  allLabel="All activities"
-                  loading={loadingTypes}
-                  disabled={!selectedFile?.id}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Leave empty to connect business objects through every activity.
-                </p>
-              </div>
-            </>
-          )}
-
-          {/* Isomorphism strategy */}
-          <div className="space-y-2">
-            <Label>Isomorphism strategy</Label>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="w-full justify-between font-normal">
-                  <span className="truncate">{isoOpt?.label ?? iso}</span>
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-[300px]">
-                <DropdownMenuLabel>Isomorphism</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuRadioGroup value={iso} onValueChange={handleIsoChange}>
-                  {ISO_OPTIONS.map((opt) => (
-                    <DropdownMenuRadioItem
-                      key={opt.value}
-                      value={opt.value}
-                      className="items-start py-2"
-                    >
-                      <div className="flex flex-col">
-                        <span className="text-sm">{opt.label}</span>
-                        <span className="text-xs text-muted-foreground">{opt.hint}</span>
-                      </div>
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            {isoOpt && (
-              <p className="text-xs text-muted-foreground">{isoOpt.hint}</p>
-            )}
-          </div>
-
-          {/* Timeout (seconds) */}
-          <div className="space-y-2">
-            <Label htmlFor="variants-timeout">Timeout (seconds)</Label>
-            <Input
-              id="variants-timeout"
-              type="number"
-              min={1}
-              max={120}
-              step={1}
-              value={timeoutS}
-              onChange={(e) => handleTimeoutChange(e.target.value)}
-              className="w-[120px]"
-            />
-            <p className="text-xs text-muted-foreground">
-              Wall-clock budget per computation. The default of 10 s protects
-              against runaway runs on hard combinations.
-            </p>
-          </div>
-        </CardContent>
-      </Card>
+      <WidgetDraftTile
+        typeLabel="Variants Explorer"
+        hint={VARIANTS_SKETCH_HINT}
+        onConfigure={() => setSettingsOpen(true)}
+        sketch={<VariantsSketch className="h-full w-full" />}
+      >
+        <ChartSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+          <VariantsSettingsBody
+            id={`variants-${node.component_id}`}
+            initial={{ automaticLoading, leadingType, extraction, iso, timeoutS, businessObjectTypes, businessActivities }}
+            availableTypes={availableTypes}
+            availableActivities={availableActivities}
+            loadingTypes={loadingTypes}
+            fileId={selectedFile?.id}
+            sketchHint={VARIANTS_SKETCH_HINT}
+            onApply={(next) => {
+              handleAutomaticLoadingChange(next.automaticLoading);
+              handleLeadingTypeChange(next.leadingType);
+              handleExtractionChange(next.extraction);
+              handleIsoChange(next.iso);
+              handleTimeoutChange(String(next.timeoutS));
+              handleBusinessObjectTypesChange(next.businessObjectTypes);
+              handleBusinessActivitiesChange(next.businessActivities);
+              setSettingsOpen(false);
+            }}
+            onCancel={() => setSettingsOpen(false)}
+          />
+        </ChartSettingsDialog>
+      </WidgetDraftTile>
     );
   }
 
