@@ -29,23 +29,26 @@ const WidgetDraftTile: React.FC<{
    * alike in size. Wide widgets (e.g. a row of cards) may allow more.
    */
   sketchMaxWidth?: string;
-  onConfigure: () => void;
+  /** Opens the settings popup; without it (a widget with no settings) the tile is a plain draft. */
+  onConfigure?: () => void;
   /** The settings popup, rendered alongside. */
   children?: React.ReactNode;
 }> = ({ typeLabel, sketch, notice, hint = DEFAULT_HINT, sketchMaxWidth = "max-w-md", onConfigure, children }) => (
   <Card
     className="flex h-full w-full flex-col gap-0 overflow-hidden rounded-none py-0 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-    onDoubleClick={onConfigure}
-    tabIndex={0}
-    role="button"
-    aria-label={`Edit ${typeLabel}`}
-    onKeyDown={(e) => {
-      // Only keys on the tile itself; the popup's events bubble up here through React.
-      if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
-        e.preventDefault();
-        onConfigure();
-      }
-    }}
+    {...(onConfigure && {
+      onDoubleClick: onConfigure,
+      tabIndex: 0,
+      role: "button",
+      "aria-label": `Edit ${typeLabel}`,
+      onKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => {
+        // Only keys on the tile itself; the popup's events bubble up here through React.
+        if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          onConfigure();
+        }
+      },
+    })}
   >
     <div className="px-3 pt-2 text-left">
       <span className="block truncate text-xs font-medium text-muted-foreground">{typeLabel}</span>
@@ -56,7 +59,7 @@ const WidgetDraftTile: React.FC<{
     </div>
     <div className="flex flex-col items-center gap-0.5 px-3 pt-1 pb-2 text-center text-xs text-muted-foreground">
       {notice && <p>{notice}</p>}
-      <p>Double-click to edit</p>
+      {onConfigure && <p>Double-click to edit</p>}
     </div>
     {children}
   </Card>

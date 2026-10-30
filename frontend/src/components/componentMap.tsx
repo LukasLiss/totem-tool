@@ -44,6 +44,7 @@ import { useDottedChartOptions } from '@/react_component/dottedChart/useDottedCh
 import DottedChartSketch from './DottedChartSketch';
 import DottedChartSettingsBody from './DottedChartSettingsDialog';
 import ProcessAreaSketch from './ProcessAreaSketch';
+import TotemModelSketch from './TotemModelSketch';
 import ProcessAreaSettingsBody from './ProcessAreaSettingsDialog';
 import { ChartSettingsDialog } from './sql-widgets/chartSettings';
 import {
@@ -1207,23 +1208,13 @@ export const TotemMinerComponent: React.FC<ComponentProps> = ({
   selectedFile
 }) => {
   if (isEditMode) {
-    // EDIT MODE: Show configuration placeholder
+    // EDIT MODE: a draft of the model; the miner has no settings to open.
     return (
-      <Card className="w-full h-full rounded-none">
-        <CardHeader>
-          <CardTitle>TOTeM Miner</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            The TOTeM Miner discovers and visualizes the structure of your event log.
-          </p>
-          <p className="text-sm text-muted-foreground">
-            {selectedFile
-              ? `Currently analyzing: ${selectedFile.name || selectedFile.filename || 'Event Log'}`
-              : 'Automatically analyzing the current project\'s event log.'}
-          </p>
-        </CardContent>
-      </Card>
+      <WidgetDraftTile
+        typeLabel="TOTeM Miner"
+        hint="Layout preview: object types as colored boxes and the relations between them, with their labels and cardinalities. The model itself is discovered from the log; all labels are placeholders."
+        sketch={<TotemModelSketch className="h-full w-full" />}
+      />
     );
   }
 
