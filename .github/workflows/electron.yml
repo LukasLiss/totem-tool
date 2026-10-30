@@ -149,6 +149,15 @@ jobs:
           merged = x64["head"] + ["files:"] + x64["files"] + arm64["files"] + x64["tail"]
           Path("release-artifacts/latest-mac.yml").write_text("\n".join(merged) + "\n")
           EOF
+
+          # Version-free copies, so a website can link to
+          # .../releases/latest/download/<name> without updating it per
+          # release. The versioned files stay: electron-updater uses them.
+          cd release-artifacts
+          cp TOTeM-Tool-Setup-*.exe TOTeM-Tool-Windows-x64.exe
+          cp TOTeM-Tool-*-arm64.dmg TOTeM-Tool-macOS-AppleSilicon.dmg
+          cp TOTeM-Tool-*-x64.dmg TOTeM-Tool-macOS-Intel.dmg
+          cd ..
           ls -la release-artifacts
           cat release-artifacts/latest-mac.yml
 
