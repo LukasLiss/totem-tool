@@ -45,6 +45,8 @@ import DottedChartSketch from './DottedChartSketch';
 import DottedChartSettingsBody from './DottedChartSettingsDialog';
 import ProcessAreaSketch from './ProcessAreaSketch';
 import TotemModelSketch from './TotemModelSketch';
+import OcdfgSketch from './OcdfgSketch';
+import OcdfgSettingsBody from './OcdfgSettingsDialog';
 import ProcessAreaSettingsBody from './ProcessAreaSettingsDialog';
 import { ChartSettingsDialog } from './sql-widgets/chartSettings';
 import {
@@ -1425,6 +1427,9 @@ function isBuiltinDottedChartAxis(
 }
 
 
+const OCDFG_SKETCH_HINT =
+  "Layout preview: a colored start and end per object type, activities with their type dots, and one colored arc per object type, in the chosen direction. The graph itself comes from the log; names are placeholders.";
+
 // NewOCDFGComponent: Dashboard wrapper for the new Object-Centric Directly Follows Graph (ELK layout)
 export const NewOCDFGComponent: React.FC<ComponentProps> = ({
   node,
@@ -1437,6 +1442,7 @@ export const NewOCDFGComponent: React.FC<ComponentProps> = ({
   const [showControls, setShowControls] = useState(node.show_controls ?? true);
   const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
   const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>(node.layout_direction ?? 'TB');
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
     setShowControls(node.show_controls ?? true);
@@ -1460,51 +1466,38 @@ export const NewOCDFGComponent: React.FC<ComponentProps> = ({
   };
 
   if (isEditMode) {
-    // EDIT MODE: Show configuration controls
+    // EDIT MODE: the tile shows a draft of the graph; the settings open in a popup.
     return (
-      <Card className="w-full h-full rounded-none">
-        <CardHeader>
-          <CardTitle>New OCDFG (ELK) Settings</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            New Object-Centric Directly Follows Graph (OCDFG) visualization with ELK layout.
-          </p>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="new-show-controls">Show Controls Panel</Label>
-            <Switch
-              id="new-show-controls"
-              checked={showControls}
-              onCheckedChange={handleShowControlsChange}
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="new-initial-locked">Lock Interactions Initially</Label>
-            <Switch
-              id="new-initial-locked"
-              checked={initialInteractionLocked}
-              onCheckedChange={handleInitialInteractionLockedChange}
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label>Layout Direction</Label>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="w-[180px] justify-between font-normal">
-                  <span>{layoutDirection === 'TB' ? 'Top to Bottom' : 'Left to Right'}</span>
-                  <ChevronDown className="h-4 w-4 opacity-50" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-[180px]">
-                <DropdownMenuRadioGroup value={layoutDirection} onValueChange={handleLayoutDirectionChange}>
-                  <DropdownMenuRadioItem value="TB">Top to Bottom</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="LR">Left to Right</DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        </CardContent>
-      </Card>
+      <WidgetDraftTile
+        typeLabel="OCDFG"
+        hint={OCDFG_SKETCH_HINT}
+        onConfigure={() => setSettingsOpen(true)}
+        sketch={
+          <OcdfgSketch
+            layoutDirection={layoutDirection}
+            showControls={showControls}
+            interactionLocked={initialInteractionLocked}
+            className="h-full w-full"
+          />
+        }
+      >
+        <ChartSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+          <OcdfgSettingsBody
+            id={`ocdfg-${node.component_id}`}
+            heading="OCDFG settings"
+            description="New Object-Centric Directly Follows Graph (OCDFG) visualization with ELK layout."
+            initial={{ showControls, initialInteractionLocked, layoutDirection }}
+            sketchHint={OCDFG_SKETCH_HINT}
+            onApply={(next) => {
+              handleShowControlsChange(next.showControls);
+              handleInitialInteractionLockedChange(next.initialInteractionLocked);
+              handleLayoutDirectionChange(next.layoutDirection);
+              setSettingsOpen(false);
+            }}
+            onCancel={() => setSettingsOpen(false)}
+          />
+        </ChartSettingsDialog>
+      </WidgetDraftTile>
     );
   }
 
@@ -1540,6 +1533,7 @@ export const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
   const [showControls, setShowControls] = useState(node.show_controls ?? true);
   const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
   const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>(node.layout_direction ?? 'TB');
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
     setShowControls(node.show_controls ?? true);
@@ -1563,51 +1557,38 @@ export const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
   };
 
   if (isEditMode) {
-    // EDIT MODE: Show configuration controls
+    // EDIT MODE: the tile shows a draft of the graph; the settings open in a popup.
     return (
-      <Card className="w-full h-full rounded-none">
-        <CardHeader>
-          <CardTitle>OCDFG (Variants) Settings</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            Object-Centric Directly Follows Graph (OCDFG) visualization with Variant/Trace filtering.
-          </p>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="variants-show-controls">Show Controls Panel</Label>
-            <Switch
-              id="variants-show-controls"
-              checked={showControls}
-              onCheckedChange={handleShowControlsChange}
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="variants-initial-locked">Lock Interactions Initially</Label>
-            <Switch
-              id="variants-initial-locked"
-              checked={initialInteractionLocked}
-              onCheckedChange={handleInitialInteractionLockedChange}
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label>Layout Direction</Label>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="w-[180px] justify-between font-normal">
-                  <span>{layoutDirection === 'TB' ? 'Top to Bottom' : 'Left to Right'}</span>
-                  <ChevronDown className="h-4 w-4 opacity-50" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-[180px]">
-                <DropdownMenuRadioGroup value={layoutDirection} onValueChange={handleLayoutDirectionChange}>
-                  <DropdownMenuRadioItem value="TB">Top to Bottom</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="LR">Left to Right</DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        </CardContent>
-      </Card>
+      <WidgetDraftTile
+        typeLabel="OCDFG (variants)"
+        hint={OCDFG_SKETCH_HINT}
+        onConfigure={() => setSettingsOpen(true)}
+        sketch={
+          <OcdfgSketch
+            layoutDirection={layoutDirection}
+            showControls={showControls}
+            interactionLocked={initialInteractionLocked}
+            className="h-full w-full"
+          />
+        }
+      >
+        <ChartSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+          <OcdfgSettingsBody
+            id={`ocdfg-variants-${node.component_id}`}
+            heading="OCDFG (variants) settings"
+            description="Object-Centric Directly Follows Graph (OCDFG) visualization with Variant/Trace filtering."
+            initial={{ showControls, initialInteractionLocked, layoutDirection }}
+            sketchHint={OCDFG_SKETCH_HINT}
+            onApply={(next) => {
+              handleShowControlsChange(next.showControls);
+              handleInitialInteractionLockedChange(next.initialInteractionLocked);
+              handleLayoutDirectionChange(next.layoutDirection);
+              setSettingsOpen(false);
+            }}
+            onCancel={() => setSettingsOpen(false)}
+          />
+        </ChartSettingsDialog>
+      </WidgetDraftTile>
     );
   }
 
