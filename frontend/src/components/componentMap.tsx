@@ -33,8 +33,6 @@ import ProcessArea from '@/react_component/ProcessArea';
 import {
   clampProcessAreaParams,
   DEFAULT_PROCESS_AREA_ALGORITHM,
-  PROCESS_AREA_ALGORITHM_LABELS,
-  PROCESS_AREA_PARAM_RANGES,
   type ProcessAreaAlgorithm,
   type ProcessAreaParams,
 } from '@/react_component/processAreaParams';
@@ -45,6 +43,8 @@ import { axisOptionLabel } from '@/react_component/dottedChart/dottedChartAxisOp
 import { useDottedChartOptions } from '@/react_component/dottedChart/useDottedChartOptions';
 import DottedChartSketch from './DottedChartSketch';
 import DottedChartSettingsBody from './DottedChartSettingsDialog';
+import ProcessAreaSketch from './ProcessAreaSketch';
+import ProcessAreaSettingsBody from './ProcessAreaSettingsDialog';
 import { ChartSettingsDialog } from './sql-widgets/chartSettings';
 import {
   axisOptionToParam,
@@ -1103,17 +1103,8 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
 // view mode through the visualizer's own panel, so `onUpdate` is called from
 // there too — otherwise the main interaction this component offers would be
 // lost on every reload.
-const PROCESS_AREA_PARAM_FIELDS: Array<{
-  nodeKey: 'w_temporal' | 'w_cardinality' | 'w_divergence' | 'alpha' | 'beta';
-  paramKey: keyof ProcessAreaParams;
-  label: string;
-}> = [
-  { nodeKey: 'w_temporal', paramKey: 'wTemporal', label: 'Temporal weight' },
-  { nodeKey: 'w_cardinality', paramKey: 'wCardinality', label: 'Cardinality weight' },
-  { nodeKey: 'w_divergence', paramKey: 'wDivergence', label: 'Divergence weight' },
-  { nodeKey: 'alpha', paramKey: 'alpha', label: 'Separation (α)' },
-  { nodeKey: 'beta', paramKey: 'beta', label: 'Cohesion (β)' },
-];
+const PROCESS_AREA_SKETCH_HINT =
+  "Layout preview: object types as colored boxes on their levels, grouped into process areas and linked across levels. The hierarchy itself comes from the log; names and counts are placeholders.";
 
 export const ProcessAreaComponent: React.FC<ComponentProps> = ({
   node,
@@ -1140,6 +1131,7 @@ export const ProcessAreaComponent: React.FC<ComponentProps> = ({
     });
 
   const [params, setParams] = useState<ProcessAreaParams>(paramsFromNode);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
     setAlgorithm(node.algorithm ?? DEFAULT_PROCESS_AREA_ALGORITHM);
@@ -1170,71 +1162,28 @@ export const ProcessAreaComponent: React.FC<ComponentProps> = ({
   );
 
   if (isEditMode) {
-    // EDIT MODE: Show configuration controls
+    // EDIT MODE: the tile shows a draft of the visualizer; the settings open in a popup.
     return (
-      <Card className="w-full h-full rounded-none overflow-y-auto">
-        <CardHeader>
-          <CardTitle>Process Area Settings</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            The Process Area visualizes the object-type hierarchy of your event log.
-            Select an event log file to see the visualization.
-          </p>
-          <div className="flex items-center justify-between">
-            <Label>Discovery algorithm</Label>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="w-[240px] justify-between font-normal">
-                  <span className="truncate">{PROCESS_AREA_ALGORITHM_LABELS[algorithm]}</span>
-                  <ChevronDown className="h-4 w-4 opacity-50" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-[240px]">
-                <DropdownMenuRadioGroup
-                  value={algorithm}
-                  onValueChange={(value) =>
-                    handleSettingsChange({
-                      algorithm: value as ProcessAreaAlgorithm,
-                      params,
-                    })
-                  }
-                >
-                  {(Object.keys(PROCESS_AREA_ALGORITHM_LABELS) as ProcessAreaAlgorithm[]).map(
-                    (value) => (
-                      <DropdownMenuRadioItem key={value} value={value}>
-                        {PROCESS_AREA_ALGORITHM_LABELS[value]}
-                      </DropdownMenuRadioItem>
-                    ),
-                  )}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-          {algorithm === 'advanced' &&
-            PROCESS_AREA_PARAM_FIELDS.map(({ nodeKey, paramKey, label }) => (
-              <div className="space-y-2" key={nodeKey}>
-                <div className="flex items-center justify-between">
-                  <Label htmlFor={`process-area-${nodeKey}`}>{label}</Label>
-                  <span className="text-sm text-muted-foreground">
-                    {params[paramKey].toFixed(2)}
-                  </span>
-                </div>
-                <Slider
-                  id={`process-area-${nodeKey}`}
-                  {...PROCESS_AREA_PARAM_RANGES[paramKey]}
-                  value={[params[paramKey]]}
-                  onValueChange={(values) =>
-                    handleSettingsChange({
-                      algorithm,
-                      params: { ...params, [paramKey]: values?.[0] ?? 0 },
-                    })
-                  }
-                />
-              </div>
-            ))}
-        </CardContent>
-      </Card>
+      <WidgetDraftTile
+        typeLabel="Process area"
+        hint={PROCESS_AREA_SKETCH_HINT}
+        notice={selectedFile?.id ? undefined : "Select an event log file to see the visualization."}
+        onConfigure={() => setSettingsOpen(true)}
+        sketch={<ProcessAreaSketch className="h-full w-full" />}
+      >
+        <ChartSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+          <ProcessAreaSettingsBody
+            id={`process-area-${node.component_id}`}
+            initial={{ algorithm, params }}
+            sketchHint={PROCESS_AREA_SKETCH_HINT}
+            onApply={(settings) => {
+              handleSettingsChange(settings);
+              setSettingsOpen(false);
+            }}
+            onCancel={() => setSettingsOpen(false)}
+          />
+        </ChartSettingsDialog>
+      </WidgetDraftTile>
     );
   }
 
