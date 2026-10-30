@@ -119,6 +119,58 @@ export const LOG_STATISTICS: {
   },
 ];
 
+/* Card grid, shared by the widget and its draft. Measured in drawing units:
+ * a card is wide and low (about 3:1), with padding around and gaps between. */
+export const STAT_GRID = { padding: 8, gap: 6, cardWidth: 104, cardHeight: 34 };
+// Without a measured size (yet): at most this many cards per row.
+const DEFAULT_COLUMNS = 4;
+
+/** Size of a `columns` x `rows` card grid in drawing units. */
+export function statGridSize(columns: number, rows: number) {
+  const { padding, gap, cardWidth, cardHeight } = STAT_GRID;
+  return {
+    width: padding * 2 + columns * cardWidth + (columns - 1) * gap,
+    height: padding * 2 + rows * cardHeight + (rows - 1) * gap,
+  };
+}
+
+/**
+ * How many cards per row fit a `width` x `height` box best: the arrangement
+ * at which the cards come out largest. Only evenly filled rows are tried (7
+ * cards: 7, 4 + 3, 3 + 3 + 1, …), so no row ends with a single stray card;
+ * ties go to fewer rows, the widget's usual wide shape.
+ */
+export function bestStatColumns(count: number, width: number, height: number): number {
+  if (count === 0 || width <= 0 || height <= 0) return Math.min(count, DEFAULT_COLUMNS) || 1;
+  let best = count;
+  let bestScale = 0;
+  for (let rows = 1; rows <= count; rows++) {
+    const columns = Math.ceil(count / rows);
+    const grid = statGridSize(columns, Math.ceil(count / columns));
+    const scale = Math.min(width / grid.width, height / grid.height);
+    if (scale > bestScale) {
+      best = columns;
+      bestScale = scale;
+    }
+  }
+  return best;
+}
+
+/** Measures an element's content box, for laying out the cards to fit it. */
+export function useElementSize() {
+  const [element, setElement] = useState<HTMLElement | null>(null);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) => {
+      setSize({ width: entry.contentRect.width, height: entry.contentRect.height });
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [element]);
+  return { ref: setElement, ...size };
+}
+
 /** The widget's selection from its node fields, unset ones at their defaults. */
 export function selectionFromNode(node: Partial<Record<LogStatisticKey, boolean>>): LogStatisticsSelection {
   return Object.fromEntries(
