@@ -47,6 +47,8 @@ import ProcessAreaSketch from './ProcessAreaSketch';
 import TotemModelSketch from './TotemModelSketch';
 import OcdfgSketch from './OcdfgSketch';
 import OcdfgSettingsBody from './OcdfgSettingsDialog';
+import OcpnSketch from './OcpnSketch';
+import OcpnSettingsBody from './OcpnSettingsDialog';
 import ProcessAreaSettingsBody from './ProcessAreaSettingsDialog';
 import { ChartSettingsDialog } from './sql-widgets/chartSettings';
 import {
@@ -1766,6 +1768,9 @@ export const OCCNComponent: React.FC<ComponentProps> = ({
 };
 
 
+const OCPN_SKETCH_HINT =
+  "Layout preview: places in their object type's color (start and end filled), transitions with their type dots, a silent transition, and variable arcs as double lines. The net itself is discovered from the log; names are placeholders.";
+
 // OCPNComponent: Dashboard wrapper for the OC Petri Net discovery view.
 // Settings: automatic loading (start discovery when the dashboard opens)
 // and the discovery timeout in seconds.
@@ -1777,6 +1782,7 @@ export const OCPNComponent: React.FC<ComponentProps> = ({
 }) => {
   const [automaticLoading, setAutomaticLoading] = useState(node.automatic_loading ?? false);
   const [timeoutS, setTimeoutS] = useState<number>(node.timeout_s ?? 30);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [filterEnabled, setFilterEnabled] = useState(true);
   const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>({});
 
@@ -1799,50 +1805,28 @@ export const OCPNComponent: React.FC<ComponentProps> = ({
   };
 
   if (isEditMode) {
-    // EDIT MODE: Configuration form
+    // EDIT MODE: the tile shows a draft of the net; the settings open in a popup.
     return (
-      <Card className="w-full h-full rounded-none overflow-auto">
-        <CardHeader>
-          <CardTitle>OC Petri Net Settings</CardTitle>
-          <CardDescription>
-            Discovers an Object-Centric Petri Net from the selected event log.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {/* Automatic loading */}
-          <div className="flex items-center justify-between">
-            <div className="space-y-0.5">
-              <Label htmlFor="ocpn-auto-loading">Start discovery automatically</Label>
-              <p className="text-xs text-muted-foreground">
-                Run OCPN discovery as soon as the dashboard loads.
-              </p>
-            </div>
-            <Switch
-              id="ocpn-auto-loading"
-              checked={automaticLoading}
-              onCheckedChange={handleAutomaticLoadingChange}
-            />
-          </div>
-
-          {/* Timeout (seconds) */}
-          <div className="space-y-2">
-            <Label htmlFor="ocpn-timeout-setting">Timeout (seconds)</Label>
-            <Input
-              id="ocpn-timeout-setting"
-              type="number"
-              min={1}
-              max={600}
-              step={1}
-              value={timeoutS}
-              onChange={(e) => handleTimeoutChange(e.target.value)}
-              className="w-[120px]"
-            />
-            <p className="text-xs text-muted-foreground">
-              Wall-clock budget for the discovery. Increase it for large logs.
-            </p>
-          </div>
-        </CardContent>
-      </Card>
+      <WidgetDraftTile
+        typeLabel="OC Petri net"
+        hint={OCPN_SKETCH_HINT}
+        onConfigure={() => setSettingsOpen(true)}
+        sketch={<OcpnSketch className="h-full w-full" />}
+      >
+        <ChartSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+          <OcpnSettingsBody
+            id={`ocpn-${node.component_id}`}
+            initial={{ automaticLoading, timeoutS }}
+            sketchHint={OCPN_SKETCH_HINT}
+            onApply={(next) => {
+              handleAutomaticLoadingChange(next.automaticLoading);
+              handleTimeoutChange(String(next.timeoutS));
+              setSettingsOpen(false);
+            }}
+            onCancel={() => setSettingsOpen(false)}
+          />
+        </ChartSettingsDialog>
+      </WidgetDraftTile>
     );
   }
 
