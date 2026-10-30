@@ -1,10 +1,9 @@
 /**
  * Dashboard widgets for the organizational mining explorers.
  *
- * Edit mode shows the settings: whether the computation starts
- * automatically, followed by the preselected settings the explorer opens
- * with (handover: a settings card in the tile; resource profiling: a draft of
- * the result in the tile, the settings in a popup beside the same draft).
+ * Edit mode shows a draft of the result in the tile; the settings (whether
+ * the computation starts automatically, followed by the preselected settings
+ * the explorer opens with) open in a popup beside the same draft.
  * View mode hosts the explorer as a full-bleed canvas with its controls
  * floating over it — the settings themselves are not reachable there, which
  * is the same preselection-only contract the OCCN widget follows. All
@@ -17,7 +16,6 @@ import { ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -62,6 +60,7 @@ import { SegmentedControl } from "@/components/sql-widgets/shared";
 import { mapTypesToColors } from "@/utils/objectColors";
 
 import type { ComponentProps } from "./componentMap";
+import HandoverSketch from "./HandoverSketch";
 import ResourceProfilingSketch from "./ResourceProfilingSketch";
 import WidgetDraftTile from "./WidgetDraftTile";
 
@@ -182,50 +181,40 @@ const POINT_SIZE_OPTIONS = [
 // Handover of work
 // ---------------------------------------------------------------------------
 
-export const OCHandoverComponent: React.FC<ComponentProps> = ({
-  node,
-  onUpdate,
-  isEditMode = false,
-  selectedFile,
-}) => {
-  // The persisted fields as one string: a stable dependency for syncing local
-  // state after a layout (re)load, without listing every field.
-  const persistedJson = JSON.stringify(handoverSettingsToNode(handoverSettingsFromNode(node)));
-  const [settings, setSettings] = useState<HandoverSettings>(() => handoverSettingsFromNode(node));
-  const [automaticLoading, setAutomaticLoading] = useState(node.automatic_loading ?? false);
-  const [filterEnabled, setFilterEnabled] = useState(true);
-  const [maxGapText, setMaxGapText] = useState(settings.maxGap === null ? "" : String(settings.maxGap));
+const HANDOVER_SKETCH_HINT =
+  "Layout preview: resources in the colors of the selected resource types (one node per type when clustered by object type), handovers in the colors of the selected business object types.";
 
-  useEffect(() => {
-    const next = handoverSettingsFromNode(JSON.parse(persistedJson));
-    setSettings(next);
-    setMaxGapText(next.maxGap === null ? "" : String(next.maxGap));
-  }, [persistedJson]);
-  useEffect(() => { setAutomaticLoading(node.automatic_loading ?? false); }, [node.automatic_loading]);
+/**
+ * The handover settings popup's body (the same settings the edit form always
+ * had) beside a draft of the graph. It works on a draft of the settings,
+ * mounted on every open, and only hands it over on Apply.
+ */
+function HandoverSettingsBody({ id, initial, initialAutomaticLoading, types, loading, fileId, onApply, onCancel }: {
+  id: string;
+  initial: HandoverSettings;
+  initialAutomaticLoading: boolean;
+  types: string[];
+  loading: boolean;
+  fileId?: number;
+  onApply: (settings: HandoverSettings, automaticLoading: boolean) => void;
+  onCancel: () => void;
+}) {
+  const [settings, setSettings] = useState(initial);
+  const [automaticLoading, setAutomaticLoading] = useState(initialAutomaticLoading);
+  const [maxGapText, setMaxGapText] = useState(initial.maxGap === null ? "" : String(initial.maxGap));
+  const update = (patch: Partial<HandoverSettings>) => setSettings((s) => ({ ...s, ...patch }));
 
-  const { types, loading } = useObjectTypes(selectedFile?.id, isEditMode);
+  const businessOptions = types.filter((t) => !settings.resourceTypes.includes(t));
+  const resourceOptions = types.filter((t) => !settings.businessObjectTypes.includes(t));
 
-  const update = (patch: Partial<HandoverSettings>) => {
-    const next = { ...settings, ...patch };
-    setSettings(next);
-    onUpdate?.(handoverSettingsToNode(next) as Partial<GridStackNode>);
-  };
-  const updateAutomaticLoading = (checked: boolean) => {
-    setAutomaticLoading(checked);
-    onUpdate?.({ automatic_loading: checked });
-  };
-
-  if (isEditMode) {
-    const id = `handover-${node.component_id}`;
-    const businessOptions = types.filter((t) => !settings.resourceTypes.includes(t));
-    const resourceOptions = types.filter((t) => !settings.businessObjectTypes.includes(t));
-
-    return (
-      <Card className="w-full h-full rounded-none overflow-y-auto text-left">
-        <CardHeader>
-          <CardTitle>Handover of Work Settings</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
+  return (
+    <ChartSettingsLayout
+      heading="Handover of work settings"
+      idPrefix={id}
+      onApply={() => onApply(settings, automaticLoading)}
+      onCancel={onCancel}
+      dataTab={
+        <div className="space-y-4 text-left">
           <p className="text-sm text-muted-foreground">
             Which resources hand work over to each other, following the business objects through the log.
           </p>
@@ -234,7 +223,7 @@ export const OCHandoverComponent: React.FC<ComponentProps> = ({
           <DashboardSwitches
             id={id}
             automaticLoading={automaticLoading}
-            onAutomaticLoading={updateAutomaticLoading}
+            onAutomaticLoading={setAutomaticLoading}
           />
 
           <SectionTitle>Preselected settings</SectionTitle>
@@ -245,7 +234,7 @@ export const OCHandoverComponent: React.FC<ComponentProps> = ({
               selected={settings.resourceTypes}
               onChange={(resourceTypes) => update({ resourceTypes })}
               loading={loading}
-              disabled={!selectedFile?.id}
+              disabled={!fileId}
               placeholder="Select…"
               className="w-[200px]"
             />
@@ -257,7 +246,7 @@ export const OCHandoverComponent: React.FC<ComponentProps> = ({
               selected={settings.businessObjectTypes}
               onChange={(businessObjectTypes) => update({ businessObjectTypes })}
               loading={loading}
-              disabled={!selectedFile?.id}
+              disabled={!fileId}
               placeholder="Select…"
               className="w-[200px]"
             />
@@ -364,8 +353,85 @@ export const OCHandoverComponent: React.FC<ComponentProps> = ({
               onChange={(viewMode) => update({ viewMode })}
             />
           </SettingRow>
-        </CardContent>
-      </Card>
+        </div>
+      }
+      sketch={
+        <HandoverSketch
+          resourceTypes={settings.resourceTypes}
+          businessObjectTypes={settings.businessObjectTypes}
+          typeColors={mapTypesToColors(types)}
+          clusterByOt={settings.clusterByOt}
+          className="w-full max-w-xs md:max-w-md"
+        />
+      }
+      sketchHint={HANDOVER_SKETCH_HINT}
+    />
+  );
+}
+
+export const OCHandoverComponent: React.FC<ComponentProps> = ({
+  node,
+  onUpdate,
+  isEditMode = false,
+  selectedFile,
+}) => {
+  // The persisted fields as one string: a stable dependency for syncing local
+  // state after a layout (re)load, without listing every field.
+  const persistedJson = JSON.stringify(handoverSettingsToNode(handoverSettingsFromNode(node)));
+  const [settings, setSettings] = useState<HandoverSettings>(() => handoverSettingsFromNode(node));
+  const [automaticLoading, setAutomaticLoading] = useState(node.automatic_loading ?? false);
+  const [filterEnabled, setFilterEnabled] = useState(true);
+
+  useEffect(() => { setSettings(handoverSettingsFromNode(JSON.parse(persistedJson))); }, [persistedJson]);
+  useEffect(() => { setAutomaticLoading(node.automatic_loading ?? false); }, [node.automatic_loading]);
+
+  const { types, loading } = useObjectTypes(selectedFile?.id, isEditMode);
+
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  const applySettings = (next: HandoverSettings, nextAutomaticLoading: boolean) => {
+    setSettings(next);
+    setAutomaticLoading(nextAutomaticLoading);
+    onUpdate?.({
+      ...handoverSettingsToNode(next),
+      automatic_loading: nextAutomaticLoading,
+    } as Partial<GridStackNode>);
+  };
+
+  if (isEditMode) {
+    // The tile shows a draft of the graph; the settings open in a popup.
+    return (
+      <WidgetDraftTile
+        typeLabel="Handover of work"
+        hint={HANDOVER_SKETCH_HINT}
+        notice={settings.resourceTypes.length ? undefined : "No resource types selected yet."}
+        onConfigure={() => setSettingsOpen(true)}
+        sketch={
+          <HandoverSketch
+            resourceTypes={settings.resourceTypes}
+            businessObjectTypes={settings.businessObjectTypes}
+            typeColors={mapTypesToColors(types)}
+            clusterByOt={settings.clusterByOt}
+            className="h-full w-full"
+          />
+        }
+      >
+        <ChartSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+          <HandoverSettingsBody
+            id={`handover-${node.component_id}`}
+            initial={settings}
+            initialAutomaticLoading={automaticLoading}
+            types={types}
+            loading={loading}
+            fileId={selectedFile?.id}
+            onApply={(next, nextAutomaticLoading) => {
+              applySettings(next, nextAutomaticLoading);
+              setSettingsOpen(false);
+            }}
+            onCancel={() => setSettingsOpen(false)}
+          />
+        </ChartSettingsDialog>
+      </WidgetDraftTile>
     );
   }
 
