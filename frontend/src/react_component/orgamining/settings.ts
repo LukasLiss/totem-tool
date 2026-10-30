@@ -74,13 +74,14 @@ export type ProfilingClusterMethod = "kmeans" | "agglomerative" | "hdbscan";
 export type ProfilingDistanceMetric = "euclidean" | "hellinger";
 export type ProfilingViewMode = "graph" | "table";
 
+/** In the order the resource tooltip (ResourceTooltip) shows the feature groups. */
 export const FEATURE_GROUP_OPTIONS: { key: FeatureGroup; label: string }[] = [
   { key: "activity_fractions", label: "Activity fractions" },
   { key: "cooccurrence_fractions", label: "Co-occurrence" },
   { key: "object_collaboration_fractions", label: "Object collaboration" },
-  { key: "object_portfolio_fractions", label: "BO type fractions" },
   { key: "time_fractions", label: "Time binning (hourly)" },
   { key: "weekday_fractions", label: "Time binning (weekly)" },
+  { key: "object_portfolio_fractions", label: "BO type fractions" },
 ];
 export const FEATURE_GROUPS: FeatureGroup[] = FEATURE_GROUP_OPTIONS.map((o) => o.key);
 /** Feature groups that need business objects (and hence a business object type selection). */

@@ -1,9 +1,11 @@
 /**
  * Dashboard widgets for the organizational mining explorers.
  *
- * Edit mode shows a settings card: whether the computation starts
+ * Edit mode shows the settings: whether the computation starts
  * automatically, followed by the preselected settings the explorer opens
- * with. View mode hosts the explorer as a full-bleed canvas with its controls
+ * with (handover: a settings card in the tile; resource profiling: a draft of
+ * the result in the tile, the settings in a popup beside the same draft).
+ * View mode hosts the explorer as a full-bleed canvas with its controls
  * floating over it — the settings themselves are not reachable there, which
  * is the same preselection-only contract the OCCN widget follows. All
  * settings persist through the layout (see `OCHandoverComponent` and
@@ -51,8 +53,12 @@ import {
 } from "@/react_component/orgamining/settings";
 import { MultiSelectPopover } from "@/react_component/variants/MultiSelectPopover";
 import { fetchObjectTypes } from "@/react_component/variants/variantsApi";
+import { ChartSettingsDialog, ChartSettingsLayout } from "@/components/sql-widgets/chartSettings";
+import { mapTypesToColors } from "@/utils/objectColors";
 
 import type { ComponentProps } from "./componentMap";
+import ResourceProfilingSketch from "./ResourceProfilingSketch";
+import WidgetDraftTile from "./WidgetDraftTile";
 
 // ---------------------------------------------------------------------------
 // Shared building blocks
@@ -374,59 +380,55 @@ export const OCHandoverComponent: React.FC<ComponentProps> = ({
 // Resource profiling
 // ---------------------------------------------------------------------------
 
-export const ResourceProfilingComponent: React.FC<ComponentProps> = ({
-  node,
-  onUpdate,
-  isEditMode = false,
-  selectedFile,
-}) => {
-  const persistedJson = JSON.stringify(profilingSettingsToNode(profilingSettingsFromNode(node)));
-  const [settings, setSettings] = useState<ResourceProfilingSettings>(() => profilingSettingsFromNode(node));
-  const [automaticLoading, setAutomaticLoading] = useState(node.automatic_loading ?? false);
-  const [filterEnabled, setFilterEnabled] = useState(true);
+/**
+ * The resource profiling settings popup's body (the same settings the edit
+ * form always had) beside a draft of the result. It works on a draft of the
+ * settings, mounted on every open, and only hands it over on Apply.
+ */
+function ResourceProfilingSettingsBody({ id, initial, initialAutomaticLoading, types, loading, fileId, onApply, onCancel }: {
+  id: string;
+  initial: ResourceProfilingSettings;
+  initialAutomaticLoading: boolean;
+  types: string[];
+  loading: boolean;
+  fileId?: number;
+  onApply: (settings: ResourceProfilingSettings, automaticLoading: boolean) => void;
+  onCancel: () => void;
+}) {
+  const [settings, setSettings] = useState(initial);
+  const [automaticLoading, setAutomaticLoading] = useState(initialAutomaticLoading);
+  const update = (patch: Partial<ResourceProfilingSettings>) => setSettings((s) => ({ ...s, ...patch }));
 
-  useEffect(() => { setSettings(profilingSettingsFromNode(JSON.parse(persistedJson))); }, [persistedJson]);
-  useEffect(() => { setAutomaticLoading(node.automatic_loading ?? false); }, [node.automatic_loading]);
+  // Tooltip-only groups are computed too, so they need business objects as well.
+  const needsBusinessObjects = [...settings.featureGroups, ...settings.tooltipFeatureGroups].some((g) =>
+    (BUSINESS_OBJECT_FEATURE_GROUPS as string[]).includes(g),
+  );
+  const businessOptions = types.filter((t) => !settings.resourceTypes.includes(t));
+  const tooltipOptions = FEATURE_GROUP_OPTIONS.filter((o) => !settings.featureGroups.includes(o.key));
+  // The selected tooltip extras, in the tooltip's order rather than click order.
+  const tooltipExtrasLabels = FEATURE_GROUP_OPTIONS.filter((o) => settings.tooltipFeatureGroups.includes(o.key)).map(
+    (o) => o.label,
+  );
 
-  const { types, loading } = useObjectTypes(selectedFile?.id, isEditMode);
-
-  const update = (patch: Partial<ResourceProfilingSettings>) => {
-    const next = { ...settings, ...patch };
-    setSettings(next);
-    onUpdate?.(profilingSettingsToNode(next) as Partial<GridStackNode>);
+  const toggleFeatureGroup = (key: FeatureGroup) => {
+    const has = settings.featureGroups.includes(key);
+    const featureGroups = has
+      ? settings.featureGroups.filter((g) => g !== key)
+      : [...settings.featureGroups, key];
+    update({
+      featureGroups,
+      tooltipFeatureGroups: settings.tooltipFeatureGroups.filter((g) => !featureGroups.includes(g)),
+    });
   };
-  const updateAutomaticLoading = (checked: boolean) => {
-    setAutomaticLoading(checked);
-    onUpdate?.({ automatic_loading: checked });
-  };
 
-  if (isEditMode) {
-    const id = `profiling-${node.component_id}`;
-    // Tooltip-only groups are computed too, so they need business objects as well.
-    const needsBusinessObjects = [...settings.featureGroups, ...settings.tooltipFeatureGroups].some((g) =>
-      (BUSINESS_OBJECT_FEATURE_GROUPS as string[]).includes(g),
-    );
-    const businessOptions = types.filter((t) => !settings.resourceTypes.includes(t));
-    const tooltipOptions = FEATURE_GROUP_OPTIONS.filter((o) => !settings.featureGroups.includes(o.key));
-    const featureLabel = (key: string) => FEATURE_GROUP_OPTIONS.find((o) => o.key === key)?.label ?? key;
-
-    const toggleFeatureGroup = (key: FeatureGroup) => {
-      const has = settings.featureGroups.includes(key);
-      const featureGroups = has
-        ? settings.featureGroups.filter((g) => g !== key)
-        : [...settings.featureGroups, key];
-      update({
-        featureGroups,
-        tooltipFeatureGroups: settings.tooltipFeatureGroups.filter((g) => !featureGroups.includes(g)),
-      });
-    };
-
-    return (
-      <Card className="w-full h-full rounded-none overflow-y-auto text-left">
-        <CardHeader>
-          <CardTitle>Resource Profiling Settings</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
+  return (
+    <ChartSettingsLayout
+      heading="Resource profiling settings"
+      idPrefix={id}
+      onApply={() => onApply(settings, automaticLoading)}
+      onCancel={onCancel}
+      styleTab={
+        <div className="space-y-4 text-left">
           <p className="text-sm text-muted-foreground">
             Profiles every resource by what it does, when, and with whom; similar resources form organizational units.
           </p>
@@ -435,7 +437,7 @@ export const ResourceProfilingComponent: React.FC<ComponentProps> = ({
           <DashboardSwitches
             id={id}
             automaticLoading={automaticLoading}
-            onAutomaticLoading={updateAutomaticLoading}
+            onAutomaticLoading={setAutomaticLoading}
           />
 
           <SectionTitle>Preselected settings</SectionTitle>
@@ -449,7 +451,7 @@ export const ResourceProfilingComponent: React.FC<ComponentProps> = ({
                 businessObjectTypes: settings.businessObjectTypes.filter((t) => !resourceTypes.includes(t)),
               })}
               loading={loading}
-              disabled={!selectedFile?.id}
+              disabled={!fileId}
               placeholder="Select…"
               className="w-[200px]"
             />
@@ -472,108 +474,184 @@ export const ResourceProfilingComponent: React.FC<ComponentProps> = ({
             {settings.featureGroups.length === 0 && (
               <p className="text-xs text-muted-foreground">Without a feature the explorer falls back to activity fractions.</p>
             )}
+        </div>
+
+        {tooltipOptions.length > 0 && (
+          <SettingRow label="Tooltip extras" hint="Computed for the tooltips only; excluded from distances and clustering.">
+            <MultiSelectPopover
+              label="Tooltip extras"
+              options={tooltipOptions.map((o) => o.key)}
+              selected={settings.tooltipFeatureGroups}
+              onChange={(groups) => update({ tooltipFeatureGroups: groups as FeatureGroup[] })}
+              placeholder="None"
+              className="w-[200px]"
+            />
+          </SettingRow>
+        )}
+        {settings.tooltipFeatureGroups.length > 0 && (
+          <p className="text-xs text-muted-foreground -mt-2">
+            {tooltipExtrasLabels.join(", ")}
+          </p>
+        )}
+
+        {needsBusinessObjects && (
+          <SettingRow label="Business object types" hint="Empty = every non-resource type.">
+            <MultiSelectPopover
+              label="Business object types"
+              options={businessOptions}
+              selected={settings.businessObjectTypes}
+              onChange={(businessObjectTypes) => update({ businessObjectTypes })}
+              loading={loading}
+              disabled={!fileId}
+              placeholder="All other types"
+              className="w-[200px]"
+            />
+          </SettingRow>
+        )}
+
+        <SettingRow label="Clustering" htmlFor={`${id}-clusters`}>
+          <Switch
+            id={`${id}-clusters`}
+            checked={settings.computeClusters}
+            onCheckedChange={(computeClusters) => update({ computeClusters })}
+          />
+        </SettingRow>
+        {settings.computeClusters && (
+          <div className="space-y-3 pl-3 border-l">
+            <SettingRow label="Method">
+              <ChoiceDropdown
+                value={settings.clusterMethod}
+                options={PROFILING_CLUSTER_METHODS}
+                labels={PROFILING_CLUSTER_METHOD_LABELS}
+                onChange={(clusterMethod) => update({ clusterMethod })}
+              />
+            </SettingRow>
+            {settings.clusterMethod === "hdbscan" ? (
+              <SettingRow label="Min. cluster size" htmlFor={`${id}-min-size`}>
+                <Input
+                  id={`${id}-min-size`}
+                  type="number"
+                  min={2}
+                  className="w-24 text-center"
+                  value={settings.minClusterSize}
+                  onChange={(e) => {
+                    const n = parseInt(e.target.value, 10);
+                    if (!Number.isNaN(n) && n >= 2) update({ minClusterSize: n });
+                  }}
+                />
+              </SettingRow>
+            ) : (
+              <SettingRow label="Clusters (k)" htmlFor={`${id}-k`}>
+                <Input
+                  id={`${id}-k`}
+                  type="number"
+                  min={1}
+                  className="w-24 text-center"
+                  value={settings.nClusters}
+                  onChange={(e) => {
+                    const n = parseInt(e.target.value, 10);
+                    if (!Number.isNaN(n) && n >= 1) update({ nClusters: n });
+                  }}
+                />
+              </SettingRow>
+            )}
+            <SettingRow label="Distance">
+              <ChoiceDropdown
+                value={settings.distanceMetric}
+                options={PROFILING_DISTANCE_METRICS}
+                labels={PROFILING_DISTANCE_METRIC_LABELS}
+                onChange={(distanceMetric) => update({ distanceMetric })}
+              />
+            </SettingRow>
           </div>
+        )}
 
-          {tooltipOptions.length > 0 && (
-            <SettingRow label="Tooltip extras" hint="Computed for the tooltips only; excluded from distances and clustering.">
-              <MultiSelectPopover
-                label="Tooltip extras"
-                options={tooltipOptions.map((o) => o.key)}
-                selected={settings.tooltipFeatureGroups}
-                onChange={(groups) => update({ tooltipFeatureGroups: groups as FeatureGroup[] })}
-                placeholder="None"
-                className="w-[200px]"
-              />
-            </SettingRow>
-          )}
-          {settings.tooltipFeatureGroups.length > 0 && (
-            <p className="text-xs text-muted-foreground -mt-2">
-              {settings.tooltipFeatureGroups.map(featureLabel).join(", ")}
-            </p>
-          )}
+        <SettingRow label="Default view">
+          <ChoiceDropdown
+            value={settings.viewMode}
+            options={PROFILING_VIEW_MODES}
+            labels={VIEW_MODE_LABELS}
+            onChange={(viewMode) => update({ viewMode })}
+          />
+        </SettingRow>
+        </div>
+      }
+      sketch={
+        <ResourceProfilingSketch
+          resourceTypes={settings.resourceTypes}
+          typeColors={mapTypesToColors(types)}
+          computeClusters={settings.computeClusters}
+          tooltipGroups={[...settings.featureGroups, ...settings.tooltipFeatureGroups]}
+          className="w-full max-w-xs md:max-w-md"
+        />
+      }
+      sketchHint="Layout preview: resources in the colors of the selected resource types, grouped into clusters, and a cluster tooltip with the selected feature groups. Grey bars stand in for the values."
+    />
+  );
+}
 
-          {needsBusinessObjects && (
-            <SettingRow label="Business object types" hint="Empty = every non-resource type.">
-              <MultiSelectPopover
-                label="Business object types"
-                options={businessOptions}
-                selected={settings.businessObjectTypes}
-                onChange={(businessObjectTypes) => update({ businessObjectTypes })}
-                loading={loading}
-                disabled={!selectedFile?.id}
-                placeholder="All other types"
-                className="w-[200px]"
-              />
-            </SettingRow>
-          )}
+export const ResourceProfilingComponent: React.FC<ComponentProps> = ({
+  node,
+  onUpdate,
+  isEditMode = false,
+  selectedFile,
+}) => {
+  const persistedJson = JSON.stringify(profilingSettingsToNode(profilingSettingsFromNode(node)));
+  const [settings, setSettings] = useState<ResourceProfilingSettings>(() => profilingSettingsFromNode(node));
+  const [automaticLoading, setAutomaticLoading] = useState(node.automatic_loading ?? false);
+  const [filterEnabled, setFilterEnabled] = useState(true);
 
-          <SettingRow label="Clustering" htmlFor={`${id}-clusters`}>
-            <Switch
-              id={`${id}-clusters`}
-              checked={settings.computeClusters}
-              onCheckedChange={(computeClusters) => update({ computeClusters })}
-            />
-          </SettingRow>
-          {settings.computeClusters && (
-            <div className="space-y-3 pl-3 border-l">
-              <SettingRow label="Method">
-                <ChoiceDropdown
-                  value={settings.clusterMethod}
-                  options={PROFILING_CLUSTER_METHODS}
-                  labels={PROFILING_CLUSTER_METHOD_LABELS}
-                  onChange={(clusterMethod) => update({ clusterMethod })}
-                />
-              </SettingRow>
-              {settings.clusterMethod === "hdbscan" ? (
-                <SettingRow label="Min. cluster size" htmlFor={`${id}-min-size`}>
-                  <Input
-                    id={`${id}-min-size`}
-                    type="number"
-                    min={2}
-                    className="w-24 text-center"
-                    value={settings.minClusterSize}
-                    onChange={(e) => {
-                      const n = parseInt(e.target.value, 10);
-                      if (!Number.isNaN(n) && n >= 2) update({ minClusterSize: n });
-                    }}
-                  />
-                </SettingRow>
-              ) : (
-                <SettingRow label="Clusters (k)" htmlFor={`${id}-k`}>
-                  <Input
-                    id={`${id}-k`}
-                    type="number"
-                    min={1}
-                    className="w-24 text-center"
-                    value={settings.nClusters}
-                    onChange={(e) => {
-                      const n = parseInt(e.target.value, 10);
-                      if (!Number.isNaN(n) && n >= 1) update({ nClusters: n });
-                    }}
-                  />
-                </SettingRow>
-              )}
-              <SettingRow label="Distance">
-                <ChoiceDropdown
-                  value={settings.distanceMetric}
-                  options={PROFILING_DISTANCE_METRICS}
-                  labels={PROFILING_DISTANCE_METRIC_LABELS}
-                  onChange={(distanceMetric) => update({ distanceMetric })}
-                />
-              </SettingRow>
-            </div>
-          )}
+  useEffect(() => { setSettings(profilingSettingsFromNode(JSON.parse(persistedJson))); }, [persistedJson]);
+  useEffect(() => { setAutomaticLoading(node.automatic_loading ?? false); }, [node.automatic_loading]);
 
-          <SettingRow label="Default view">
-            <ChoiceDropdown
-              value={settings.viewMode}
-              options={PROFILING_VIEW_MODES}
-              labels={VIEW_MODE_LABELS}
-              onChange={(viewMode) => update({ viewMode })}
-            />
-          </SettingRow>
-        </CardContent>
-      </Card>
+  const { types, loading } = useObjectTypes(selectedFile?.id, isEditMode);
+
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const typeColors = mapTypesToColors(types);
+
+  const applySettings = (next: ResourceProfilingSettings, nextAutomaticLoading: boolean) => {
+    setSettings(next);
+    setAutomaticLoading(nextAutomaticLoading);
+    onUpdate?.({
+      ...profilingSettingsToNode(next),
+      automatic_loading: nextAutomaticLoading,
+    } as Partial<GridStackNode>);
+  };
+
+  if (isEditMode) {
+    // The tile shows a draft of the result; the settings open in a popup.
+    return (
+      <WidgetDraftTile
+        typeLabel="Resource profiling"
+        hint="Layout preview: resources in the colors of the selected resource types, grouped into clusters, and a cluster tooltip with the selected feature groups. Grey bars stand in for the values."
+        notice={settings.resourceTypes.length ? undefined : "No resource types selected yet."}
+        onConfigure={() => setSettingsOpen(true)}
+        sketch={
+          <ResourceProfilingSketch
+            resourceTypes={settings.resourceTypes}
+            typeColors={typeColors}
+            computeClusters={settings.computeClusters}
+            tooltipGroups={[...settings.featureGroups, ...settings.tooltipFeatureGroups]}
+            className="h-full w-full"
+          />
+        }
+      >
+        <ChartSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+          <ResourceProfilingSettingsBody
+            id={`profiling-${node.component_id}`}
+            initial={settings}
+            initialAutomaticLoading={automaticLoading}
+            types={types}
+            loading={loading}
+            fileId={selectedFile?.id}
+            onApply={(next, nextAutomaticLoading) => {
+              applySettings(next, nextAutomaticLoading);
+              setSettingsOpen(false);
+            }}
+            onCancel={() => setSettingsOpen(false)}
+          />
+        </ChartSettingsDialog>
+      </WidgetDraftTile>
     );
   }
 
