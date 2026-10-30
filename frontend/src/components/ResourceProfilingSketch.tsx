@@ -29,9 +29,9 @@ const CLUSTERS: [number, number][][] = [
 ];
 // Position of each cluster's first point when counting all points in a row.
 const CLUSTER_OFFSETS = CLUSTERS.map((_, c) => CLUSTERS.slice(0, c).reduce((s, points) => s + points.length, 0));
-// Point radius per point size (medium as the draft always drew them), and the
+// Point radius per point size (large as the draft always drew them), and the
 // fill opacity of "transparent points".
-const POINT_RADIUS: Record<ProfilingPointSize, number> = { small: 2.8, medium: 4, large: 5.4 };
+const POINT_RADIUS: Record<ProfilingPointSize, number> = { small: 2.8, medium: 3.4, large: 4 };
 const TRANSPARENT_OPACITY = 0.45;
 // How far a cluster's outline keeps from its outermost points.
 const HULL_PADDING = 9;

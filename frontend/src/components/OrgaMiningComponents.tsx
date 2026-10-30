@@ -658,7 +658,7 @@ function ResourceProfilingSettingsBody({ id, initial, initialAutomaticLoading, t
       }
       styleTab={
         <div className="space-y-3 text-left">
-          <SettingRow label="Point size" hint="Medium is the usual size; in the dashboard the points also follow the tile's size a little.">
+          <SettingRow label="Point size" hint="Large is the size of the explorer page; in the dashboard the points also follow the tile's size a little.">
             <SegmentedControl
               ariaLabel="Point size"
               value={settings.pointSize}

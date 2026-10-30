@@ -92,10 +92,11 @@ function apiErrorMessage(e: unknown, fallback: string): string {
 }
 
 const NODE_R = 8;
-// Resource radius in screen px per point size (medium is NODE_R, the size the
-// graph always used). In a dashboard tile it also follows the tile a little:
-// scaled by the tile's shorter side against NODE_R_REFERENCE_SIDE, within limits.
-const NODE_R_BY_SIZE: Record<ProfilingPointSize, number> = { small: 5, medium: NODE_R, large: 11 };
+// Resource radius in screen px per point size (large is NODE_R, the size the
+// graph always used and still uses without a point size). In a dashboard tile
+// it also follows the tile a little: scaled by the tile's shorter side
+// against NODE_R_REFERENCE_SIDE, within limits.
+const NODE_R_BY_SIZE: Record<ProfilingPointSize, number> = { small: 5, medium: 6.5, large: NODE_R };
 const NODE_R_REFERENCE_SIDE = 420;
 const NODE_R_SCALE_MIN = 0.75;
 const NODE_R_SCALE_MAX = 1.35;
@@ -979,7 +980,7 @@ function ResourceGraph({
   showClusters,
   embedded = false,
   topRight,
-  nodeSize = "medium",
+  nodeSize,
   transparentNodes = false,
 }: {
   data: ProfileMatrixData;
@@ -991,7 +992,7 @@ function ResourceGraph({
   embedded?: boolean;
   /** Rendered beside the metric chips, top right (the explorer's view select). */
   topRight?: React.ReactNode;
-  /** Size of the resources; medium is the graph's usual size. */
+  /** Size of the resources; without one they keep the graph's usual size (NODE_R). */
   nodeSize?: ProfilingPointSize;
   /** See-through resources, so overlapping ones stay visible. */
   transparentNodes?: boolean;
@@ -1093,7 +1094,7 @@ function ResourceGraph({
   const tileScale = embedded
     ? Math.min(NODE_R_SCALE_MAX, Math.max(NODE_R_SCALE_MIN, Math.min(size.width, size.height) / NODE_R_REFERENCE_SIDE))
     : 1;
-  const nodeR  = (NODE_R_BY_SIZE[nodeSize] * tileScale) / effectiveScale;
+  const nodeR  = ((nodeSize ? NODE_R_BY_SIZE[nodeSize] : NODE_R) * tileScale) / effectiveScale;
   const badgeR = BADGE_R / effectiveScale;
 
   // Convert screen coords → SVG user coords using the current viewBox.
