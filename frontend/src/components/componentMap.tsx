@@ -49,6 +49,8 @@ import OcdfgSketch from './OcdfgSketch';
 import OcdfgSettingsBody from './OcdfgSettingsDialog';
 import OcpnSketch from './OcpnSketch';
 import OcpnSettingsBody from './OcpnSettingsDialog';
+import OccnSketch from './OccnSketch';
+import OccnSettingsBody from './OccnSettingsDialog';
 import ProcessAreaSettingsBody from './ProcessAreaSettingsDialog';
 import { ChartSettingsDialog } from './sql-widgets/chartSettings';
 import {
@@ -63,7 +65,6 @@ import OCPNVisualizer from '@/react_component/OCPNVisualizer';
 import { toast } from "sonner";
 import OCCNVisualizer from '@/react_component/OCCNVisualizer';
 import { Switch } from '@/components/ui/switch';
-import { Slider } from '@/components/ui/slider';
 import LogStatistics from './LogStatistics';
 import LogStatisticsSketch from './LogStatisticsSketch';
 import LogStatisticsSettingsDialog from './LogStatisticsSettingsDialog';
@@ -1613,6 +1614,9 @@ export const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
 };
 
 
+const OCCN_SKETCH_HINT =
+  "Layout preview: start and end per object type, activities striped in their object types' colors, colored arcs and the binding markers next to the activities, in the chosen direction. The net itself is discovered from the log; names are placeholders.";
+
 // OCCNComponent: Dashboard wrapper for the Object-Centric Causal Net (ELK layout)
 export const OCCNComponent: React.FC<ComponentProps> = ({
   node,
@@ -1627,6 +1631,7 @@ export const OCCNComponent: React.FC<ComponentProps> = ({
   const [showControls, setShowControls] = useState(node.show_controls ?? true);
   const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
   const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>(node.layout_direction ?? 'LR');
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
     setThreshold(node.relative_occurrence_threshold ?? 0);
@@ -1669,77 +1674,39 @@ export const OCCNComponent: React.FC<ComponentProps> = ({
   };
 
   if (isEditMode) {
-    // EDIT MODE: Show configuration controls
+    // EDIT MODE: the tile shows a draft of the net; the settings open in a popup.
     return (
-      <Card className="w-full h-full rounded-none overflow-y-auto">
-        <CardHeader>
-          <CardTitle>OCCN Settings</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            Object-Centric Causal Net (OCCN) with activity bindings and automatic ELK layout.
-          </p>
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label htmlFor="occn-threshold">Frequency Threshold</Label>
-              <span className="text-sm text-muted-foreground">{threshold.toFixed(2)}</span>
-            </div>
-            <Slider
-              id="occn-threshold"
-              min={0}
-              max={1}
-              step={0.05}
-              value={[threshold]}
-              onValueChange={handleThresholdChange}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="occn-object-types">Object Type Filter</Label>
-            <Input
-              id="occn-object-types"
-              value={objectTypes}
-              onChange={(e) => handleObjectTypesChange(e.target.value)}
-              placeholder="e.g. orders, items (empty = all types)"
-            />
-            <p className="text-xs text-muted-foreground">
-              Comma-separated object types to include; leave empty to use all.
-            </p>
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="occn-show-controls">Show Controls Panel</Label>
-            <Switch
-              id="occn-show-controls"
-              checked={showControls}
-              onCheckedChange={handleShowControlsChange}
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="occn-initial-locked">Lock Interactions Initially</Label>
-            <Switch
-              id="occn-initial-locked"
-              checked={initialInteractionLocked}
-              onCheckedChange={handleInitialInteractionLockedChange}
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label>Layout Direction</Label>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="w-[180px] justify-between font-normal">
-                  <span>{layoutDirection === 'TB' ? 'Top to Bottom' : 'Left to Right'}</span>
-                  <ChevronDown className="h-4 w-4 opacity-50" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-[180px]">
-                <DropdownMenuRadioGroup value={layoutDirection} onValueChange={handleLayoutDirectionChange}>
-                  <DropdownMenuRadioItem value="TB">Top to Bottom</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="LR">Left to Right</DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        </CardContent>
-      </Card>
+      <WidgetDraftTile
+        typeLabel="OC causal net"
+        hint={OCCN_SKETCH_HINT}
+        onConfigure={() => setSettingsOpen(true)}
+        sketch={
+          <OccnSketch
+            layoutDirection={layoutDirection}
+            showControls={showControls}
+            interactionLocked={initialInteractionLocked}
+            threshold={threshold}
+            className="h-full w-full"
+          />
+        }
+      >
+        <ChartSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+          <OccnSettingsBody
+            id={`occn-${node.component_id}`}
+            initial={{ threshold, objectTypes, showControls, initialInteractionLocked, layoutDirection }}
+            sketchHint={OCCN_SKETCH_HINT}
+            onApply={(next) => {
+              handleThresholdChange([next.threshold]);
+              handleObjectTypesChange(next.objectTypes);
+              handleShowControlsChange(next.showControls);
+              handleInitialInteractionLockedChange(next.initialInteractionLocked);
+              handleLayoutDirectionChange(next.layoutDirection);
+              setSettingsOpen(false);
+            }}
+            onCancel={() => setSettingsOpen(false)}
+          />
+        </ChartSettingsDialog>
+      </WidgetDraftTile>
     );
   }
 
