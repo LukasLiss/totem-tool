@@ -292,6 +292,7 @@ _PROFILE_FEATURE_GROUPS = FEATURE_GROUPS
 _PROFILE_CLUSTER_METHODS = CLUSTER_METHODS
 _PROFILE_DISTANCE_METRICS = DISTANCE_METRICS
 _PROFILE_VIEW_MODES = ("graph", "table")
+_PROFILE_POINT_SIZES = ("small", "medium", "large")
 
 
 class DashboardViewSet(viewsets.ModelViewSet):
@@ -797,6 +798,8 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     min_cluster_size=_bounded_int(item, 'min_cluster_size', 2, 2, 100000),
                     distance_metric=_choice_field(item, 'distance_metric', _PROFILE_DISTANCE_METRICS, 'euclidean'),
                     view_mode=_choice_field(item, 'view_mode', _PROFILE_VIEW_MODES, 'graph'),
+                    point_size=_choice_field(item, 'point_size', _PROFILE_POINT_SIZES, 'medium'),
+                    transparent_points=_validated_bool(item.get('transparent_points'), False),
                 )
 
         return Response({"status": "saved"})

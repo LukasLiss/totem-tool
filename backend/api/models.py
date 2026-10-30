@@ -568,3 +568,10 @@ class ResourceProfilingComponent(DashboardComponent):
         choices=[("graph", "Graph"), ("table", "Table")],
         default="graph",
     )
+    # Look of the resources in the graph (style settings of the dashboard widget).
+    point_size = models.CharField(
+        max_length=8,
+        choices=[("small", "Small"), ("medium", "Medium"), ("large", "Large")],
+        default="medium",
+    )
+    transparent_points = models.BooleanField(default=False)

@@ -101,6 +101,8 @@ export const PROFILING_DISTANCE_METRIC_LABELS: Record<ProfilingDistanceMetric, s
   hellinger: "Hellinger",
 };
 export const PROFILING_VIEW_MODES: ProfilingViewMode[] = ["graph", "table"];
+export type ProfilingPointSize = "small" | "medium" | "large";
+export const PROFILING_POINT_SIZES: ProfilingPointSize[] = ["small", "medium", "large"];
 
 export type ResourceProfilingSettings = {
   resourceTypes: string[];
@@ -114,6 +116,10 @@ export type ResourceProfilingSettings = {
   minClusterSize: number;
   distanceMetric: ProfilingDistanceMetric;
   viewMode: ProfilingViewMode;
+  /** Size of the resources in the graph; medium is the size they always had. */
+  pointSize: ProfilingPointSize;
+  /** See-through resources, so many at one position stay visible. */
+  transparentPoints: boolean;
 };
 
 export const DEFAULT_PROFILING_SETTINGS: ResourceProfilingSettings = {
@@ -127,6 +133,8 @@ export const DEFAULT_PROFILING_SETTINGS: ResourceProfilingSettings = {
   minClusterSize: 2,
   distanceMetric: "euclidean",
   viewMode: "graph",
+  pointSize: "medium",
+  transparentPoints: false,
 };
 
 // ---------------------------------------------------------------------------
@@ -208,6 +216,8 @@ export type ResourceProfilingWidgetFields = {
   min_cluster_size?: number;
   distance_metric?: ProfilingDistanceMetric;
   view_mode?: HandoverViewMode | ProfilingViewMode;
+  point_size?: ProfilingPointSize;
+  transparent_points?: boolean;
 };
 
 function featureGroupList(value: unknown): FeatureGroup[] {
@@ -229,6 +239,8 @@ export function profilingSettingsFromNode(node: ResourceProfilingWidgetFields): 
     minClusterSize: Math.max(2, Math.round(finiteNumber(node.min_cluster_size, d.minClusterSize))),
     distanceMetric: oneOf(node.distance_metric, PROFILING_DISTANCE_METRICS, d.distanceMetric),
     viewMode: oneOf(node.view_mode, PROFILING_VIEW_MODES, d.viewMode),
+    pointSize: oneOf(node.point_size, PROFILING_POINT_SIZES, d.pointSize),
+    transparentPoints: Boolean(node.transparent_points ?? d.transparentPoints),
   };
 }
 
@@ -244,5 +256,7 @@ export function profilingSettingsToNode(s: ResourceProfilingSettings): Partial<G
     min_cluster_size: s.minClusterSize,
     distance_metric: s.distanceMetric,
     view_mode: s.viewMode,
+    point_size: s.pointSize,
+    transparent_points: s.transparentPoints,
   };
 }

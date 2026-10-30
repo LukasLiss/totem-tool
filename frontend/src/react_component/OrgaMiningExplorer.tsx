@@ -11,6 +11,7 @@ import {
   type ProfilingClusterMethod,
   type ProfilingDistanceMetric,
   type ProfilingViewMode,
+  type ProfilingPointSize,
   type ResourceProfilingSettings,
 } from "@/react_component/orgamining/settings";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -91,6 +92,15 @@ function apiErrorMessage(e: unknown, fallback: string): string {
 }
 
 const NODE_R = 8;
+// Resource radius in screen px per point size (medium is NODE_R, the size the
+// graph always used). In a dashboard tile it also follows the tile a little:
+// scaled by the tile's shorter side against NODE_R_REFERENCE_SIDE, within limits.
+const NODE_R_BY_SIZE: Record<ProfilingPointSize, number> = { small: 5, medium: NODE_R, large: 11 };
+const NODE_R_REFERENCE_SIDE = 420;
+const NODE_R_SCALE_MIN = 0.75;
+const NODE_R_SCALE_MAX = 1.35;
+// Fill opacity of "transparent points": overlapping resources stay visible.
+const TRANSPARENT_NODE_OPACITY = 0.45;
 
 /**
  * The canvas the backend lays the MDS out on.
@@ -448,6 +458,8 @@ export default function OrgaMiningExplorer({
               showClusters={data.cluster_labels !== undefined}
               embedded
               topRight={viewSelect}
+              nodeSize={initial.pointSize}
+              transparentNodes={initial.transparentPoints}
             />
           );
         }}
@@ -906,15 +918,25 @@ function expandHull(hull: Pt[], pad: number): Pt[] {
 
 /* ── PieNode ────────────────────────────────────────────────── */
 
-function PieNode({ r, strokeWidth, typeCounts, colorMap }: {
+function PieNode({ r, strokeWidth, typeCounts, colorMap, opacity = 1 }: {
   r: number;
   strokeWidth: number;
   typeCounts: { objType: string; count: number }[];
   colorMap: Record<string, string>;
+  /** Fill opacity, below 1 for see-through resources. */
+  opacity?: number;
 }) {
   const total = typeCounts.reduce((s, t) => s + t.count, 0);
   if (typeCounts.length === 1) {
-    return <circle r={r} fill={colorMap[typeCounts[0].objType] ?? "#94a3b8"} stroke="white" strokeWidth={strokeWidth} />;
+    return (
+      <circle
+        r={r}
+        fill={colorMap[typeCounts[0].objType] ?? "#94a3b8"}
+        fillOpacity={opacity}
+        stroke="white"
+        strokeWidth={strokeWidth}
+      />
+    );
   }
   let angle = -Math.PI / 2;
   return (
@@ -923,7 +945,16 @@ function PieNode({ r, strokeWidth, typeCounts, colorMap }: {
         const sweep = (count / total) * 2 * Math.PI;
         const path = pieSlicePath(r, angle, angle + sweep);
         angle += sweep;
-        return <path key={objType} d={path} fill={colorMap[objType] ?? "#94a3b8"} stroke="white" strokeWidth={strokeWidth} />;
+        return (
+          <path
+            key={objType}
+            d={path}
+            fill={colorMap[objType] ?? "#94a3b8"}
+            fillOpacity={opacity}
+            stroke="white"
+            strokeWidth={strokeWidth}
+          />
+        );
       })}
     </>
   );
@@ -948,6 +979,8 @@ function ResourceGraph({
   showClusters,
   embedded = false,
   topRight,
+  nodeSize = "medium",
+  transparentNodes = false,
 }: {
   data: ProfileMatrixData;
   typeColorMap: Record<string, string>;
@@ -958,6 +991,10 @@ function ResourceGraph({
   embedded?: boolean;
   /** Rendered beside the metric chips, top right (the explorer's view select). */
   topRight?: React.ReactNode;
+  /** Size of the resources; medium is the graph's usual size. */
+  nodeSize?: ProfilingPointSize;
+  /** See-through resources, so overlapping ones stay visible. */
+  transparentNodes?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -1052,7 +1089,11 @@ function ResourceGraph({
   }, [zoomed, baseView, size.width, size.height]);
   // Because vb is always aspect-ratio-matched, both axes have the same scale factor.
   const effectiveScale = size.width / vb.w;
-  const nodeR  = NODE_R  / effectiveScale;
+  // In a dashboard tile the resources follow the tile's size a little.
+  const tileScale = embedded
+    ? Math.min(NODE_R_SCALE_MAX, Math.max(NODE_R_SCALE_MIN, Math.min(size.width, size.height) / NODE_R_REFERENCE_SIDE))
+    : 1;
+  const nodeR  = (NODE_R_BY_SIZE[nodeSize] * tileScale) / effectiveScale;
   const badgeR = BADGE_R / effectiveScale;
 
   // Convert screen coords → SVG user coords using the current viewBox.
@@ -1487,7 +1528,13 @@ function ResourceGraph({
                   const color = clusterColors[label % clusterColors.length];
                   return <circle r={r} fill="none" stroke={color} strokeWidth={sw} style={{ pointerEvents: "none" }} />;
                 })()}
-                <PieNode r={nodeR} strokeWidth={0.5 / effectiveScale} typeCounts={group.typeCounts} colorMap={typeColorMap} />
+                <PieNode
+                  r={nodeR}
+                  strokeWidth={0.5 / effectiveScale}
+                  typeCounts={group.typeCounts}
+                  colorMap={typeColorMap}
+                  opacity={transparentNodes ? TRANSPARENT_NODE_OPACITY : 1}
+                />
                 {count > 1 && (
                   <>
                     <circle r={badgeR} cx={nodeR} cy={-nodeR} fill="#1e293b" stroke="white" strokeWidth={0.5 / effectiveScale} />

@@ -40,7 +40,7 @@ const MIN_SIZES: Record<string, { minW: number; minH: number }> = {
   BarChartComponent: { minW: 3, minH: 3 },
   ScatterPlotComponent: { minW: 3, minH: 3 },
   OCHandoverComponent: { minW: 6, minH: 6 },
-  ResourceProfilingComponent: { minW: 6, minH: 6 },
+  ResourceProfilingComponent: { minW: 5, minH: 5 },
 };
 const DEFAULT_MIN_SIZE = { minW: 2, minH: 2 };
 
@@ -102,6 +102,34 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       instance.destroy(false);
     };
   }, []); // Empty dependency: run once on mount
+
+  // Widgets dragged in from the side panel don't go through addWidget with a
+  // minimum size (that only happens on load and when switching edit mode), so
+  // they could be resized below it until edit mode ended and then jumped up
+  // to it. Give a dropped widget its minimum right away.
+  useEffect(() => {
+    if (!grid) return;
+    const onDropped = (_event: Event, _previous: GridStackNode, node: GridStackNode) => {
+      if (!node?.el) return;
+      const min = getMinSize(node.component_name);
+      const minW = Math.min(min.minW, grid.getColumn());
+      const minH = min.minH;
+      try {
+        grid.update(node.el, {
+          minW,
+          minH,
+          w: Math.max(node.w ?? 1, minW),
+          h: Math.max(node.h ?? 1, minH),
+        });
+      } catch (err) {
+        console.warn(`Could not apply min size to ${node.component_name}`, err);
+      }
+    };
+    grid.on("dropped", onDropped);
+    return () => {
+      grid.off("dropped");
+    };
+  }, [grid]);
 
   // Separate effect for setting renderCB and updating grid static state when edit mode changes
   useEffect(() => {
@@ -438,6 +466,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           min_cluster_size: node.min_cluster_size ?? 2,
           distance_metric: node.distance_metric ?? 'euclidean',
           view_mode: node.view_mode ?? 'graph',
+          point_size: node.point_size ?? 'medium',
+          transparent_points: node.transparent_points ?? false,
         };
       } else {
         props = {
@@ -648,6 +678,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             n_clusters: item.n_clusters,
             min_cluster_size: item.min_cluster_size,
             distance_metric: item.distance_metric,
+            point_size: item.point_size,
+            transparent_points: item.transparent_points,
           });
           // After adding, ensure custom properties are on the node
           if (widgetEl) {
@@ -756,6 +788,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node.n_clusters = item.n_clusters;
               node.min_cluster_size = item.min_cluster_size;
               node.distance_metric = item.distance_metric;
+              node.point_size = item.point_size;
+              node.transparent_points = item.transparent_points;
             }
           }
           // Set data attribute for persistence

@@ -113,6 +113,8 @@ declare module 'gridstack' {
     n_clusters?: number;
     min_cluster_size?: number;
     distance_metric?: 'euclidean' | 'hellinger';
+    point_size?: 'small' | 'medium' | 'large';
+    transparent_points?: boolean;
     // ProcessAreaComponent
     algorithm?: 'mlpa' | 'advanced';
     w_temporal?: number;

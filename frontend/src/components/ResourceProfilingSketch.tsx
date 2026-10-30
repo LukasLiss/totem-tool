@@ -10,7 +10,11 @@
 
 import React from "react";
 import { cn } from "@/lib/utils";
-import { FEATURE_GROUPS, type FeatureGroup } from "@/react_component/orgamining/settings";
+import {
+  FEATURE_GROUPS,
+  type FeatureGroup,
+  type ProfilingPointSize,
+} from "@/react_component/orgamining/settings";
 
 const WIDTH = 300;
 const HEIGHT = 200;
@@ -25,7 +29,10 @@ const CLUSTERS: [number, number][][] = [
 ];
 // Position of each cluster's first point when counting all points in a row.
 const CLUSTER_OFFSETS = CLUSTERS.map((_, c) => CLUSTERS.slice(0, c).reduce((s, points) => s + points.length, 0));
-const POINT_RADIUS = 4;
+// Point radius per point size (medium as the draft always drew them), and the
+// fill opacity of "transparent points".
+const POINT_RADIUS: Record<ProfilingPointSize, number> = { small: 2.8, medium: 4, large: 5.4 };
+const TRANSPARENT_OPACITY = 0.45;
 // How far a cluster's outline keeps from its outermost points.
 const HULL_PADDING = 9;
 // The cluster whose profile the tooltip shows.
@@ -87,9 +94,20 @@ const ResourceProfilingSketch: React.FC<{
   computeClusters: boolean;
   /** Feature groups shown in the tooltip (clustering features and tooltip extras). */
   tooltipGroups: FeatureGroup[];
+  pointSize?: ProfilingPointSize;
+  /** See-through points, as with "Transparent points" in the graph. */
+  transparentPoints?: boolean;
   /** Sizing of the SVG; defaults to the full width, at most `max-w-sm`. */
   className?: string;
-}> = ({ resourceTypes, typeColors, computeClusters, tooltipGroups, className }) => {
+}> = ({
+  resourceTypes,
+  typeColors,
+  computeClusters,
+  tooltipGroups,
+  pointSize = "medium",
+  transparentPoints = false,
+  className,
+}) => {
   const typeColor = (cluster: number, point: number) => {
     if (resourceTypes.length === 0) return INK;
     // The types take turns over all points of all clusters, so every selected
@@ -211,9 +229,9 @@ const ResourceProfilingSketch: React.FC<{
             key={`${c}-${i}`}
             cx={x}
             cy={yy}
-            r={POINT_RADIUS}
+            r={POINT_RADIUS[pointSize]}
             fill={typeColor(c, i)}
-            fillOpacity={resourceTypes.length ? 1 : 0.55}
+            fillOpacity={transparentPoints ? TRANSPARENT_OPACITY : resourceTypes.length ? 1 : 0.55}
             stroke={computeClusters ? CLUSTER_COLORS[c] : "var(--background)"}
             strokeWidth={1.2}
           />

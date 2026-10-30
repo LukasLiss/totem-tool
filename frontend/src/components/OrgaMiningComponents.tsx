@@ -53,7 +53,12 @@ import {
 } from "@/react_component/orgamining/settings";
 import { MultiSelectPopover } from "@/react_component/variants/MultiSelectPopover";
 import { fetchObjectTypes } from "@/react_component/variants/variantsApi";
-import { ChartSettingsDialog, ChartSettingsLayout } from "@/components/sql-widgets/chartSettings";
+import {
+  ChartSettingsDialog,
+  ChartSettingsLayout,
+  type ChartSettingsTab,
+} from "@/components/sql-widgets/chartSettings";
+import { SegmentedControl } from "@/components/sql-widgets/shared";
 import { mapTypesToColors } from "@/utils/objectColors";
 
 import type { ComponentProps } from "./componentMap";
@@ -166,6 +171,12 @@ function WidgetTitle({ title, filterEnabled, onToggle }: {
 }
 
 const VIEW_MODE_LABELS = { graph: "Graph", table: "Table", log: "Event log" } as const;
+
+const POINT_SIZE_OPTIONS = [
+  { value: "small", label: "Small" },
+  { value: "medium", label: "Medium" },
+  { value: "large", label: "Large" },
+] as const;
 
 // ---------------------------------------------------------------------------
 // Handover of work
@@ -397,6 +408,7 @@ function ResourceProfilingSettingsBody({ id, initial, initialAutomaticLoading, t
 }) {
   const [settings, setSettings] = useState(initial);
   const [automaticLoading, setAutomaticLoading] = useState(initialAutomaticLoading);
+  const [tab, setTab] = useState<ChartSettingsTab>("data");
   const update = (patch: Partial<ResourceProfilingSettings>) => setSettings((s) => ({ ...s, ...patch }));
 
   // Tooltip-only groups are computed too, so they need business objects as well.
@@ -427,7 +439,9 @@ function ResourceProfilingSettingsBody({ id, initial, initialAutomaticLoading, t
       idPrefix={id}
       onApply={() => onApply(settings, automaticLoading)}
       onCancel={onCancel}
-      styleTab={
+      tab={tab}
+      onTabChange={setTab}
+      dataTab={
         <div className="space-y-4 text-left">
           <p className="text-sm text-muted-foreground">
             Profiles every resource by what it does, when, and with whom; similar resources form organizational units.
@@ -576,12 +590,37 @@ function ResourceProfilingSettingsBody({ id, initial, initialAutomaticLoading, t
         </SettingRow>
         </div>
       }
+      styleTab={
+        <div className="space-y-3 text-left">
+          <SettingRow label="Point size" hint="Medium is the usual size; in the dashboard the points also follow the tile's size a little.">
+            <SegmentedControl
+              ariaLabel="Point size"
+              value={settings.pointSize}
+              options={POINT_SIZE_OPTIONS}
+              onChange={(pointSize) => update({ pointSize })}
+            />
+          </SettingRow>
+          <SettingRow
+            label="Transparent points"
+            htmlFor={`${id}-transparent`}
+            hint="See-through resources, so many at one position stay visible."
+          >
+            <Switch
+              id={`${id}-transparent`}
+              checked={settings.transparentPoints}
+              onCheckedChange={(transparentPoints) => update({ transparentPoints })}
+            />
+          </SettingRow>
+        </div>
+      }
       sketch={
         <ResourceProfilingSketch
           resourceTypes={settings.resourceTypes}
           typeColors={mapTypesToColors(types)}
           computeClusters={settings.computeClusters}
           tooltipGroups={[...settings.featureGroups, ...settings.tooltipFeatureGroups]}
+          pointSize={settings.pointSize}
+          transparentPoints={settings.transparentPoints}
           className="w-full max-w-xs md:max-w-md"
         />
       }
@@ -632,6 +671,8 @@ export const ResourceProfilingComponent: React.FC<ComponentProps> = ({
             typeColors={typeColors}
             computeClusters={settings.computeClusters}
             tooltipGroups={[...settings.featureGroups, ...settings.tooltipFeatureGroups]}
+            pointSize={settings.pointSize}
+            transparentPoints={settings.transparentPoints}
             className="h-full w-full"
           />
         }
