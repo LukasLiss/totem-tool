@@ -10,7 +10,7 @@
 import React from "react";
 import { cn } from "@/lib/utils";
 
-const WIDTH = 380;
+const WIDTH = 336;
 const HEIGHT = 200;
 const INK = "var(--muted-foreground)";
 // Space between an arrow's tip and the node it points at.
@@ -27,15 +27,16 @@ const LEGEND_MAX_CHARS = 12;
 // right; the first column starts below the legend.
 const NODES: [number, number][] = [
   [30, 96], [34, 166],
-  [104, 34], [100, 122],
-  [170, 72], [176, 160],
-  [236, 28], [246, 112],
-  [300, 66], [304, 166],
-  [354, 112], [356, 36],
+  [93, 34], [89, 122],
+  [150, 72], [155, 160],
+  [205, 28], [213, 112],
+  [260, 66], [263, 166],
+  [305, 112], [307, 36],
 ];
 // Handovers as [from, to, width]; from === to is a resource handing work to itself.
+// (The top node of the second column is fed from below, so no arrow cuts the legend's corner.)
 const EDGES: [number, number, number][] = [
-  [0, 2, 1.4], [0, 3, 3], [0, 0, 2.4],
+  [3, 2, 1.4], [0, 3, 3], [0, 0, 2.4],
   [1, 3, 2], [1, 5, 1.2], [1, 1, 2],
   [2, 4, 2.4], [2, 6, 1.2],
   [3, 4, 3.2], [3, 5, 1.4],

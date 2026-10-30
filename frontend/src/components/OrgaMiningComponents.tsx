@@ -403,6 +403,8 @@ export const OCHandoverComponent: React.FC<ComponentProps> = ({
     return (
       <WidgetDraftTile
         typeLabel="Handover of work"
+        // A wide graph with small details; let it use more of a wide tile than the other drafts.
+        sketchMaxWidth="max-w-2xl"
         hint={HANDOVER_SKETCH_HINT}
         notice={settings.resourceTypes.length ? undefined : "No resource types selected yet."}
         onConfigure={() => setSettingsOpen(true)}
@@ -728,6 +730,8 @@ export const ResourceProfilingComponent: React.FC<ComponentProps> = ({
     return (
       <WidgetDraftTile
         typeLabel="Resource profiling"
+        // Clusters and a detailed tooltip; let it use more of a wide tile than the other drafts.
+        sketchMaxWidth="max-w-2xl"
         hint="Layout preview: resources in the colors of the selected resource types, grouped into clusters, and a cluster tooltip with the selected feature groups. Grey bars stand in for the values."
         notice={settings.resourceTypes.length ? undefined : "No resource types selected yet."}
         onConfigure={() => setSettingsOpen(true)}

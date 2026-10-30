@@ -39,8 +39,8 @@ const MIN_SIZES: Record<string, { minW: number; minH: number }> = {
   KpiComponent: { minW: 2, minH: 2 },
   BarChartComponent: { minW: 3, minH: 3 },
   ScatterPlotComponent: { minW: 3, minH: 3 },
-  OCHandoverComponent: { minW: 6, minH: 6 },
-  ResourceProfilingComponent: { minW: 5, minH: 5 },
+  OCHandoverComponent: { minW: 4, minH: 4 },
+  ResourceProfilingComponent: { minW: 4, minH: 4 },
 };
 const DEFAULT_MIN_SIZE = { minW: 2, minH: 2 };
 

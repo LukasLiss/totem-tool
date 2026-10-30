@@ -232,8 +232,6 @@ const ResourceProfilingSketch: React.FC<{
             r={POINT_RADIUS[pointSize]}
             fill={typeColor(c, i)}
             fillOpacity={transparentPoints ? TRANSPARENT_OPACITY : resourceTypes.length ? 1 : 0.55}
-            stroke={computeClusters ? CLUSTER_COLORS[c] : "var(--background)"}
-            strokeWidth={1.2}
           />
         ))
       )}
