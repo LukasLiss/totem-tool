@@ -1,27 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import axios from "axios";
-import { useFilterVersion } from "@/store/filterStore";
-import { isCancelledError } from "@/store/computationStore";
+import React from 'react';
 import ComputationStatus from "@/components/ComputationStatus";
-
-// Helper function to format duration from seconds
-const formatDuration = (seconds: number): string => {
-  const days = Math.floor(seconds / 86400);
-  const hours = Math.floor((seconds % 86400) / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-
-  const parts: string[] = [];
-  if (days > 0) parts.push(`${days}d`);
-  if (hours > 0) parts.push(`${hours}h`);
-  if (minutes > 0 || parts.length === 0) parts.push(`${minutes}m`);
-  return parts.join(' ');
-};
-
-// Helper function to format unix timestamp as date string
-const formatTimestamp = (unix: number): string => {
-  const date = new Date(unix * 1000);
-  return date.toLocaleDateString();
-};
+import { LOG_STATISTICS, useLogStatistics, type LogStatisticKey } from "./logStatisticsUtils";
 
 interface LogStatisticsProps {
   fileId: number | undefined;
@@ -35,15 +14,6 @@ interface LogStatisticsProps {
   className?: string;
 }
 
-interface Statistics {
-  num_events: number;
-  num_unique_activities: number;
-  num_objects: number;
-  num_object_types: number;
-  earliest_timestamp: number;
-  newest_timestamp: number;
-}
-
 const LogStatistics: React.FC<LogStatisticsProps> = ({
   fileId,
   showNumEvents = true,
@@ -55,37 +25,17 @@ const LogStatistics: React.FC<LogStatisticsProps> = ({
   showDuration = false,
   className = '',
 }) => {
-  // State for fetched statistics
-  const [stats, setStats] = useState<Statistics | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { stats, loading, error } = useLogStatistics(fileId);
 
-  const filterVersion = useFilterVersion();
-
-  useEffect(() => {
-    if (!fileId) {
-      setStats(null);
-      return;
-    }
-
-    const controller = new AbortController();
-    const fetchStats = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const { data } = await axios.get(`/api/files/${fileId}/statistics/`, { signal: controller.signal });
-        setStats(data);
-      } catch (err) {
-        if (controller.signal.aborted) return;
-        setError(isCancelledError(err) ? 'Computation cancelled' : 'Failed to load statistics');
-      } finally {
-        if (!controller.signal.aborted) setLoading(false);
-      }
-    };
-    fetchStats();
-    // Leaving the page or changing the filter stops the running computation.
-    return () => controller.abort();
-  }, [fileId, filterVersion]);
+  const shown: Record<LogStatisticKey, boolean> = {
+    show_num_events: showNumEvents,
+    show_num_activities: showNumActivities,
+    show_num_objects: showNumObjects,
+    show_num_object_types: showNumObjectTypes,
+    show_earliest_timestamp: showEarliestTimestamp,
+    show_newest_timestamp: showNewestTimestamp,
+    show_duration: showDuration,
+  };
 
   // Loading state
   if (loading) {
@@ -109,52 +59,14 @@ const LogStatistics: React.FC<LogStatisticsProps> = ({
     );
   }
 
-  const duration = stats.newest_timestamp - stats.earliest_timestamp;
-
   return (
     <div className={`flex flex-wrap gap-2 p-2 items-center justify-center bg-background ${className}`}>
-      {showNumEvents && (
-        <div className="flex-1 min-w-[80px] bg-card border rounded-lg shadow-sm px-3 py-2 overflow-hidden">
-          <p className="text-xs text-muted-foreground truncate">Events</p>
-          <p className="text-lg font-bold truncate">{stats.num_events.toLocaleString()}</p>
+      {LOG_STATISTICS.filter((stat) => shown[stat.key]).map((stat) => (
+        <div key={stat.key} className="flex-1 min-w-[80px] bg-card border rounded-lg shadow-sm px-3 py-2 overflow-hidden">
+          <p className="text-xs text-muted-foreground truncate">{stat.label}</p>
+          <p className="text-lg font-bold truncate">{stat.format(stats)}</p>
         </div>
-      )}
-      {showNumActivities && (
-        <div className="flex-1 min-w-[80px] bg-card border rounded-lg shadow-sm px-3 py-2 overflow-hidden">
-          <p className="text-xs text-muted-foreground truncate">Activities</p>
-          <p className="text-lg font-bold truncate">{stats.num_unique_activities.toLocaleString()}</p>
-        </div>
-      )}
-      {showNumObjects && (
-        <div className="flex-1 min-w-[80px] bg-card border rounded-lg shadow-sm px-3 py-2 overflow-hidden">
-          <p className="text-xs text-muted-foreground truncate">Objects</p>
-          <p className="text-lg font-bold truncate">{stats.num_objects.toLocaleString()}</p>
-        </div>
-      )}
-      {showNumObjectTypes && (
-        <div className="flex-1 min-w-[80px] bg-card border rounded-lg shadow-sm px-3 py-2 overflow-hidden">
-          <p className="text-xs text-muted-foreground truncate">Object Types</p>
-          <p className="text-lg font-bold truncate">{stats.num_object_types.toLocaleString()}</p>
-        </div>
-      )}
-      {showEarliestTimestamp && (
-        <div className="flex-1 min-w-[80px] bg-card border rounded-lg shadow-sm px-3 py-2 overflow-hidden">
-          <p className="text-xs text-muted-foreground truncate">Earliest</p>
-          <p className="text-lg font-bold truncate">{formatTimestamp(stats.earliest_timestamp)}</p>
-        </div>
-      )}
-      {showNewestTimestamp && (
-        <div className="flex-1 min-w-[80px] bg-card border rounded-lg shadow-sm px-3 py-2 overflow-hidden">
-          <p className="text-xs text-muted-foreground truncate">Newest</p>
-          <p className="text-lg font-bold truncate">{formatTimestamp(stats.newest_timestamp)}</p>
-        </div>
-      )}
-      {showDuration && (
-        <div className="flex-1 min-w-[80px] bg-card border rounded-lg shadow-sm px-3 py-2 overflow-hidden">
-          <p className="text-xs text-muted-foreground truncate">Duration</p>
-          <p className="text-lg font-bold truncate">{formatDuration(duration)}</p>
-        </div>
-      )}
+      ))}
     </div>
   );
 };

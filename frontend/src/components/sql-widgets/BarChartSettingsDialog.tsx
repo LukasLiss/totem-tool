@@ -95,10 +95,23 @@ function SettingsBody({ widgetId, initial, onApply, onCancel, fileId, projectId 
           onQueryChange={(q) => set("query", q)}
           linked={draft.linked}
           onLinkChange={(l) => set("linked", l)}
-          labelColumn={draft.labelColumn}
-          onLabelColumnChange={(v) => set("labelColumn", v)}
-          valueColumn={draft.valueColumn}
-          onValueColumnChange={(v) => set("valueColumn", v)}
+          // Both optional: the bar chart falls back to these columns on its own.
+          columnFields={[
+            {
+              key: "label",
+              label: "Label column",
+              value: draft.labelColumn,
+              onChange: (v) => set("labelColumn", v),
+              autoLabel: "Automatic (first other column)",
+            },
+            {
+              key: "value",
+              label: "Value column",
+              value: draft.valueColumn,
+              onChange: (v) => set("valueColumn", v),
+              autoLabel: "Automatic (first numeric column)",
+            },
+          ]}
           fileId={fileId}
           projectId={projectId}
           expectedResult={BAR_CHART_EXPECTED_RESULT}

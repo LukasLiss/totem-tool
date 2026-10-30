@@ -34,8 +34,15 @@ export interface SqlQueryEditorDialogProps {
   expectedResult?: ExpectedResult | null;
   title?: string;
   description?: string;
-  /** called with the edited query (and link) when the user applies */
-  onApply: (query: string, linkedQuery: LinkedQuery | null) => void;
+  /**
+   * called with the edited query (and link) when the user applies, plus the
+   * last test run's result when it was run with exactly that query
+   */
+  onApply: (
+    query: string,
+    linkedQuery: LinkedQuery | null,
+    result?: { columns: string[]; rows: Record<string, unknown>[] }
+  ) => void;
 }
 
 export function SqlQueryEditorDialog({
@@ -53,11 +60,17 @@ export function SqlQueryEditorDialog({
   const [draft, setDraft] = useState(query || SQL_QUERY_DEFAULT);
   const [draftLink, setDraftLink] = useState<LinkedQuery | null>(linkedQuery);
   const [rowLimit, setRowLimit] = useState(25);
+  const [lastRun, setLastRun] = useState<{
+    query: string;
+    columns: string[];
+    rows: Record<string, unknown>[];
+  } | null>(null);
 
   useEffect(() => {
     if (open) {
       setDraft(query || SQL_QUERY_DEFAULT);
       setDraftLink(linkedQuery ?? null);
+      setLastRun(null);
     }
   }, [open, query, linkedQuery]);
 
@@ -81,6 +94,7 @@ export function SqlQueryEditorDialog({
             expectedResult={expectedResult}
             linkedQuery={draftLink}
             onLinkChange={setDraftLink}
+            onResult={setLastRun}
             hideName
             className="rounded-md"
           />
@@ -103,7 +117,8 @@ export function SqlQueryEditorDialog({
                   toast.error("Could not update stored query asset");
                 }
               }
-              onApply(draft, draftLink);
+              // Hand over the last run's result only if it belongs to the applied query.
+              onApply(draft, draftLink, lastRun?.query === draft ? lastRun : undefined);
               onOpenChange(false);
             }}
           >

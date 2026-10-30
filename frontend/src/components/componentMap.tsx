@@ -58,6 +58,10 @@ import OCCNVisualizer from '@/react_component/OCCNVisualizer';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import LogStatistics from './LogStatistics';
+import LogStatisticsSketch from './LogStatisticsSketch';
+import LogStatisticsSettingsDialog from './LogStatisticsSettingsDialog';
+import { selectionFromNode, type LogStatisticsSelection } from './logStatisticsUtils';
+import WidgetDraftTile from './WidgetDraftTile';
 import { Label } from '@/components/ui/label';
 import {
   DropdownMenu,
@@ -1280,102 +1284,46 @@ export const TotemMinerComponent: React.FC<ComponentProps> = ({
 };
 
 
-// LogStatisticsComponent: Dashboard wrapper for LogStatistics with edit mode
+// LogStatisticsComponent: Dashboard wrapper for LogStatistics. In edit mode
+// the tile shows a draft of the cards and the settings open in a popup.
 export const LogStatisticsComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
   selectedFile
 }) => {
-  // Local state for toggle values (synced with node for edit mode)
-  const [showNumEvents, setShowNumEvents] = useState(node.show_num_events ?? true);
-  const [showNumActivities, setShowNumActivities] = useState(node.show_num_activities ?? true);
-  const [showNumObjects, setShowNumObjects] = useState(node.show_num_objects ?? true);
-  const [showNumObjectTypes, setShowNumObjectTypes] = useState(node.show_num_object_types ?? true);
-  const [showEarliestTimestamp, setShowEarliestTimestamp] = useState(node.show_earliest_timestamp ?? false);
-  const [showNewestTimestamp, setShowNewestTimestamp] = useState(node.show_newest_timestamp ?? false);
-  const [showDuration, setShowDuration] = useState(node.show_duration ?? false);
+  const [selection, setSelection] = useState<LogStatisticsSelection>(() => selectionFromNode(node));
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Sync with node when it changes
   useEffect(() => {
-    setShowNumEvents(node.show_num_events ?? true);
-    setShowNumActivities(node.show_num_activities ?? true);
-    setShowNumObjects(node.show_num_objects ?? true);
-    setShowNumObjectTypes(node.show_num_object_types ?? true);
-    setShowEarliestTimestamp(node.show_earliest_timestamp ?? false);
-    setShowNewestTimestamp(node.show_newest_timestamp ?? false);
-    setShowDuration(node.show_duration ?? false);
+    setSelection(selectionFromNode(node));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only the selection fields matter
   }, [node.show_num_events, node.show_num_activities, node.show_num_objects, node.show_num_object_types, node.show_earliest_timestamp, node.show_newest_timestamp, node.show_duration]);
 
-  // Handlers for toggle changes
-  const handleShowNumEventsChange = (checked: boolean) => {
-    setShowNumEvents(checked);
-    onUpdate?.({ show_num_events: checked });
-  };
-  const handleShowNumActivitiesChange = (checked: boolean) => {
-    setShowNumActivities(checked);
-    onUpdate?.({ show_num_activities: checked });
-  };
-  const handleShowNumObjectsChange = (checked: boolean) => {
-    setShowNumObjects(checked);
-    onUpdate?.({ show_num_objects: checked });
-  };
-  const handleShowNumObjectTypesChange = (checked: boolean) => {
-    setShowNumObjectTypes(checked);
-    onUpdate?.({ show_num_object_types: checked });
-  };
-  const handleShowEarliestTimestampChange = (checked: boolean) => {
-    setShowEarliestTimestamp(checked);
-    onUpdate?.({ show_earliest_timestamp: checked });
-  };
-  const handleShowNewestTimestampChange = (checked: boolean) => {
-    setShowNewestTimestamp(checked);
-    onUpdate?.({ show_newest_timestamp: checked });
-  };
-  const handleShowDurationChange = (checked: boolean) => {
-    setShowDuration(checked);
-    onUpdate?.({ show_duration: checked });
+  const applySelection = (next: LogStatisticsSelection) => {
+    setSelection(next);
+    onUpdate?.(next);
   };
 
   if (isEditMode) {
-    // EDIT MODE: Configuration form with toggles
     return (
-      <Card className="w-full h-full rounded-none overflow-auto">
-        <CardHeader>
-          <CardTitle>Log Statistics Settings</CardTitle>
-          <CardDescription>Select which statistics to display</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex items-center justify-between">
-            <Label htmlFor="show-events">Number of Events</Label>
-            <Switch id="show-events" checked={showNumEvents} onCheckedChange={handleShowNumEventsChange} />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="show-activities">Number of Activities</Label>
-            <Switch id="show-activities" checked={showNumActivities} onCheckedChange={handleShowNumActivitiesChange} />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="show-objects">Number of Objects</Label>
-            <Switch id="show-objects" checked={showNumObjects} onCheckedChange={handleShowNumObjectsChange} />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="show-object-types">Number of Object Types</Label>
-            <Switch id="show-object-types" checked={showNumObjectTypes} onCheckedChange={handleShowNumObjectTypesChange} />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="show-earliest">Earliest Timestamp</Label>
-            <Switch id="show-earliest" checked={showEarliestTimestamp} onCheckedChange={handleShowEarliestTimestampChange} />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="show-newest">Newest Timestamp</Label>
-            <Switch id="show-newest" checked={showNewestTimestamp} onCheckedChange={handleShowNewestTimestampChange} />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="show-duration">Duration</Label>
-            <Switch id="show-duration" checked={showDuration} onCheckedChange={handleShowDurationChange} />
-          </div>
-        </CardContent>
-      </Card>
+      <WidgetDraftTile
+        typeLabel="Log statistics"
+        // A row of cards is wide; let it use more of a wide tile than the other drafts.
+        sketchMaxWidth="max-w-3xl"
+        hint="Layout preview: one card per selected statistic. Grey bars stand in for the values; the real statistics are shown when you leave edit mode."
+        onConfigure={() => setSettingsOpen(true)}
+        sketch={<LogStatisticsSketch selection={selection} className="h-full w-full" />}
+      >
+        <LogStatisticsSettingsDialog
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          widgetId={node.component_id}
+          selection={selection}
+          onApply={applySelection}
+        />
+      </WidgetDraftTile>
     );
   }
 
@@ -1383,13 +1331,13 @@ export const LogStatisticsComponent: React.FC<ComponentProps> = ({
   return (
     <LogStatistics
       fileId={selectedFile?.id}
-      showNumEvents={showNumEvents}
-      showNumActivities={showNumActivities}
-      showNumObjects={showNumObjects}
-      showNumObjectTypes={showNumObjectTypes}
-      showEarliestTimestamp={showEarliestTimestamp}
-      showNewestTimestamp={showNewestTimestamp}
-      showDuration={showDuration}
+      showNumEvents={selection.show_num_events}
+      showNumActivities={selection.show_num_activities}
+      showNumObjects={selection.show_num_objects}
+      showNumObjectTypes={selection.show_num_object_types}
+      showEarliestTimestamp={selection.show_earliest_timestamp}
+      showNewestTimestamp={selection.show_newest_timestamp}
+      showDuration={selection.show_duration}
       className="w-full h-full"
     />
   );

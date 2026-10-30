@@ -76,6 +76,8 @@ export function QuerySection({
         expectedResult={expectedResult}
         editorTitle={editorTitle}
         grow={growQuery}
+        // A result run in the SQL editor fills in the columns without querying again.
+        onRunResult={(result, q, link) => discovery.accept(result, q, link?.id)}
       />
       {expectedResult.description && (
         <p className="text-xs text-muted-foreground">{expectedResult.description}</p>

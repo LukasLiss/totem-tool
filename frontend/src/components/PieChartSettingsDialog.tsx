@@ -117,10 +117,10 @@ function SettingsBody({ widgetId, initial, onApply, onCancel, fileId, projectId 
           onQueryChange={(q) => set("query", q)}
           linked={draft.linked}
           onLinkChange={(l) => set("linked", l)}
-          labelColumn={draft.labelColumn}
-          onLabelColumnChange={(v) => set("labelColumn", v)}
-          valueColumn={draft.valueColumn}
-          onValueColumnChange={(v) => set("valueColumn", v)}
+          columnFields={[
+            { key: "label", label: "Label column", value: draft.labelColumn, onChange: (v) => set("labelColumn", v) },
+            { key: "value", label: "Value column", value: draft.valueColumn, onChange: (v) => set("valueColumn", v) },
+          ]}
           fileId={fileId}
           projectId={projectId}
           expectedResult={PIE_CHART_EXPECTED_RESULT}

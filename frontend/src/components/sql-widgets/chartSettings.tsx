@@ -68,7 +68,9 @@ export function ChartSettingsDialog({ open, onOpenChange, children }: {
 
 /**
  * Header, title field, Data / Style tabs on the left, the sketch on the
- * right (above on narrow screens), Cancel / Apply below.
+ * right (above on narrow screens), Cancel / Apply below. Widgets without a
+ * title or without data leave out `onTitleChange` or `dataTab`; without a
+ * Data tab the tab bar is left out and the style settings show directly.
  */
 export function ChartSettingsLayout({
   heading,
@@ -80,19 +82,22 @@ export function ChartSettingsLayout({
   dataTab,
   styleTab,
   sketch,
+  sketchHint = CHART_SKETCH_HINT,
   onApply,
   onCancel,
 }: {
   heading: string;
   /** Prefix for element ids, unique per widget. */
   idPrefix: string;
-  title: string;
-  onTitleChange: (title: string) => void;
-  tab: ChartSettingsTab;
-  onTabChange: (tab: ChartSettingsTab) => void;
-  dataTab: React.ReactNode;
+  title?: string;
+  onTitleChange?: (title: string) => void;
+  tab?: ChartSettingsTab;
+  onTabChange?: (tab: ChartSettingsTab) => void;
+  dataTab?: React.ReactNode;
   styleTab: React.ReactNode;
   sketch: React.ReactNode;
+  /** Caption below the sketch; defaults to the chart explanation. */
+  sketchHint?: string;
   onApply: () => void;
   onCancel: () => void;
 }) {
@@ -100,58 +105,66 @@ export function ChartSettingsLayout({
     <>
       <DialogHeader className="border-b px-6 pt-6 pb-4">
         <DialogTitle>{heading}</DialogTitle>
-        <DialogDescription>Choose the data and how the chart is displayed.</DialogDescription>
+        <DialogDescription>Choose the data and how it is displayed.</DialogDescription>
       </DialogHeader>
 
       <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] md:grid-cols-[minmax(0,1fr)_420px] md:grid-rows-1">
         {/* A column of fixed-size parts; in the Data tab only the query box may shrink. */}
         <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-6 py-4">
-          <div className="grid shrink-0 gap-1.5">
-            <Label htmlFor={`${idPrefix}-title`}>Title</Label>
-            <Input
-              id={`${idPrefix}-title`}
-              value={title}
-              onChange={(e) => onTitleChange(e.target.value)}
-              placeholder="Chart title"
-            />
-          </div>
-
-          <div role="tablist" className="flex shrink-0 gap-5 border-b">
-            {([["data", "Data"], ["style", "Style"]] as const).map(([value, text]) => (
-              <button
-                key={value}
-                type="button"
-                role="tab"
-                aria-selected={tab === value}
-                onClick={() => onTabChange(value)}
-                className={cn(
-                  "-mb-px border-b-2 px-0.5 pb-2 text-sm font-medium transition-colors",
-                  tab === value
-                    ? "border-foreground text-foreground"
-                    : "border-transparent text-muted-foreground hover:text-foreground"
-                )}
-              >
-                {text}
-              </button>
-            ))}
-          </div>
-
-          {tab === "data" && (
-            <div className="flex min-h-0 flex-1 flex-col gap-4" role="tabpanel">
-              {dataTab}
+          {onTitleChange && (
+            <div className="grid shrink-0 gap-1.5">
+              <Label htmlFor={`${idPrefix}-title`}>Title</Label>
+              <Input
+                id={`${idPrefix}-title`}
+                value={title ?? ""}
+                onChange={(e) => onTitleChange(e.target.value)}
+                placeholder="Chart title"
+              />
             </div>
           )}
-          {tab === "style" && (
-            <div className="shrink-0 space-y-2" role="tabpanel">
-              {styleTab}
-            </div>
+
+          {dataTab ? (
+            <>
+              <div role="tablist" className="flex shrink-0 gap-5 border-b">
+                {([["data", "Data"], ["style", "Style"]] as const).map(([value, text]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    role="tab"
+                    aria-selected={tab === value}
+                    onClick={() => onTabChange?.(value)}
+                    className={cn(
+                      "-mb-px border-b-2 px-0.5 pb-2 text-sm font-medium transition-colors",
+                      tab === value
+                        ? "border-foreground text-foreground"
+                        : "border-transparent text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    {text}
+                  </button>
+                ))}
+              </div>
+
+              {tab === "data" && (
+                <div className="flex min-h-0 flex-1 flex-col gap-4" role="tabpanel">
+                  {dataTab}
+                </div>
+              )}
+              {tab === "style" && (
+                <div className="shrink-0 space-y-2" role="tabpanel">
+                  {styleTab}
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="shrink-0 space-y-2">{styleTab}</div>
           )}
         </div>
 
         {/* The sketch stays visible whichever tab is open; above the settings on narrow screens. */}
         <div className="order-first flex flex-col items-center justify-center gap-3 border-b bg-muted/30 p-4 md:order-none md:border-b-0 md:border-l md:p-6">
           {sketch}
-          <p className="max-w-xs text-center text-xs text-muted-foreground">{CHART_SKETCH_HINT}</p>
+          <p className="max-w-xs text-center text-xs text-muted-foreground">{sketchHint}</p>
         </div>
       </div>
 
@@ -169,14 +182,23 @@ export function ChartSettingsLayout({
 /* Data tab                                                            */
 /* ------------------------------------------------------------------ */
 
-/** Column picker: a dropdown once the query's columns are known, a text field before. */
-function ColumnSelect({ id, label, value, onChange, columns, loading }: {
+// Select items can't have an empty value, so "automatic" (an empty column) gets this one.
+const AUTO_COLUMN = "__auto__";
+
+/**
+ * Column picker: a dropdown once the query's columns are known, a text field
+ * before. With `autoLabel` the column is optional: the dropdown starts with
+ * that choice (e.g. "Automatic (first numeric column)"), which stands for
+ * an empty column name.
+ */
+function ColumnSelect({ id, label, value, onChange, columns, loading, autoLabel }: {
   id: string;
   label: string;
   value: string;
   onChange: (value: string) => void;
   columns: string[];
   loading: boolean;
+  autoLabel?: string;
 }) {
   if (columns.length === 0) {
     return (
@@ -186,7 +208,7 @@ function ColumnSelect({ id, label, value, onChange, columns, loading }: {
         value={value}
         onChange={onChange}
         columns={[]}
-        placeholder="column name"
+        placeholder={autoLabel ?? "column name"}
         hint={loading ? "Detecting columns…" : undefined}
       />
     );
@@ -196,11 +218,19 @@ function ColumnSelect({ id, label, value, onChange, columns, loading }: {
   return (
     <div className="grid gap-1.5">
       <Label htmlFor={id}>{label}</Label>
-      <Select value={value || undefined} onValueChange={onChange}>
+      <Select
+        value={value || (autoLabel ? AUTO_COLUMN : undefined)}
+        onValueChange={(v) => onChange(v === AUTO_COLUMN ? "" : v)}
+      >
         <SelectTrigger id={id} className="w-full font-mono text-xs">
           <SelectValue placeholder="Choose a column" />
         </SelectTrigger>
         <SelectContent>
+          {autoLabel && (
+            <SelectItem value={AUTO_COLUMN} className="text-xs">
+              {autoLabel}
+            </SelectItem>
+          )}
           {options.map((column) => (
             <SelectItem key={column} value={column} className="font-mono text-xs">
               {column}
@@ -212,7 +242,17 @@ function ColumnSelect({ id, label, value, onChange, columns, loading }: {
   );
 }
 
-/** The growing query field and the label / value column pickers. */
+export interface ColumnField {
+  /** Part of the element id, e.g. "label". */
+  key: string;
+  label: string;
+  value: string;
+  onChange: (column: string) => void;
+  /** Makes the column optional, with this as the "automatic" choice. */
+  autoLabel?: string;
+}
+
+/** The growing query field and the widget's column pickers. */
 export function ChartDataTab({
   widgetId,
   idPrefix,
@@ -220,10 +260,7 @@ export function ChartDataTab({
   onQueryChange,
   linked,
   onLinkChange,
-  labelColumn,
-  onLabelColumnChange,
-  valueColumn,
-  onValueColumnChange,
+  columnFields,
   fileId,
   projectId,
   expectedResult,
@@ -236,10 +273,7 @@ export function ChartDataTab({
   onQueryChange: (query: string) => void;
   linked: LinkedQuery | null;
   onLinkChange: (link: LinkedQuery | null) => void;
-  labelColumn: string;
-  onLabelColumnChange: (column: string) => void;
-  valueColumn: string;
-  onValueColumnChange: (column: string) => void;
+  columnFields: ColumnField[];
   fileId?: number;
   projectId?: number;
   expectedResult: ExpectedResult;
@@ -263,22 +297,18 @@ export function ChartDataTab({
         discovery={discovery}
       />
       <div className="grid shrink-0 grid-cols-2 gap-4">
-        <ColumnSelect
-          id={`${idPrefix}-label`}
-          label="Label column"
-          value={labelColumn}
-          onChange={onLabelColumnChange}
-          columns={discovery.columns}
-          loading={discovery.loading}
-        />
-        <ColumnSelect
-          id={`${idPrefix}-value`}
-          label="Value column"
-          value={valueColumn}
-          onChange={onValueColumnChange}
-          columns={discovery.columns}
-          loading={discovery.loading}
-        />
+        {columnFields.map((field) => (
+          <ColumnSelect
+            key={field.key}
+            id={`${idPrefix}-${field.key}`}
+            label={field.label}
+            value={field.value}
+            onChange={field.onChange}
+            columns={discovery.columns}
+            loading={discovery.loading}
+            autoLabel={field.autoLabel}
+          />
+        ))}
       </div>
     </>
   );

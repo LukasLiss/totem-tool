@@ -105,6 +105,8 @@ export interface SqlQueryEditorProps {
   onLinkChange?: (link: LinkedQuery | null) => void;
   /** hide the query-name input (e.g. when a dialog already names the query) */
   hideName?: boolean;
+  /** called after each successful test run with the query text and its first page */
+  onResult?: (result: { query: string; columns: string[]; rows: Record<string, unknown>[] }) => void;
   className?: string;
 }
 
@@ -150,9 +152,15 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
   linkedQuery = null,
   onLinkChange,
   hideName = false,
+  onResult,
   className,
 }) => {
   const rowLimit = value.rowLimit ?? 25;
+  // Kept in a ref so a new callback each render doesn't change the run function.
+  const onResultRef = useRef(onResult);
+  useEffect(() => {
+    onResultRef.current = onResult;
+  }, [onResult]);
 
   // Some hosts (e.g. the dashboard grid) mount this via a one-off ReactDOM
   // root that isn't re-rendered on every onChange. So text fields need
@@ -287,6 +295,7 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
           hasMore: page.hasMore,
           ms: Math.round(performance.now() - t0),
         });
+        onResultRef.current?.({ query: q, columns: page.columns, rows: page.data });
         setError(null);
         scrollRef.current?.scrollTo({ top: 0 });
       } catch (e) {

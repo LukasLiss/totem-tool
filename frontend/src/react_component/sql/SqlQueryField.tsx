@@ -41,6 +41,15 @@ export interface SqlQueryFieldProps {
    * scrolls) so the content below stays visible
    */
   grow?: boolean;
+  /**
+   * called after applying from the SQL editor when the user had run exactly
+   * the applied query there, with that result (so it needn't run again)
+   */
+  onRunResult?: (
+    result: { columns: string[]; rows: Record<string, unknown>[] },
+    query: string,
+    linkedQuery: LinkedQuery | null
+  ) => void;
 }
 
 export function SqlQueryField({
@@ -56,6 +65,7 @@ export function SqlQueryField({
   className,
   id,
   grow = false,
+  onRunResult,
 }: SqlQueryFieldProps) {
   const [editorOpen, setEditorOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -137,11 +147,12 @@ export function SqlQueryField({
         linkedQuery={onLinkChange ? linkedQuery : null}
         expectedResult={expectedResult}
         title={editorTitle}
-        onApply={(query, link) => {
+        onApply={(query, link, result) => {
           onChange(query);
           if (onLinkChange && (link?.id ?? null) !== (linkedQuery?.id ?? null)) {
             onLinkChange(link);
           }
+          if (result) onRunResult?.(result, query, onLinkChange ? link : null);
         }}
       />
       {onLinkChange && (
