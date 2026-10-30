@@ -87,7 +87,9 @@ function UserFileSelect() {
               aria-expanded={open}
               className="w-[300px] justify-between"
             >
-              {selectedFile ? projectLabel(selectedFile) : "Select OCEL File"}
+              <span className="min-w-0 truncate">
+                {selectedFile ? projectLabel(selectedFile) : "Select OCEL File"}
+              </span>
               <ChevronsUpDownIcon className="ml-2 h-4 w-4 shrink-0 opacity-50" />
             </Button>
           </PopoverTrigger>
@@ -108,13 +110,13 @@ function UserFileSelect() {
                     >
                       <CheckIcon
                         className={cn(
-                          "mr-2 h-4 w-4",
+                          "mr-2 h-4 w-4 shrink-0",
                           selectedFile?.id === file.id
                             ? "opacity-100"
                             : "opacity-0"
                         )}
                       />
-                      {projectLabel(file)}
+                      <span className="min-w-0 truncate">{projectLabel(file)}</span>
                     </CommandItem>
                   ))}
                 </CommandGroup>
