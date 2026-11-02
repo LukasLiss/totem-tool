@@ -11,6 +11,7 @@ export type AxisOption =
   | { type: "none" };
 
 export type RowOrderOption = "first_occurrence" | "last_occurrence";
+export type RowOrderDirection = "asc" | "desc";
 
 export interface OCEvent {
   id: string;

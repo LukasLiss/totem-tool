@@ -326,6 +326,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           color_by: node.color_by ?? "activity",
           shape_by: node.shape_by ?? "none",
           row_order: node.row_order ?? "first_occurrence",
+          row_order_direction: node.row_order_direction ?? "asc",
           max_points: node.max_points ?? 10000,
         };
       } else if (component_name === "NewOCDFGComponent" || component_name === "NewOCDFGVariantsComponent") {
@@ -589,6 +590,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             color_by: item.color_by,
             shape_by: item.shape_by,
             row_order: item.row_order,
+            row_order_direction: item.row_order_direction,
             max_points: item.max_points,
             layout_direction: item.layout_direction,
             // PieChartComponent properties
@@ -705,6 +707,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node.color_by = item.color_by;
               node.shape_by = item.shape_by;
               node.row_order = item.row_order;
+              node.row_order_direction = item.row_order_direction;
               node.max_points = item.max_points;
               node.layout_direction = item.layout_direction;
               // OCCNComponent properties

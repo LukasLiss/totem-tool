@@ -30,6 +30,7 @@ import {
   type ChartPoint,
   type DottedChartViewport,
   type OCEvent,
+  type RowOrderDirection,
   type RowOrderOption,
 } from "./dottedChart/dottedChartUtils";
 import {
@@ -46,6 +47,7 @@ interface DottedChartProps {
   colorBy?: AxisOption;
   shapeBy?: AxisOption;
   rowOrder?: RowOrderOption;
+  rowOrderDirection?: RowOrderDirection;
   maxPoints?: number;
   viewport?: DottedChartViewport;
   showControls?: boolean;
@@ -61,6 +63,7 @@ const DEFAULT_Y_AXIS: AxisOption = { type: "activity" };
 const DEFAULT_COLOR_BY: AxisOption = { type: "activity" };
 const DEFAULT_SHAPE_BY: AxisOption = { type: "none" };
 const DEFAULT_ROW_ORDER: RowOrderOption = "first_occurrence";
+const DEFAULT_ROW_ORDER_DIRECTION: RowOrderDirection = "asc";
 const MIN_BRUSH_POINTS = 10;
 const MIN_VISIBLE_ROWS = 1;
 const CHART_MARGIN = { top: 72, right: 8, bottom: 18, left: 0 };
@@ -78,6 +81,7 @@ export default function DottedChart({
   colorBy = DEFAULT_COLOR_BY,
   shapeBy = DEFAULT_SHAPE_BY,
   rowOrder = DEFAULT_ROW_ORDER,
+  rowOrderDirection = DEFAULT_ROW_ORDER_DIRECTION,
   maxPoints = 20_000,
   viewport,
   showControls = false,
@@ -94,9 +98,10 @@ export default function DottedChart({
       colorBy,
       shapeBy,
       rowOrder,
+      rowOrderDirection,
       maxPoints,
     }),
-    [colorBy, maxPoints, rowOrder, shapeBy, xAxis, yAxis]
+    [colorBy, maxPoints, rowOrder, rowOrderDirection, shapeBy, xAxis, yAxis]
   );
   const [config, setConfig] = useState<DottedChartConfig>(defaultConfig);
   const effectiveConfig = showControls ? config : defaultConfig;
@@ -178,8 +183,8 @@ export default function DottedChart({
   const xLabels = useMemo(() => makeAxisLabelLookup(points, "x"), [points]);
   const yLabels = useMemo(() => makeAxisLabelLookup(points, "y"), [points]);
   const yTicks = useMemo(
-    () => orderDisplayedYTicks(points, effectiveConfig.rowOrder),
-    [effectiveConfig.rowOrder, points]
+    () => orderDisplayedYTicks(points, effectiveConfig.rowOrder, effectiveConfig.rowOrderDirection),
+    [effectiveConfig.rowOrder, effectiveConfig.rowOrderDirection, points]
   );
   const [yBrushRange, setYBrushRange] = useState<BrushRange>({ startIndex: 0, endIndex: 0 });
   const effectiveYBrushRange = useMemo(
@@ -1396,7 +1401,12 @@ function sampleAxisTicks(ticks: number[], maxLabels: number): number[] {
   return ticks.filter((tick) => sampled.has(tick));
 }
 
-function orderDisplayedYTicks(points: ChartPoint[], rowOrder: RowOrderOption): number[] {
+function orderDisplayedYTicks(
+  points: ChartPoint[],
+  rowOrder: RowOrderOption,
+  direction: RowOrderDirection
+): number[] {
+  const sign = direction === "desc" ? -1 : 1;
   const rowTimes = new Map<number, { first: number; last: number }>();
 
   points.forEach((point) => {
@@ -1417,7 +1427,7 @@ function orderDisplayedYTicks(points: ChartPoint[], rowOrder: RowOrderOption): n
     .sort(([leftTick, left], [rightTick, right]) => {
       const leftValue = rowOrder === "last_occurrence" ? left.last : left.first;
       const rightValue = rowOrder === "last_occurrence" ? right.last : right.first;
-      return leftValue - rightValue || leftTick - rightTick;
+      return sign * (leftValue - rightValue || leftTick - rightTick);
     })
     .map(([tick]) => tick);
 }
@@ -1579,6 +1589,7 @@ function dottedChartConfigKey(config: DottedChartConfig): string {
     axisOptionKey(config.colorBy),
     axisOptionKey(config.shapeBy),
     config.rowOrder,
+    config.rowOrderDirection,
     config.maxPoints,
   ].join("|");
 }
@@ -1643,4 +1654,4 @@ function valueLabel(value: number | string | null | undefined): string {
   return String(value);
 }
 
-export type { AxisOption, DottedChartViewport, OCEvent, RowOrderOption };
+export type { AxisOption, DottedChartViewport, OCEvent, RowOrderDirection, RowOrderOption };

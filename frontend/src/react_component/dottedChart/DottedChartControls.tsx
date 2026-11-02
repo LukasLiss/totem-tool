@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, SlidersHorizontal } from "lucide-react";
+import { ArrowDownWideNarrow, ArrowUpNarrowWide, ChevronDown, SlidersHorizontal } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -10,7 +10,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
-import type { AxisOption, RowOrderOption } from "./dottedChartUtils";
+import type { AxisOption, RowOrderDirection, RowOrderOption } from "./dottedChartUtils";
 import {
   DEFAULT_DOTTED_CHART_OPTIONS,
   useDottedChartOptions,
@@ -23,6 +23,7 @@ export type DottedChartConfig = {
   colorBy: AxisOption;
   shapeBy: AxisOption;
   rowOrder: RowOrderOption;
+  rowOrderDirection: RowOrderDirection;
   maxPoints: number;
 };
 
@@ -145,7 +146,35 @@ export function DottedChartControls({
             onChange={(value) => updateDraftConfig({ shapeBy: controlValueToAxis(value) })}
           />
           <div className="space-y-2">
-            <Label className="text-xs text-muted-foreground">Y Axis Order</Label>
+            <div className="flex items-center justify-between gap-2">
+              <Label className="text-xs text-muted-foreground">Y Axis Order</Label>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-5 gap-1 px-1.5 text-xs text-muted-foreground"
+                title={
+                  draftConfig.rowOrderDirection === "desc"
+                    ? "Descending order. Click to sort ascending."
+                    : "Ascending order. Click to sort descending."
+                }
+                aria-label={`Y axis order direction: ${
+                  draftConfig.rowOrderDirection === "desc" ? "descending" : "ascending"
+                }`}
+                onClick={() =>
+                  updateDraftConfig({
+                    rowOrderDirection: draftConfig.rowOrderDirection === "desc" ? "asc" : "desc",
+                  })
+                }
+              >
+                {draftConfig.rowOrderDirection === "desc" ? (
+                  <ArrowDownWideNarrow className="h-3 w-3" />
+                ) : (
+                  <ArrowUpNarrowWide className="h-3 w-3" />
+                )}
+                {draftConfig.rowOrderDirection === "desc" ? "Desc" : "Asc"}
+              </Button>
+            </div>
             <select
               value={draftConfig.rowOrder}
               onChange={(event) =>

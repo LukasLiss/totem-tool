@@ -50,6 +50,7 @@ declare module 'gridstack' {
     color_by?: string;
     shape_by?: string;
     row_order?: 'first_occurrence' | 'last_occurrence';
+    row_order_direction?: 'asc' | 'desc';
     max_points?: number;
     show_minimap?: boolean;
     layout_direction?: 'TB' | 'LR';

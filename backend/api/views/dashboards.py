@@ -525,6 +525,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     color_by=item.get("color_by") or "activity",
                     shape_by=item.get("shape_by") or "none",
                     row_order=item.get("row_order") or "first_occurrence",
+                    row_order_direction=item.get("row_order_direction") or "asc",
                     max_points=item.get("max_points", 10000),
                     show_minimap=item.get("show_minimap", True),
                     show_controls=item.get("show_controls", True),

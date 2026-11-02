@@ -47,6 +47,7 @@ import {
 import {
   axisOptionToParam,
   type AxisOption,
+  type RowOrderDirection,
   type RowOrderOption,
 } from '@/react_component/dottedChart/dottedChartUtils';
 import TotemMiner from '@/react_component/TotemMiner';
@@ -178,6 +179,7 @@ export interface ComponentProps {
     color_by?: string;
     shape_by?: string;
     row_order?: RowOrderOption;
+    row_order_direction?: RowOrderDirection;
     max_points?: number;
     show_minimap?: boolean;
     // NewOCDFGComponent / OCCNComponent properties
@@ -1406,6 +1408,7 @@ const DOTTED_CHART_DEFAULT_CONFIG: DottedChartConfig = {
   colorBy: { type: "activity" },
   shapeBy: { type: "none" },
   rowOrder: "first_occurrence",
+  rowOrderDirection: "asc",
   maxPoints: 10000,
 };
 
@@ -1428,6 +1431,7 @@ export const OCDottedChartComponent: React.FC<ComponentProps> = ({
       color_by: axisOptionToPersistedValue(nextConfig.colorBy),
       shape_by: axisOptionToPersistedValue(nextConfig.shapeBy),
       row_order: nextConfig.rowOrder,
+      row_order_direction: nextConfig.rowOrderDirection,
       max_points: nextConfig.maxPoints,
     });
   };
@@ -1466,6 +1470,7 @@ export const OCDottedChartComponent: React.FC<ComponentProps> = ({
           colorBy={config.colorBy}
           shapeBy={config.shapeBy}
           rowOrder={config.rowOrder}
+          rowOrderDirection={config.rowOrderDirection}
           maxPoints={config.maxPoints}
           showControls={false}
           showMinimap={true}
@@ -1485,6 +1490,7 @@ function nodeToDottedChartConfig(node: ComponentProps["node"]): DottedChartConfi
     colorBy: persistedValueToAxisOption(node.color_by, DOTTED_CHART_DEFAULT_CONFIG.colorBy),
     shapeBy: persistedValueToAxisOption(node.shape_by, DOTTED_CHART_DEFAULT_CONFIG.shapeBy),
     rowOrder: node.row_order ?? DOTTED_CHART_DEFAULT_CONFIG.rowOrder,
+    rowOrderDirection: node.row_order_direction ?? DOTTED_CHART_DEFAULT_CONFIG.rowOrderDirection,
     maxPoints: node.max_points ?? DOTTED_CHART_DEFAULT_CONFIG.maxPoints,
   };
 }
