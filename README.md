@@ -24,6 +24,7 @@ Each linked page gives a short introduction to the feature with a screenshot.
 * Conformance Checking
    * [TOTeM Conformance](docs/user-guide/totem-conformance.md)
    * [OCCN Conformance](docs/user-guide/occn-conformance.md)
+   * [OCPN Flattened Replay](docs/user-guide/ocpn-flattened-replay.md)
 * [Dashboard Creation for customized overviews](docs/user-guide/dashboards.md)
 * [Project Asset Store](docs/user-guide/project-asset-store.md)
 * [Editors](docs/user-guide/editors.md)

@@ -40,7 +40,12 @@ from totem_lib.totem import (
 from totem_lib.process_areas import prepare_db, process_areas_from_aggregates
 from totem_lib.ocel import FilterStack, apply_filter_stack, import_ocel_db
 from totem_lib.ocel.event_columns import list_event_columns
-from totem_lib.ocpn import discover_ocpn_db
+from totem_lib.ocpn import (
+    DuplicateTransitionLabelError,
+    InvalidOCPNError,
+    discover_ocpn_db,
+    flattened_token_based_replay_db,
+)
 from totem_lib.ocel.validation import OCELValidationException
 from totem_lib.oc_dotted_chart import (
     get_oc_dotted_chart_columns,
@@ -54,6 +59,7 @@ from ..serializers import (
     OCCNReplayUnitDetailRequestSerializer,
     ProjectAssetSerializer,
     TotemConformanceRequestSerializer,
+    OCPNFlattenedReplayRequestSerializer,
 )
 from ..cache_utils import get_cached_result, set_cached_result
 from ..jobs import JobCancelled, cancelled_response, job_scope
@@ -742,6 +748,84 @@ class EventLogViewSet(viewsets.ModelViewSet):
             {
                 "file_id": user_file.pk,
                 "asset_id": asset.pk,
+                **result.to_dict(),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"])
+    def ocpn_flattened_replay(self, request, pk=None):
+        """Flattened token-based replay of one stored OCPN asset on this log.
+
+        Every object type of the net is replayed separately (each object is a
+        case on the projection of the net onto its type); the token counts are
+        returned per object type and per place of the combined net.
+        """
+        request_serializer = OCPNFlattenedReplayRequestSerializer(data=request.data)
+        if not request_serializer.is_valid():
+            return Response(
+                request_serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response(
+                {"error": "File not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        asset_id = request_serializer.validated_data["asset_id"]
+        try:
+            asset = ProjectAsset.objects.get(
+                pk=asset_id,
+                project__users=request.user,
+            )
+        except ProjectAsset.DoesNotExist:
+            return Response(
+                {"asset_id": "Model asset not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        if asset.project_id != user_file.project_id:
+            return Response(
+                {"asset_id": "Model asset must belong to the event log project."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if asset.asset_type != ProjectAsset.AssetType.OCPN:
+            return Response(
+                {"asset_id": "Model asset must have type OCPN."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        model = asset.content_json
+        try:
+            fp = _parse_filter_params(request)
+            with job_scope(request, "OCPN flattened replay") as job, _with_ocel_db(user_file, job) as db:
+                job.report(None, "Applying filters")
+                with _filter_shadow(db, fp):
+                    result = flattened_token_based_replay_db(
+                        model, db, progress=job.report
+                    )
+        except JobCancelled:
+            return cancelled_response()
+        except (DuplicateTransitionLabelError, InvalidOCPNError) as exc:
+            return Response(
+                {"error": str(exc), "asset_id": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except Exception as exc:
+            return Response(
+                {"error": f"Failed to calculate the OCPN flattened replay: {exc}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(
+            {
+                "file_id": user_file.pk,
+                "asset_id": asset.pk,
+                "asset_name": asset.name,
+                "model": model,
                 **result.to_dict(),
             },
             status=status.HTTP_200_OK,

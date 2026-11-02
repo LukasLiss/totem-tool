@@ -19,11 +19,17 @@ from .asset_formats import (
 )
 from .models import EventLog, ImageAsset, Project, ProjectAsset
 from .models import Dashboard
-from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, TotemMinerComponent, LogStatisticsComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent, FilterStackComponent, OCPNComponent, SqlQueryComponent, PieChartComponent, KpiComponent, BarChartComponent, ScatterPlotComponent, OCHandoverComponent, ResourceProfilingComponent
+from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, TotemMinerComponent, LogStatisticsComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent, FilterStackComponent, OCPNComponent, OCPNFlattenedReplayComponent, SqlQueryComponent, PieChartComponent, KpiComponent, BarChartComponent, ScatterPlotComponent, OCHandoverComponent, ResourceProfilingComponent
 from django.db.models import Max
 
 
 class TotemConformanceRequestSerializer(serializers.Serializer):
+    asset_id = serializers.IntegerField(min_value=1)
+
+
+class OCPNFlattenedReplayRequestSerializer(serializers.Serializer):
+    """Request of the OCPN flattened (per object type) token-based replay."""
+
     asset_id = serializers.IntegerField(min_value=1)
 
 
@@ -519,6 +525,12 @@ class OCPNComponentSerializer(DashboardComponentSerializer):
         fields = "__all__"
 
 
+class OCPNFlattenedReplayComponentSerializer(DashboardComponentSerializer):
+    class Meta:
+        model = OCPNFlattenedReplayComponent
+        fields = "__all__"
+
+
 class OCCNComponentSerializer(DashboardComponentSerializer):
     class Meta:
         model = OCCNComponent
@@ -587,6 +599,7 @@ class DashboardComponentPolymorphicSerializer(PolymorphicSerializer):
         OCDottedChartComponent: OCDottedChartComponentSerializer,
         NewOCDFGComponent: NewOCDFGComponentSerializer,
         OCPNComponent: OCPNComponentSerializer,
+        OCPNFlattenedReplayComponent: OCPNFlattenedReplayComponentSerializer,
         PieChartComponent: PieChartComponentSerializer,
         OCCNComponent: OCCNComponentSerializer,
         SqlQueryComponent: SqlQueryComponentSerializer,

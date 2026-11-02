@@ -17,6 +17,7 @@ import DottedChart from "@/react_component/DottedChart";
 import { GlobalFilterToggle } from "@/components/ui/GlobalFilterToggle";
 import { LocalFilterDropdown } from "@/components/ui/LocalFilterDropdown";
 import OCPNVisualizer from "@/react_component/OCPNVisualizer";
+import OcpnFlattenedReplay from "@/components/ocpn-flattened-replay/OcpnFlattenedReplay";
 import TotemMiner from "@/react_component/TotemMiner";
 import { SqlQueryAnalysis } from "@/components/SqlQueryAnalysis";
 import OrgaMiningExplorer from "@/react_component/OrgaMiningExplorer";
@@ -25,7 +26,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 export function AnalysisView() {
-  const { viewMode } = useContext(DashboardContext);
+  const { viewMode, setViewMode } = useContext(DashboardContext);
   const { selectedFile } = useContext(SelectedFileContext);
   const [filterEnabled, setFilterEnabled] = useState(true);
   const toggleFilter = useCallback(() => setFilterEnabled(p => !p), []);
@@ -180,6 +181,35 @@ export function AnalysisView() {
                   showControls={true}
                   filterEnabled={filterEnabled}
                   localFilterParams={localFilterParams}
+                />
+              </CardContent>
+            </Card>
+          </div>
+        );
+
+      case 'ocpnFlattenedReplay':
+        return (
+          <div className="w-full max-w-7xl">
+            <Card>
+              <CardHeader>
+                <div className="flex items-center gap-2">
+                  <CardTitle>OCPN Flattened Replay</CardTitle>
+                  <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={toggleFilter} />
+                  <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setLocalFilterParams} />
+                </div>
+                <CardDescription>
+                  Token-based replay of every object type on its part of a stored
+                  Object-Centric Petri Net, shown on the combined net
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="h-[700px] p-0">
+                <OcpnFlattenedReplay
+                  height="100%"
+                  fileId={selectedFile?.id}
+                  projectId={selectedFile?.project}
+                  filterEnabled={filterEnabled}
+                  localFilterParams={localFilterParams}
+                  onOpenModelAssets={() => setViewMode({ type: "modelAssets" })}
                 />
               </CardContent>
             </Card>

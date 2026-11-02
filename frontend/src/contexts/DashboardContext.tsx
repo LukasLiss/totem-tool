@@ -8,6 +8,7 @@ export type AnalysisComponent =
   | "dottedChart"
   | "occn"
   | "ocPetriNet"
+  | "ocpnFlattenedReplay"
   | "totemMiner"
   | "sqlQuery"
   | "orgaMining";

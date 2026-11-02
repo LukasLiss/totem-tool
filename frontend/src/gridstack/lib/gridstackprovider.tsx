@@ -356,6 +356,11 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           automatic_loading: node.automatic_loading ?? false,
           timeout_s: node.timeout_s ?? 30.0,
         };
+      } else if (component_name === "OCPNFlattenedReplayComponent") {
+        props = {
+          ocpn_asset_id: node.ocpn_asset_id ?? null,
+          automatic_loading: node.automatic_loading ?? false,
+        };
       } else if (component_name === "SqlQueryComponent") {
         props = {
           name: node.name ?? "",
@@ -509,6 +514,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "Object-Centric DFG (Variants)";
         } else if (item.component_name === "OCPNComponent") {
           content = "OC Petri Net";
+        } else if (item.component_name === "OCPNFlattenedReplayComponent") {
+          content = "OCPN Flattened Replay";
         } else if (item.component_name === "OCCNComponent") {
           content = "Object-Centric Causal Net (OCCN)";
         } else if (item.component_name === "SqlQueryComponent") {
@@ -600,6 +607,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             value_column: item.value_column,
             show_legend: item.show_legend,
             show_tooltip: item.show_tooltip,
+            // OCPNFlattenedReplayComponent properties
+            ocpn_asset_id: item.ocpn_asset_id,
             // OCCNComponent properties
             relative_occurrence_threshold: item.relative_occurrence_threshold,
             object_types: item.object_types,
@@ -707,6 +716,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node.row_order = item.row_order;
               node.max_points = item.max_points;
               node.layout_direction = item.layout_direction;
+              // OCPNFlattenedReplayComponent properties
+              node.ocpn_asset_id = item.ocpn_asset_id;
               // OCCNComponent properties
               node.relative_occurrence_threshold = item.relative_occurrence_threshold;
               node.object_types = item.object_types;

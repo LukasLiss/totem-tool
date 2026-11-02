@@ -24,6 +24,7 @@ from ..models import (
     NewOCDFGComponent,
     OCCNComponent,
     OCPNComponent,
+    OCPNFlattenedReplayComponent,
     SqlQueryComponent,
     PieChartComponent,
     KpiComponent,
@@ -133,6 +134,23 @@ def _validated_legacy_image_path(raw, project):
     if not os.path.isfile(candidate):
         return None
     return os.path.relpath(candidate, media_root).replace(os.sep, "/")
+
+
+def _ocpn_asset_id_for(item, dashboard):
+    """The OCPN asset id of a replay widget, if it is an OCPN of this project."""
+    raw = item.get("ocpn_asset_id")
+    if isinstance(raw, bool):
+        return None
+    try:
+        asset_id = int(raw)
+    except (TypeError, ValueError):
+        return None
+    exists = ProjectAsset.objects.filter(
+        pk=asset_id,
+        project_id=dashboard.project_id,
+        asset_type=ProjectAsset.AssetType.OCPN,
+    ).exists()
+    return asset_id if exists else None
 
 
 def _query_asset_for(item, dashboard, request):
@@ -257,6 +275,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
         "NewOCDFGComponent": NewOCDFGComponent,
         "NewOCDFGVariantsComponent": NewOCDFGComponent,
         "OCPNComponent": OCPNComponent,
+        "OCPNFlattenedReplayComponent": OCPNFlattenedReplayComponent,
         "SqlQueryComponent": SqlQueryComponent,
         "PieChartComponent": PieChartComponent,
         "KpiComponent": KpiComponent,
@@ -571,6 +590,17 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     component_name=component_name,
                     automatic_loading=item.get('automatic_loading', False),
                     timeout_s=item.get('timeout_s', 30.0),
+                )
+            elif component_name == 'OCPNFlattenedReplayComponent':
+                OCPNFlattenedReplayComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    ocpn_asset_id=_ocpn_asset_id_for(item, dashboard),
+                    automatic_loading=bool(item.get('automatic_loading', False)),
                 )
             elif component_name == 'FilterStackComponent':
                 FilterStackComponent.objects.create(
