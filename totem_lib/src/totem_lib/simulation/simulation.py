@@ -1019,7 +1019,8 @@ def generate_arrival_schedule(
             aggregate arrival stream).
         arrival_distributions: ``{payload: {"avg_arrivals_per_hour": {weekday:
             {hour: rate}}}}``.
-        start_datetime: datetime of simulation start.
+        start_datetime: datetime of simulation start, expected at the start of a
+            clock hour so that every iterated hour is exactly one weekly slot.
         sim_duration_s: total simulation duration in seconds.
 
     Returns:
@@ -1059,6 +1060,20 @@ def generate_arrival_schedule(
 
     schedule.sort(key=lambda x: x[0])
     return schedule
+
+
+def _hour_aligned_start(start_datetime, simulation_model):
+    """Start of the simulation: the start of the clock hour containing
+    ``start_datetime`` (default: the filtered log's first event).
+
+    Aligning to the hour makes every hour of the arrival schedule coincide with
+    one weekly slot and with the absolute clock hours of the calendar gate.
+    """
+    if start_datetime is None:
+        start_unix = int(simulation_model.source_log_start_unix)
+    else:
+        start_unix = int(start_datetime.timestamp())
+    return dt.datetime.fromtimestamp(start_unix - start_unix % 3600, tz=dt.timezone.utc)
 
 
 def _expand_resource_pool(resource_pool):
@@ -1379,7 +1394,8 @@ class VariantPlayoutStrategy:
             simulation_model: OCProcessAreaSimulationModel
             sim_duration_s: Total simulation duration in seconds
             resource_pool: {resource_type: count} — e.g. {'Forklift': 3, 'Crane': 2}
-            start_datetime: datetime of simulation start. Defaults to the filtered source log's first event
+            start_datetime: datetime of simulation start. Defaults to the filtered source log's first event.
+                Floored to the start of its clock hour.
             progress_callback: Optional callable invoked with the fraction of the
                 simulated time span elapsed (0.0-1.0) as the clock advances, so a
                 caller can report simulation progress.
@@ -1389,10 +1405,7 @@ class VariantPlayoutStrategy:
         """
 
         # --- Initialize simulation parameters ---
-        if start_datetime is None:
-            start_datetime = dt.datetime.fromtimestamp(
-                simulation_model.source_log_start_unix, tz=dt.timezone.utc
-            )
+        start_datetime = _hour_aligned_start(start_datetime, simulation_model)
         print("Started Simulation")
         allocation_strategy = simulation_model.resource_allocation_strategy
         cooldown_dist = simulation_model.resource_cooldown_distribution
@@ -1753,10 +1766,7 @@ class StateSpacePlayoutStrategy:
         start_datetime: dt.datetime = None,
         progress_callback=None,
     ) -> dict:
-        if start_datetime is None:
-            start_datetime = dt.datetime.fromtimestamp(
-                simulation_model.source_log_start_unix, tz=dt.timezone.utc
-            )
+        start_datetime = _hour_aligned_start(start_datetime, simulation_model)
         allocation_strategy = simulation_model.resource_allocation_strategy
         cooldown_dist = simulation_model.resource_cooldown_distribution
         resource_constraints = simulation_model.resource_constraints or {}

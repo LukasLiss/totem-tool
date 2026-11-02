@@ -591,6 +591,22 @@ def test_higher_arrival_rate_spawns_more_instances():
     assert spawn_high > 3 * spawn_low
 
 
+def test_start_is_floored_to_clock_hour():
+    """A start inside an hour begins at that hour's start, so the Monday-10 rate
+    only produces arrivals within Monday 10:00-11:00."""
+    variant = _single("Load")
+    model = _build_model(
+        variant, needed=_needs({"Load": {}}), arrivals=_slot_arrivals(variant)
+    )
+    ocel, _, spawned = _run(
+        model, pool={}, duration_s=HOUR, start=START + dt.timedelta(minutes=37)
+    )
+    timestamps = ocel.events["_timestampUnix"].to_list()
+    assert spawned > 0
+    assert int(START.timestamp()) <= min(timestamps)
+    assert max(timestamps) < int(START.timestamp()) + HOUR
+
+
 # --- activity durations ---
 
 
