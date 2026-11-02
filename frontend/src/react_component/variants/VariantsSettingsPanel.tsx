@@ -345,7 +345,7 @@ export function VariantsSettingsPanel({
   );
 }
 
-function SettingsSection({
+export function SettingsSection({
   step,
   title,
   description,
@@ -377,7 +377,7 @@ function SettingsSection({
   );
 }
 
-function Field({
+export function Field({
   label,
   htmlFor,
   error,
@@ -399,7 +399,7 @@ function Field({
   );
 }
 
-function Hint({ children }: { children: React.ReactNode }) {
+export function Hint({ children }: { children: React.ReactNode }) {
   if (!children) return null;
   return <p className="text-[11px] leading-snug text-muted-foreground">{children}</p>;
 }
@@ -432,7 +432,7 @@ function SwitchRow({
   );
 }
 
-function TimeoutInput({
+export function TimeoutInput({
   value,
   onChange,
   disabled,

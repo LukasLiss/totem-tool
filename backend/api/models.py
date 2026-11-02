@@ -304,6 +304,15 @@ class VariantsComponent(DashboardComponent):
     # lists mean "not chosen yet".
     business_object_types = models.JSONField(default=list, blank=True)
     business_activities = models.JSONField(default=list, blank=True)
+    # "process_areas" (default: connected components per process area,
+    # stored in the two columns below) or "custom" (the settings above).
+    variants_mode = models.CharField(max_length=32, default="process_areas", blank=True)
+    area_execution_column = models.CharField(
+        max_length=64, default="process-executions-cc-process-areas", blank=True
+    )
+    area_variant_column = models.CharField(
+        max_length=64, default="variant-cc-process-areas", blank=True
+    )
 
 
 class ProcessAreaComponent(DashboardComponent):

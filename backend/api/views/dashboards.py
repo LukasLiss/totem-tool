@@ -470,6 +470,17 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     timeout_s=item.get("timeout_s", 10.0),
                     business_object_types=_string_list_field(item, "business_object_types"),
                     business_activities=_string_list_field(item, "business_activities"),
+                    variants_mode=(
+                        item.get("variants_mode")
+                        if item.get("variants_mode") in ("process_areas", "custom")
+                        else "process_areas"
+                    ),
+                    area_execution_column=str(
+                        item.get("area_execution_column") or "process-executions-cc-process-areas"
+                    )[:64],
+                    area_variant_column=str(
+                        item.get("area_variant_column") or "variant-cc-process-areas"
+                    )[:64],
                 )
             elif component_name == "ProcessAreaComponent":
                 ProcessAreaComponent.objects.create(
