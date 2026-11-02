@@ -26,6 +26,7 @@ import KpiComponent from "./sql-widgets/KpiComponent";
 import BarChartComponent from "./sql-widgets/BarChartComponent";
 import ScatterPlotComponent from "./sql-widgets/ScatterPlotComponent";
 import { OCHandoverComponent, ResourceProfilingComponent } from "./OrgaMiningComponents";
+import { OCAlignmentComponent } from "./oc-alignment/OCAlignmentDashboardComponent";
 
 export const componentMap: Record<string, React.FC<ComponentProps>> = {
   TextBoxComponent,
@@ -47,4 +48,5 @@ export const componentMap: Record<string, React.FC<ComponentProps>> = {
   ScatterPlotComponent: ScatterPlotComponent as unknown as React.FC<ComponentProps>,
   OCHandoverComponent,
   ResourceProfilingComponent,
+  OCAlignmentComponent,
 };

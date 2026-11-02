@@ -146,6 +146,8 @@ const FILE_ACTIONS: Record<string, string> = {
   totem_conformance: "TOTeM conformance",
   occn_conformance: "OCCN conformance",
   occn_replay_unit_detail: "Replay detail",
+  oc_alignment: "Object-centric alignment",
+  oc_alignment_executions: "Process executions",
   process_executions: "Process executions",
   execute_query: "SQL query",
   event_distribution: "Event distribution",

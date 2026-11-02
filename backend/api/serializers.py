@@ -19,7 +19,7 @@ from .asset_formats import (
 )
 from .models import EventLog, ImageAsset, Project, ProjectAsset
 from .models import Dashboard
-from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, TotemMinerComponent, LogStatisticsComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent, FilterStackComponent, OCPNComponent, SqlQueryComponent, PieChartComponent, KpiComponent, BarChartComponent, ScatterPlotComponent, OCHandoverComponent, ResourceProfilingComponent
+from .models import DashboardComponent, NumberofEventsComponent, TextBoxComponent, ImageComponent, VariantsComponent, ProcessAreaComponent, TotemMinerComponent, LogStatisticsComponent, OCDottedChartComponent, NewOCDFGComponent, OCCNComponent, FilterStackComponent, OCPNComponent, SqlQueryComponent, PieChartComponent, KpiComponent, BarChartComponent, ScatterPlotComponent, OCHandoverComponent, ResourceProfilingComponent, OCAlignmentComponent
 from django.db.models import Max
 
 
@@ -141,6 +141,64 @@ class OCCNReplayUnitDetailRequestSerializer(
                 }
             )
         return attrs
+
+
+class OCAlignmentExecutionSourceSerializer(serializers.Serializer):
+    """Where the process execution(s) of an object-centric alignment come from.
+
+    ``stored``: the execution ids the Variants Explorer wrote into an events
+    column. ``area``: connected components of the business objects, connected
+    through events of the business activities (typically a process area).
+    """
+
+    source = serializers.ChoiceField(choices=["stored", "area"])
+    execution_column = serializers.CharField(
+        required=False, allow_blank=False, trim_whitespace=True, max_length=200
+    )
+    business_object_types = serializers.ListField(
+        child=serializers.CharField(allow_blank=False, max_length=500),
+        required=False,
+        default=list,
+        max_length=500,
+    )
+    business_activities = serializers.ListField(
+        child=serializers.CharField(allow_blank=False, max_length=500),
+        required=False,
+        default=list,
+        max_length=5000,
+    )
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        if attrs["source"] == "stored":
+            if not attrs.get("execution_column"):
+                raise serializers.ValidationError(
+                    {"execution_column": "This field is required for stored process executions."}
+                )
+        elif not attrs.get("business_object_types"):
+            raise serializers.ValidationError(
+                {
+                    "business_object_types": (
+                        "Select at least one business object type for the "
+                        "connected-component extraction."
+                    )
+                }
+            )
+        return attrs
+
+
+class OCAlignmentExecutionsRequestSerializer(OCAlignmentExecutionSourceSerializer):
+    # Optional: annotate each execution with the object types the model lacks.
+    asset_id = serializers.IntegerField(min_value=1, required=False)
+
+
+class OCAlignmentRequestSerializer(OCAlignmentExecutionSourceSerializer):
+    asset_id = serializers.IntegerField(min_value=1)
+    execution_id = serializers.CharField(allow_blank=False, trim_whitespace=False, max_length=500)
+    max_states = serializers.IntegerField(
+        min_value=1_000, max_value=2_000_000, default=200_000
+    )
+    timeout_s = serializers.FloatField(min_value=1.0, max_value=600.0, default=60.0)
 
 
 class EventLogSerializer(serializers.ModelSerializer):
@@ -531,6 +589,12 @@ class OCHandoverComponentSerializer(DashboardComponentSerializer):
         fields = "__all__"
 
 
+class OCAlignmentComponentSerializer(DashboardComponentSerializer):
+    class Meta:
+        model = OCAlignmentComponent
+        fields = "__all__"
+
+
 class ResourceProfilingComponentSerializer(DashboardComponentSerializer):
     class Meta:
         model = ResourceProfilingComponent
@@ -595,4 +659,5 @@ class DashboardComponentPolymorphicSerializer(PolymorphicSerializer):
         ScatterPlotComponent: ScatterPlotComponentSerializer,
         OCHandoverComponent: OCHandoverComponentSerializer,
         ResourceProfilingComponent: ResourceProfilingComponentSerializer,
+        OCAlignmentComponent: OCAlignmentComponentSerializer,
     }

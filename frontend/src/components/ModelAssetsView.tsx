@@ -76,7 +76,7 @@ const EDITOR_COMPONENT_BY_TYPE: Partial<Record<AssetType, EditorComponent>> = {
 };
 
 // Only these types can run conformance checking.
-const CONFORMANCE_TYPES: AssetType[] = ["TOTEM", "OCCN"];
+const CONFORMANCE_TYPES: AssetType[] = ["TOTEM", "OCCN", "OCPN"];
 
 interface AssetTableFilters {
   type: AssetFilter;
@@ -198,7 +198,12 @@ export function ModelAssetsView() {
               onConformanceClick={(asset) =>
                 setViewMode({
                   type: "conformance",
-                  component: asset.asset_type === "TOTEM" ? "totem" : "occn",
+                  component:
+                    asset.asset_type === "TOTEM"
+                      ? "totem"
+                      : asset.asset_type === "OCPN"
+                        ? "ocAlignment"
+                        : "occn",
                   assetId: asset.id,
                 })
               }

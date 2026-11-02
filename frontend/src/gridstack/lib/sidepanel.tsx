@@ -2,6 +2,7 @@ import React, { useEffect } from "react";
 import { GridStack } from "gridstack";
 import { useGrid } from "./gridContext";
 import {
+  AlignmentTile,
   BarChartTile,
   DottedChartTile,
   HandoverTile,
@@ -355,6 +356,32 @@ const SidePanel: React.FC = () => {
       }]
     );
 
+    GridStack.setupDragIn(
+      ".sidepanel .oc-alignment-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 10,
+        w: 12,
+        content: "Object-Centric Alignment",
+        component_name: "OCAlignmentComponent",
+        show_controls: true,
+        automatic_loading: false,
+        model_asset: null,
+        execution_source: "area",
+        execution_column: "",
+        business_object_types: [],
+        business_activities: [],
+        execution_id: "",
+        max_states: 200000,
+        timeout_s: 60,
+        show_silent_moves: false,
+        order: 0
+      }]
+    );
+
   }, [grid]);
 
   // The panel's own markup: every tile is the same box, differing only in its
@@ -462,6 +489,11 @@ const SidePanel: React.FC = () => {
       <div className={`${TILE_CLASS} resource-profiling-component`}>
         <ResourceProfilingTile />
         <div>Resource Profiling</div>
+      </div>
+
+      <div className={`${TILE_CLASS} oc-alignment-component`}>
+        <AlignmentTile />
+        <div>Object-Centric Alignment</div>
       </div>
       </div>
     </div>

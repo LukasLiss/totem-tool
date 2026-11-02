@@ -55,10 +55,17 @@ const occnAsset: ProjectAsset = {
   asset_type: "OCCN",
 };
 
+const ocpnAsset: ProjectAsset = {
+  ...totemAsset,
+  id: 44,
+  name: "Reference OCPN",
+  asset_type: "OCPN",
+};
+
 describe("ModelAssetsView row actions", () => {
   beforeEach(() => {
     listAssetsMock.mockReset();
-    listAssetsMock.mockResolvedValue([totemAsset, occnAsset]);
+    listAssetsMock.mockResolvedValue([totemAsset, occnAsset, ocpnAsset]);
   });
 
   afterEach(() => {
@@ -69,6 +76,7 @@ describe("ModelAssetsView row actions", () => {
   it.each([
     ["Reference TOTeM", "totem", 42],
     ["Reference OCCN", "occn", 43],
+    ["Reference OCPN", "ocAlignment", 44],
   ] as const)(
     "opens %s conformance with the row model preselected",
     async (name, component, assetId) => {
