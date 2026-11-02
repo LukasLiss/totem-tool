@@ -57,6 +57,7 @@ from ..serializers import (
 )
 from ..cache_utils import get_cached_result, set_cached_result
 from ..jobs import JobCancelled, cancelled_response, job_scope
+from ..limits import ProjectLimitReached, check_project_limit, create_project
 from ..query_refs import QueryReferenceError, resolve_query_references
 from totem_lib.progress import Progress
 from ._ocel_db import (
@@ -354,10 +355,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
         file_name = serializer.validated_data["file"].name
         project_name = _project_name_for_upload(file_name, user.username if user else "anonymous")
 
-        project = Project.objects.create(name=project_name)
-        if user:
-            project.users.add(user)
-            project.save()
+        project = create_project(project_name, user)
         event_log = serializer.save(project=project)
 
         # Anything that is not DuckDB already is converted, with graceful
@@ -384,6 +382,8 @@ class EventLogViewSet(viewsets.ModelViewSet):
         event_log.save(update_fields=["file"])
 
     def create(self, request, *args, **kwargs):
+        # Before request.data, so a user at the limit does not upload for nothing.
+        check_project_limit(request.user)
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
@@ -410,6 +410,8 @@ class EventLogViewSet(viewsets.ModelViewSet):
         except JobCancelled:
             _discard_upload(serializer.instance)
             return cancelled_response()
+        except ProjectLimitReached:
+            raise
         except serializers.ValidationError as e:
             return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
         except OCELValidationException as e:

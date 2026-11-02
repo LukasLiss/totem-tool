@@ -32,7 +32,8 @@ from rest_framework.response import Response
 from totem_lib.ocel import OcelEditor, OcelEditorError
 from totem_lib.ocel.editor import EXPORT_FORMATS
 
-from .models import EventLog, OcelEditorSession, Project
+from .limits import ProjectLimitReached, create_project
+from .models import EventLog, OcelEditorSession
 
 # Editor sessions that were not touched for this long are considered
 # abandoned (never saved) and are swept on the next session creation.
@@ -549,12 +550,13 @@ def save_as_project(request, session_id):
     project_name = f"{base}_{request.user.username}"[:30]
     try:
         with transaction.atomic():
-            project = Project.objects.create(name=project_name)
-            project.users.add(request.user)
+            project = create_project(project_name, request.user)
             with open(dest, "rb") as f:
                 event_log = EventLog.objects.create(
                     project=project, file=File(f, name=f"{base}.duckdb")
                 )
+    except ProjectLimitReached as e:
+        return _error(e.detail, e.status_code)
     finally:
         if os.path.exists(dest):
             os.remove(dest)

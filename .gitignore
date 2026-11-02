@@ -10,6 +10,7 @@ frontend/src/react_component/oldVariantsExplorer.tsx
 !.claude/**/*.md
 !totem_lib/evaluation/results/*.md
 totem_lib/evaluation/results/*.json
+!docs/RELEASING.md
 !docs/MODEL_ASSETS.md
 !docs/OCCN_REPLAY_FITNESS.md
 !docs/RESOURCE_AWARE_VARIANTS.md
