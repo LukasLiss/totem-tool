@@ -64,6 +64,7 @@ The Windows executable is built using Electron and includes everything needed to
 
 - [DEVELOPMENT.md](DEVELOPMENT.md) - Development setup
 - [DOCKER.md](docs/DOCKER.md) - Running TOTeM as a server in one Docker container (logins, OAuth, data volume)
+- [RELEASING.md](docs/RELEASING.md) - Publishing a new version: desktop installers, website download links and Docker images
 - [GIT_GUIDE.md](docs/GIT_GUIDE.md) - Git management guidelines
 - [MODEL_ASSETS.md](docs/MODEL_ASSETS.md) - Project model asset formats and upload behavior
 - [MODEL_EDITORS.md](docs/MODEL_EDITORS.md) - Visual editors for TOTeM models, OC causal nets and OC Petri nets (incl. JSON formats)
