@@ -2,7 +2,7 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from rest_framework.routers import DefaultRouter
-from .views import EventLogViewSet, ImageAssetViewSet, ProjectAssetViewSet, greeting, variants, DashboardViewSet, delete_user_data, NewOCDFGViewSet, OCCNViewSet, health_check, playout, playout_export_ocel, cache_stats, cache_clear, upload_limits, user_settings, ochandover, profile_matrix, event_log_table, jobs_status, job_cancel
+from .views import EventLogViewSet, ImageAssetViewSet, ProjectAssetViewSet, greeting, variants, DashboardViewSet, delete_user_data, NewOCDFGViewSet, OCDFGBlockStructureView, OCCNViewSet, health_check, playout, playout_export_ocel, cache_stats, cache_clear, upload_limits, user_settings, ochandover, profile_matrix, event_log_table, jobs_status, job_cancel
 from . import views_ocel_editor
 from . import views_process_executions
 
@@ -16,6 +16,7 @@ urlpatterns = [
     path('health-check/', health_check, name='health-check'),
     path('greeting/', greeting, name='greeting'),
     path('new-ocdfg/', NewOCDFGViewSet, name='new-ocdfg'),
+    path('ocdfg-block-structure/', OCDFGBlockStructureView, name='ocdfg-block-structure'),
     path('occn/', OCCNViewSet, name='occn'),
     # Process executions stored as event columns (see views_process_executions.py).
     # Registered before the router so the explicit paths win over `files/<pk>/`.

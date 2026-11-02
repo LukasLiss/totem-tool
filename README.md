@@ -15,6 +15,7 @@ Each linked page gives a short introduction to the feature with a screenshot.
    * [Object-Centric Causal Net (OCCN) Discovery](docs/user-guide/occn-discovery.md)
    * [Object-Centric Petri Net Discovery](docs/user-guide/oc-petri-net-discovery.md)
    * [Object-Centric Directly Follows Graph Discovery](docs/user-guide/oc-dfg-discovery.md)
+      * [OC-DFG Layout Lab](docs/user-guide/oc-dfg-layout-lab.md)
    * [Object-Centric Variant Discovery](docs/user-guide/variant-discovery.md)
    * [Object-Centric Dotted Chart Analysis](docs/user-guide/dotted-chart.md)
    * Organizational Mining

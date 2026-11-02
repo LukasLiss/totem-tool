@@ -4485,6 +4485,66 @@ class DiscoverOcpnEndpointTests(APITestCase):
         self.assertEqual(response.status_code, 200)
 
 
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT)
+class OcdfgBlockStructureEndpointTests(APITestCase):
+    """GET /api/ocdfg-block-structure/ — inductive-miner trees per object type."""
+
+    def setUp(self):
+        cache.clear()
+        views._OCEL_DB_REGISTRY.clear()
+        views._OCEL_OBJECT_TYPES_REGISTRY.clear()
+
+        self.user = User.objects.create_user("tester", password="pw")
+        self.project = Project.objects.create(name="test-project")
+        self.project.users.add(self.user)
+
+        filename = f"block-structure-{self._testMethodName}.duckdb"
+        _write_paper_example_duckdb(f"{_MEDIA_ROOT}/{filename}")
+        self.log = EventLog.objects.create(project=self.project, file=filename)
+
+        self.client.force_authenticate(self.user)
+
+    def test_returns_a_tree_per_object_type(self):
+        response = self.client.get("/api/ocdfg-block-structure/", {"file_id": self.log.pk})
+        self.assertEqual(response.status_code, 200)
+        trees = response.json()["trees"]
+        self.assertEqual(sorted(trees), ["item", "order"])
+        self.assertEqual(trees["order"]["operator"], "sequence")
+        self.assertEqual(
+            [c["label"] for c in trees["order"]["children"]],
+            ["place order", "complete order"],
+        )
+
+    def test_object_types_param(self):
+        response = self.client.get(
+            "/api/ocdfg-block-structure/",
+            {"file_id": self.log.pk, "object_types": "item"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list(response.json()["trees"]), ["item"])
+
+    def test_requires_file_id(self):
+        response = self.client.get("/api/ocdfg-block-structure/")
+        self.assertEqual(response.status_code, 400)
+
+    def test_requires_project_membership(self):
+        outsider = User.objects.create_user("outsider", password="pw")
+        self.client.force_authenticate(outsider)
+        response = self.client.get("/api/ocdfg-block-structure/", {"file_id": self.log.pk})
+        self.assertEqual(response.status_code, 404)
+
+    def test_non_numeric_file_id_is_404(self):
+        response = self.client.get("/api/ocdfg-block-structure/", {"file_id": "abc"})
+        self.assertEqual(response.status_code, 404)
+
+    def test_invalid_timeout_falls_back_to_default(self):
+        response = self.client.get(
+            "/api/ocdfg-block-structure/",
+            {"file_id": self.log.pk, "timeout_s": "nan"},
+        )
+        self.assertEqual(response.status_code, 200)
+
+
 # ---------------------------------------------------------------------------
 # DuckDB concurrency model tests
 # ---------------------------------------------------------------------------

@@ -100,6 +100,7 @@ Subclasses (each adds component-specific config fields):
 | `GET /api/greeting/` | `greeting` | `IsAuthenticated` |
 | `GET /api/ocdfg/?file_id=` | `OCDFGViewSet` | `IsAuthenticated` |
 | `GET /api/new-ocdfg/?file_id=` | `NewOCDFGViewSet` | `IsAuthenticated` |
+| `GET /api/ocdfg-block-structure/?file_id=` | `OCDFGBlockStructureView` | `IsAuthenticated` — inductive-miner process tree per object type (OC-DFG Layout Lab) |
 | `GET /api/occn/?file_id=` | `OCCNViewSet` | `IsAuthenticated` |
 | `GET /api/variants/?file_id=` | `variants` | `IsAuthenticated` |
 | `GET /api/files/<pk>/event_columns/` | `views_process_executions.event_columns` | `IsAuthenticated` |
@@ -195,6 +196,7 @@ with _with_ocel_db(user_file) as db:
 - `occn_conformance` / `occn_replay_unit_detail` additionally accept `replay_unit_strategy="stored_column"` + `execution_column`, and `restrict_to_model_object_types` (detail needs `asset_id` then).
 - `ocdfg` → `{"dfg": <networkx node_link_data serialized with edges=\"links\">, "all_nodes": [...], optional "filter_error", "trace_variants"}`
 - `new-ocdfg` → `{"dfg": {...}, "all_nodes": [...], "variant_counts": {...}}`
+- `ocdfg-block-structure` → `{"trees": {object_type: {"operator": "sequence"|"xor"|"parallel"|"loop"|null, "label", "children": [...]}}}` (from `totem_lib.discover_process_trees_db`; optional `object_types`, `timeout_s` 1..300 → 408 `code: "timeout"`; cached per file/types/filter)
 - `occn` → serialized OCCN dict from `totem_lib.serialize_occn`
 - `statistics` → `{"num_events", "num_unique_activities", "num_objects", "num_object_types", "earliest_timestamp", "newest_timestamp"}`
 - `playout` → camelCase `PlayoutResult` + `effectiveActivityLimits`: `{"variants": [{"events": [{"activity", "visible", "objects": {type: [ids]}}], "objectCounts": {type: n}}], "variantCount", "completedRuns", "statesExplored", "elapsedMs", "exhaustive", "timedOut", "stateCapHit", "approximateDedup", "warnings": [...], "effectiveActivityLimits": {key: n}}`. Hitting the timeout or state cap is a normal **200** (count is then a lower bound, communicated via the flags), only invalid input is a 400. For OCCNs, `START_<type>` / `END_<type>` pseudo-activities are auto-limited to the object count of that type (see `effectiveActivityLimits` in the response). OCPN silent transitions use budget key `τ:<transition id>`.

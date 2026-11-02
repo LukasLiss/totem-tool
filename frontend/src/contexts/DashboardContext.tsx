@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 export type AnalysisComponent =
   | "processArea"
   | "ocdfg"
+  | "ocdfgLayoutLab"
   | "variants"
   | "dottedChart"
   | "occn"

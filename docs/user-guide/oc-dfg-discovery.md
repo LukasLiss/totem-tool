@@ -15,6 +15,8 @@ object-centric process map and a good starting point for exploring a log.
 - **Dashboards**: add the *Object-Centric DFG (Arc Weight)* or *Object-Centric DFG (Variants)* widget.
 - A small OC-DFG of a single process area is also shown when you expand an area in the
   [Process Area Visualizer](process-area-discovery.md).
+- **Analysis → OC-DFG Layout Lab** draws the same graph with interchangeable layout algorithms
+  and styles, see [OC-DFG Layout Lab](oc-dfg-layout-lab.md).
 
 ## Controls
 

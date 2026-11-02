@@ -154,6 +154,7 @@ const FILE_ACTIONS: Record<string, string> = {
 
 const ROOT_ENDPOINTS: Record<string, string> = {
   "new-ocdfg": "Directly-follows graph",
+  "ocdfg-block-structure": "Inductive miner (block structure)",
   occn: "Causal net",
   variants: "Variants",
   handover: "Handover of work",

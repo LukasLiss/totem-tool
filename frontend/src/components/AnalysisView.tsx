@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/card";
 import ProcessArea from "@/react_component/ProcessArea";
 import NewOCDFGVariantsVisualizer from "@/react_component/NewOCDFGVariantsVisualizer";
+import OcdfgLayoutLab from "@/react_component/ocdfg-layout-lab/OcdfgLayoutLab";
 import OCCNVisualizer from "@/react_component/OCCNVisualizer";
 import VariantsExplorer from "@/react_component/VariantsExplorer";
 import DottedChart from "@/react_component/DottedChart";
@@ -71,6 +72,22 @@ export function AnalysisView() {
                 </ReactFlowProvider>
               </CardContent>
             </Card>
+          </div>
+        );
+
+      case "ocdfgLayoutLab":
+        return (
+          <div className="w-full max-w-[1800px]">
+            <div className="mb-2 flex items-center gap-2">
+              <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={toggleFilter} />
+              <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setLocalFilterParams} />
+            </div>
+            <OcdfgLayoutLab
+              fileId={selectedFile?.id}
+              fileName={selectedFile?.file?.split("/").pop()}
+              filterEnabled={filterEnabled}
+              localFilterParams={localFilterParams}
+            />
           </div>
         );
 
