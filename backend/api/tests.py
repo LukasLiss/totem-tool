@@ -13,7 +13,7 @@ from django.contrib.auth.models import User
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 from rest_framework import status
 from rest_framework.test import APIClient, APIRequestFactory, force_authenticate
 from totem_lib import (
@@ -42,6 +42,7 @@ from totem_lib.process_areas import (
 )
 
 from .cache_utils import RESULTS_CACHE, get_cached_result, make_cache_key
+from .limits import ProjectLimitReached, create_project
 from .lru_filecache import LRUFileBasedCache
 from .models import (
     Dashboard,
@@ -6104,3 +6105,72 @@ class SampleProjectRichTextTests(SimpleTestCase):
                 continue
             with self.subTest(text=fields["text"][:30]):
                 self.assertEqual(dead & set(fields), set())
+
+
+class HostingLimitsTests(TestCase):
+    """TOTEM_MAX_UPLOAD_MB and TOTEM_MAX_PROJECTS_PER_USER."""
+
+    def setUp(self):
+        self.user = User.objects.create_user("limited", password="pw")
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+        self.media = tempfile.TemporaryDirectory()
+        self.addCleanup(self.media.cleanup)
+        override = override_settings(MEDIA_ROOT=self.media.name)
+        override.enable()
+        self.addCleanup(override.disable)
+
+    def _own_project(self):
+        project = Project.objects.create(name="existing")
+        project.users.add(self.user)
+        return project
+
+    def _upload(self, size=10):
+        upload = SimpleUploadedFile("log.duckdb", b"x" * size)
+        with patch("api.views.event_log._build_ocel_db_from_path"), patch(
+            "api.views.event_log._object_types_with_counts", return_value=[]
+        ), patch("api.views.event_log._log_time_window", return_value=None):
+            return self.client.post("/api/files/", {"file": upload}, format="multipart")
+
+    def test_no_limits_by_default(self):
+        self._own_project()
+        self.assertEqual(self._upload(2 * 1024 * 1024).status_code, 201)
+
+    @override_settings(MAX_UPLOAD_BYTES=1024 * 1024)
+    def test_file_over_the_size_limit_is_rejected(self):
+        response = self._upload(1024 * 1024 + 1)
+        self.assertEqual(response.status_code, 413)
+        self.assertIn("1 MB", response.data["detail"])
+        self.assertFalse(Project.objects.filter(users=self.user).exists())
+
+    @override_settings(MAX_UPLOAD_BYTES=1024 * 1024)
+    def test_file_at_the_size_limit_is_accepted(self):
+        self.assertEqual(self._upload(1024 * 1024).status_code, 201)
+
+    @override_settings(MAX_PROJECTS_PER_USER=1)
+    def test_upload_at_the_project_limit_is_rejected(self):
+        self._own_project()
+        response = self._upload()
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("limit of 1 project.", response.data["detail"])
+        self.assertEqual(Project.objects.filter(users=self.user).count(), 1)
+
+    @override_settings(MAX_PROJECTS_PER_USER=1)
+    def test_project_limit_counts_per_user(self):
+        other = User.objects.create_user("other", password="pw")
+        Project.objects.create(name="theirs").users.add(other)
+        self.assertEqual(self._upload().status_code, 201)
+
+    @override_settings(MAX_PROJECTS_PER_USER=1)
+    def test_create_project_enforces_the_limit(self):
+        self._own_project()
+        with self.assertRaises(ProjectLimitReached):
+            create_project("another", self.user)
+
+    @override_settings(MAX_UPLOAD_BYTES=2097152, MAX_PROJECTS_PER_USER=3)
+    def test_upload_limits_endpoint(self):
+        self._own_project()
+        self.assertEqual(
+            self.client.get("/api/upload-limits/").data,
+            {"max_upload_bytes": 2097152, "max_projects_per_user": 3, "project_count": 1},
+        )

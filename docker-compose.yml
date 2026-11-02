@@ -20,6 +20,9 @@ services:
       GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
       GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
       GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      # Optional limits for a shared server; empty means no limit.
+      TOTEM_MAX_UPLOAD_MB: ${TOTEM_MAX_UPLOAD_MB:-}
+      TOTEM_MAX_PROJECTS_PER_USER: ${TOTEM_MAX_PROJECTS_PER_USER:-}
     volumes:
       - totem-data:/data
     restart: unless-stopped

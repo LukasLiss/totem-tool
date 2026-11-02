@@ -321,6 +321,29 @@ SIMPLE_JWT = {
 MEDIA_ROOT = DATA_DIR / "user_files"
 MEDIA_URL = "/files/"
 
+
+def _optional_limit(name):
+    """A positive integer from the environment, or None (no limit) if unset."""
+    value = os.environ.get(name, '').strip()
+    if not value:
+        return None
+    if not value.isdigit() or int(value) == 0:
+        from django.core.exceptions import ImproperlyConfigured
+        raise ImproperlyConfigured(f'{name} must be a positive whole number, got {value!r}.')
+    return int(value)
+
+
+# Limits for hosted installs (see docs/DOCKER.md). Unset means no limit.
+_max_upload_mb = _optional_limit('TOTEM_MAX_UPLOAD_MB')
+MAX_UPLOAD_BYTES = _max_upload_mb * 1024 * 1024 if _max_upload_mb else None
+MAX_PROJECTS_PER_USER = _optional_limit('TOTEM_MAX_PROJECTS_PER_USER')
+
+FILE_UPLOAD_HANDLERS = [
+    'api.limits.MaxSizeUploadHandler',
+    'django.core.files.uploadhandler.MemoryFileUploadHandler',
+    'django.core.files.uploadhandler.TemporaryFileUploadHandler',
+]
+
 # ---------------------------------------------------------------------------
 # Request result cache (filesystem-backed, size-capped)  — Epic #71
 # ---------------------------------------------------------------------------
