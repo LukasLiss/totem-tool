@@ -14,6 +14,7 @@ import datetime as dt
 import json
 import random
 from collections import defaultdict
+from itertools import pairwise
 
 import networkx as nx
 import numpy as np
@@ -23,7 +24,10 @@ from totem_lib.simulation.simulation import (
     OCProcessAreaSimulationConfiguration,
     OCProcessAreaSimulationModel,
     VariantPlayoutStrategy,
+    _available_queues,
     _CalendarGate,
+    _ExternalLoadGate,
+    _next_assignable_hour,
     _next_resource_free,
     _release_elapsed_cooldowns,
     generate_arrival_schedule,
@@ -106,6 +110,7 @@ def _build_model(
     type_calendars=None,
     resource_calendars=None,
     shift_patterns=None,
+    pa_capacity_shares=None,
 ):
     return OCProcessAreaSimulationModel(
         playout_strategy=VariantPlayoutStrategy(
@@ -121,6 +126,7 @@ def _build_model(
         type_calendars=type_calendars,
         resource_calendars=resource_calendars,
         shift_patterns=shift_patterns,
+        pa_capacity_shares=pa_capacity_shares,
     )
 
 
@@ -752,28 +758,42 @@ def _office_hours(start_hour=9, end_hour=17):
     }
 
 
-def test_gate_next_presence_hour_skips_to_the_next_shift():
+def test_next_assignable_hour_skips_to_the_next_shift():
     """An absent Worker at Monday 18:00 next turns present Tuesday 09:00; the
     lookahead jumps straight there instead of waking every hour overnight."""
     gate = _CalendarGate(_office_hours(), {})
+    no_load = _ExternalLoadGate({})
     monday_18 = int(dt.datetime(2024, 1, 1, 18, 0, tzinfo=UTC).timestamp()) // HOUR
     tuesday_09 = int(dt.datetime(2024, 1, 2, 9, 0, tzinfo=UTC).timestamp()) // HOUR
     candidates = [("Worker_1", "Worker")]
-    assert gate.next_presence_hour(candidates, monday_18, monday_18 + 48) == tuesday_09
-    assert gate.next_presence_hour(candidates, monday_18, monday_18 + 10) is None
-
-
-def test_gate_next_presence_hour_ignores_resources_already_present():
-    """A Worker that is present now cannot unblock anything by staying present."""
-    gate = _CalendarGate(_office_hours(), {})
-    monday_10 = int(START.timestamp()) // HOUR
     assert (
-        gate.next_presence_hour([("Worker_1", "Worker")], monday_10, monday_10 + 48)
+        _next_assignable_hour(gate, no_load, candidates, monday_18, monday_18 + 48)
+        == tuesday_09
+    )
+    assert (
+        _next_assignable_hour(gate, no_load, candidates, monday_18, monday_18 + 10)
+        is None
+    )
+
+
+def test_next_assignable_hour_ignores_resources_already_present():
+    """A Worker that is present now cannot unblock anything by staying present."""
+    no_load = _ExternalLoadGate({})
+    monday_10 = int(START.timestamp()) // HOUR
+    candidates = [("Worker_1", "Worker")]
+    assert (
+        _next_assignable_hour(
+            _CalendarGate(_office_hours(), {}),
+            no_load,
+            candidates,
+            monday_10,
+            monday_10 + 48,
+        )
         is None
     )
     assert (
-        _CalendarGate({}, {}).next_presence_hour(
-            [("Worker_1", "Worker")], monday_10, monday_10 + 48
+        _next_assignable_hour(
+            _CalendarGate({}, {}), no_load, candidates, monday_10, monday_10 + 48
         )
         is None
     )
@@ -792,3 +812,190 @@ def test_calendar_blocked_activity_fires_at_shift_start():
     noon = int(dt.datetime(2024, 1, 1, 12, 0, tzinfo=UTC).timestamp())
     assert spawned > 0 and finished == spawned
     assert set(ocel.events["_timestampUnix"].to_list()) == {noon}
+
+
+# --- external load: hours reserved for work outside the process area ---
+
+
+def _fixed_load_gate(bits, share=0.5):
+    """An external-load gate for Worker whose bits are preset: ``bits`` maps
+    ``(rid, absolute hour)`` to free (True) or reserved (False)."""
+    gate = _ExternalLoadGate({"Worker": share})
+    gate._free.update(bits)
+    return gate
+
+
+def test_external_load_gate_hour_decision_is_stable():
+    """A fractional share is drawn once per (resource, hour): repeated checks
+    never re-flip within the hour."""
+    random.seed(7)
+    gate = _ExternalLoadGate({"Worker": 0.5})
+    hour = int(START.timestamp()) // HOUR
+    first = gate.is_free("Worker_1", "Worker", hour)
+    assert all(gate.is_free("Worker_1", "Worker", hour) == first for _ in range(50))
+
+
+def test_external_load_gate_without_load_draws_nothing():
+    """A share of 1 (or no share) is no external load: the gate is inactive,
+    every resource is free, and the random stream is left untouched so runs stay
+    identical to runs without the gate."""
+    hour = int(START.timestamp()) // HOUR
+    for shares in ({}, {"Worker": 1.0}):
+        gate = _ExternalLoadGate(shares)
+        state = random.getstate()
+        assert not gate.active
+        assert gate.is_free("Worker_1", "Worker", hour)
+        assert random.getstate() == state
+
+
+def test_reserved_resource_is_not_assignable():
+    """A free Worker reserved for external work this hour is filtered out of the
+    queue; a free, unreserved one stays."""
+    hour = int(START.timestamp()) // HOUR
+    gate = _fixed_load_gate({("Worker_1", hour): False, ("Worker_2", hour): True})
+    queues = {"Worker": ["Worker_1", "Worker_2"]}
+    available = _available_queues(
+        _CalendarGate({}, {}), gate, queues, {"Worker": 1}, hour
+    )
+    assert available == {"Worker": ["Worker_2"]}
+
+
+def test_external_load_cannot_make_an_absent_resource_assignable():
+    """Free of external work but off shift: the calendar still blocks it."""
+    monday_18 = int(dt.datetime(2024, 1, 1, 18, 0, tzinfo=UTC).timestamp()) // HOUR
+    gate = _fixed_load_gate({("Worker_1", monday_18): True})
+    available = _available_queues(
+        _CalendarGate(_office_hours(), {}),
+        gate,
+        {"Worker": ["Worker_1"]},
+        {"Worker": 1},
+        monday_18,
+    )
+    assert available == {"Worker": []}
+
+
+def test_next_assignable_hour_waits_for_the_reservation_to_end():
+    """A Worker reserved now and in the next hour is first assignable two hours
+    later; the lookahead reads the same preset bits the allocation will."""
+    hour = int(START.timestamp()) // HOUR
+    gate = _fixed_load_gate(
+        {
+            ("Worker_1", hour): False,
+            ("Worker_1", hour + 1): False,
+            ("Worker_1", hour + 2): True,
+        }
+    )
+    candidates = [("Worker_1", "Worker")]
+    assert (
+        _next_assignable_hour(_CalendarGate({}, {}), gate, candidates, hour, hour + 48)
+        == hour + 2
+    )
+
+
+def test_next_assignable_hour_skips_a_type_that_is_never_free():
+    """A share of 0 reserves every hour, so no lookahead can unblock it."""
+    hour = int(START.timestamp()) // HOUR
+    gate = _ExternalLoadGate({"Worker": 0.0})
+    candidates = [("Worker_1", "Worker")]
+    assert (
+        _next_assignable_hour(_CalendarGate({}, {}), gate, candidates, hour, hour + 48)
+        is None
+    )
+
+
+def test_external_load_off_matches_no_load():
+    """A share of 1 is the old behaviour: the same seed gives the same log."""
+    variant = _single("Load")
+    needed = _needs({"Load": {"Worker": 1}})
+    cooldowns = {"Load": {"Worker": _cd(1800)}}
+    arrivals = _flat_arrivals(variant, 5.0)
+
+    def events(shares):
+        model = _build_model(
+            variant,
+            needed=needed,
+            arrivals=arrivals,
+            cooldowns=cooldowns,
+            pa_capacity_shares=shares,
+        )
+        ocel, _, _ = _run(model, pool={"Worker": 1}, duration_s=12 * HOUR)
+        return _records(ocel)
+
+    baseline = events(None)
+    assert baseline
+    assert events({"Worker": 1.0}) == baseline
+
+
+def test_full_external_load_blocks_activity():
+    """A share of 0 reserves the Worker in every hour: arrivals happen, nothing
+    fires, and the run still ends at the horizon."""
+    variant = _single("Load")
+    model = _build_model(
+        variant,
+        needed=_needs({"Load": {"Worker": 1}}),
+        pa_capacity_shares={"Worker": 0.0},
+    )
+    ocel, finished, spawned = _run(model, pool={"Worker": 2}, duration_s=24 * HOUR)
+    assert spawned > 0
+    assert finished == 0
+    assert ocel.events.height == 0
+
+
+def test_external_load_reduces_throughput():
+    """Under a permanent backlog a lower share leaves the Worker fewer hours for
+    the process area, so fewer events fire."""
+    variant = _single("Load")
+
+    def fired(share):
+        model = _build_model(
+            variant,
+            needed=_needs({"Load": {"Worker": 1}}),
+            arrivals=_flat_arrivals(variant, 20.0),
+            cooldowns={"Load": {"Worker": _cd(1800)}},
+            pa_capacity_shares={"Worker": share},
+        )
+        ocel, _, _ = _run(model, pool={"Worker": 1}, duration_s=24 * HOUR)
+        return ocel.events.height
+
+    assert fired(0.3) < fired(1.0)
+
+
+def test_external_load_does_not_interrupt_a_running_cooldown():
+    """The reservation only blocks the start of a new assignment. With a
+    permanent backlog the single Worker is reused exactly when its 90 min
+    cooldown ends, or, if that hour is reserved, at the start of the next free
+    hour. A cooldown paused by external hours would end off the hour."""
+    variant = _single("Load")
+    cooldown_s = 90 * 60
+    model = _build_model(
+        variant,
+        needed=_needs({"Load": {"Worker": 1}}),
+        arrivals=_flat_arrivals(variant, 20.0),
+        cooldowns={"Load": {"Worker": _cd(cooldown_s)}},
+        pa_capacity_shares={"Worker": 0.5},
+    )
+    ocel, _, _ = _run(model, pool={"Worker": 1}, duration_s=24 * HOUR)
+    times = sorted(ocel.events["_timestampUnix"].to_list())
+    gaps = list(pairwise(times))
+    assert gaps
+    assert all(t2 - t1 >= cooldown_s for t1, t2 in gaps)
+    assert all(t2 - t1 == cooldown_s or t2 % HOUR == 0 for t1, t2 in gaps)
+    assert any(t2 - t1 > cooldown_s for t1, t2 in gaps)
+
+
+def test_external_load_is_reproducible_with_a_seed():
+    """The reservations are drawn from the seeded random stream."""
+    variant = _single("Load")
+
+    def events():
+        model = _build_model(
+            variant,
+            needed=_needs({"Load": {"Worker": 1}}),
+            arrivals=_flat_arrivals(variant, 5.0),
+            cooldowns={"Load": {"Worker": _cd(1800)}},
+            pa_capacity_shares={"Worker": 0.5},
+        )
+        ocel, _, _ = _run(model, pool={"Worker": 2}, duration_s=12 * HOUR)
+        return _records(ocel)
+
+    assert events() == events()

@@ -31,6 +31,9 @@ from totem_lib.simulation.utils.resource_cooldown import (
     resource_cooldown_distribution,
     sample_cooldown,
 )
+from totem_lib.simulation.utils.resource_external_load import (
+    discover_pa_capacity_shares,
+)
 from totem_lib.simulation.utils.state_space import StateSpaceModel
 from totem_lib.variants.ocvariants import find_object_variants_connected_component
 from totem_lib.variants.state_space_executions import find_object_structure_variants
@@ -376,38 +379,6 @@ class _CalendarGate:
             return True
         return self._present(rid, res_type, hour_index, timestamp_s)
 
-    def next_presence_hour(self, candidates, hour_index, last_hour):
-        """First clock hour after ``hour_index`` in which a candidate that is
-        absent in ``hour_index`` is present, or None if none is up to ``last_hour``.
-
-        The calendar can only unblock an instance when a resource joins the
-        present set; hours in which presence merely persists or shrinks cannot.
-        Looking ahead draws the same cached bits the allocation reads later, so
-        the realized schedule is unchanged.
-
-        Args:
-            candidates: ``(rid, res_type)`` pairs of the free resources the
-                blocked instance could use.
-            hour_index: Absolute clock hour of the failed allocation.
-            last_hour: Last absolute clock hour of the horizon.
-        """
-        if not self.active:
-            return None
-        absent = [
-            (rid, rtype)
-            for rid, rtype in candidates
-            if self._calendar(rid, rtype)
-            and not self._present(rid, rtype, hour_index, hour_index * 3600)
-        ]
-        if not absent:
-            return None
-        for hour in range(hour_index + 1, last_hour + 1):
-            if any(
-                self._present(rid, rtype, hour, hour * 3600) for rid, rtype in absent
-            ):
-                return hour
-        return None
-
     def cooldown_end(self, rid, res_type, start_s, work_seconds) -> int:
         """Absolute second at which a cooldown of ``work_seconds`` finishes.
 
@@ -433,6 +404,49 @@ class _CalendarGate:
             cur = hour_end
         # Fallback for a (near-)zero calendar: add the remainder as wall clock.
         return int(round(cur + remaining))
+
+
+class _ExternalLoadGate:
+    """Reserves resource hours for work outside the process area.
+
+    The process area gets the share ``s`` of a resource type's capacity
+    (``pa_capacity_shares``); the remaining hours are reserved for external work
+    that is not simulated. For each ``(resource, absolute clock hour)`` the
+    resource is free for the process area with probability ``s``, drawn **once**
+    and cached like the calendar gate's presence bits.
+
+    The reservation is non-preemptive: it only blocks the *start* of a new
+    process-area assignment. A running cooldown is not interrupted, so its
+    burn-down stays governed by the calendar alone. External hours that fall into
+    a running cooldown are therefore not taken, and the realised capacity loss
+    can be smaller than ``1 - s``.
+    """
+
+    def __init__(self, capacity_shares):
+        # Types with s >= 1 carry no external load and are never drawn for.
+        self.shares = {
+            rtype: max(0.0, float(share))
+            for rtype, share in (capacity_shares or {}).items()
+            if share < 1.0
+        }
+        self.active = bool(self.shares)
+        self._free: dict[tuple[str, int], bool] = {}
+
+    def is_free(self, rid, res_type, hour_index) -> bool:
+        """Whether the resource may start process-area work in this clock hour."""
+        share = self.shares.get(res_type)
+        if share is None:
+            return True
+        key = (rid, hour_index)
+        cached = self._free.get(key)
+        if cached is None:
+            cached = share > 0.0 and random.random() < share
+            self._free[key] = cached
+        return cached
+
+    def never_free(self, res_type) -> bool:
+        """Whether the type is reserved for external work in every hour."""
+        return self.shares.get(res_type, 1.0) <= 0.0
 
 
 def _select_by_strategy(available_rids, strategy):
@@ -757,6 +771,7 @@ class OCProcessAreaSimulationModel:
     - Resource Constraints: Constraints captured from the OCEL or coming from user input, that represent extra knowledge about the resources used by different events
     - Resource Allocation Strategy: A strategy for allocating resources to events during the simulation, based on the observed behavior in the OCEL or from user input.
     - Resource Cooldown Distribution: A distribution capturing the cooldown times of resources after being used in specific events.
+    - PA Capacity Shares: Per resource type, the share of its capacity available to the process area; the rest is reserved for external work.
     """
 
     def __init__(
@@ -774,6 +789,7 @@ class OCProcessAreaSimulationModel:
         shift_patterns=None,
         fallback_constraints=None,
         filtered_ocel=None,
+        pa_capacity_shares=None,
     ):
         self.playout_strategy = playout_strategy
         self.resource_constraints = resource_constraints
@@ -789,6 +805,8 @@ class OCProcessAreaSimulationModel:
         self.shift_patterns = shift_patterns or {}
         # The process-area-filtered source log the model was discovered from.
         self.filtered_ocel = filtered_ocel
+        # {resource_type: s}; a missing type has no external load (s = 1).
+        self.pa_capacity_shares = pa_capacity_shares or {}
 
     def run(
         self,
@@ -858,6 +876,11 @@ class OCProcessAreaSimulationModel:
             )
         )
 
+        # Capacity share left for the process area (needs the unfiltered log)
+        pa_capacity_shares = discover_pa_capacity_shares(
+            ocel, resource_types, process_area.activities
+        )
+
         # Filter event log on Process Area
         filtered_ocel = ocel.filter_by_process_area(process_area)
 
@@ -912,6 +935,7 @@ class OCProcessAreaSimulationModel:
             shift_patterns=shift_patterns,
             fallback_constraints=fallback_constraints,
             filtered_ocel=filtered_ocel,
+            pa_capacity_shares=pa_capacity_shares,
         )
 
     @classmethod
@@ -923,6 +947,11 @@ class OCProcessAreaSimulationModel:
             cls.discover_resource_availability(
                 ocel, resource_types, process_area.activities
             )
+        )
+
+        # Capacity share left for the process area (needs the unfiltered log)
+        pa_capacity_shares = discover_pa_capacity_shares(
+            ocel, resource_types, process_area.activities
         )
 
         # Filter event log on Process Area
@@ -994,6 +1023,7 @@ class OCProcessAreaSimulationModel:
             shift_patterns=shift_patterns,
             fallback_constraints=fallback_constraints,
             filtered_ocel=filtered_ocel,
+            pa_capacity_shares=pa_capacity_shares,
         )
 
 
@@ -1164,20 +1194,33 @@ def _sample_needed_resources(activity_res_dist, resource_pool_expanded):
     return needed
 
 
-def _calendar_filtered_queues(
-    calendar_gate, resource_queues, needed_res_types, hour_index, hour_ts
-):
-    """Restrict the free queues to resources present this hour (calendar gating).
+def _is_assignable(calendar_gate, external_load_gate, rid, res_type, hour_index):
+    """Whether a free resource may start process-area work in a clock hour:
+    present by its calendar and not reserved for external work."""
+    return calendar_gate.is_available(
+        rid, res_type, hour_index, hour_index * 3600
+    ) and external_load_gate.is_free(rid, res_type, hour_index)
 
-    Returns the full queues unchanged when no calendars are active.
+
+def _available_queues(
+    calendar_gate,
+    external_load_gate,
+    resource_queues,
+    needed_res_types,
+    hour_index,
+):
+    """Restrict the free queues to resources assignable this hour (calendar and
+    external-load gating).
+
+    Returns the full queues unchanged when neither gate is active.
     """
-    if not calendar_gate.active:
+    if not (calendar_gate.active or external_load_gate.active):
         return resource_queues
     return {
         t: [
             rid
             for rid in resource_queues.get(t, ())
-            if calendar_gate.is_available(rid, t, hour_index, hour_ts)
+            if _is_assignable(calendar_gate, external_load_gate, rid, t, hour_index)
         ]
         for t in needed_res_types
     }
@@ -1228,10 +1271,52 @@ def _record_instance_firing(inst, activity, allocated_rids, resource_id_type_map
             act_resources.setdefault(rtype, []).append(rid)
 
 
+def _next_assignable_hour(
+    calendar_gate, external_load_gate, candidates, hour_index, last_hour
+):
+    """First clock hour after ``hour_index`` in which a candidate that is not
+    assignable in ``hour_index`` (absent or reserved for external work) becomes
+    assignable, or None if none does up to ``last_hour``.
+
+    The gates can only unblock an instance when a resource joins the assignable
+    set; hours in which assignability merely persists or shrinks cannot. Looking
+    ahead draws the same cached bits the allocation reads later, so the realized
+    schedule is unchanged.
+
+    Args:
+        calendar_gate: The run's ``_CalendarGate``.
+        external_load_gate: The run's ``_ExternalLoadGate``.
+        candidates: ``(rid, res_type)`` pairs of the free resources the blocked
+            instance could use.
+        hour_index: Absolute clock hour of the failed allocation.
+        last_hour: Last absolute clock hour of the horizon.
+    """
+    if not (calendar_gate.active or external_load_gate.active):
+        return None
+    unassignable = [
+        (rid, rtype)
+        for rid, rtype in candidates
+        if not external_load_gate.never_free(rtype)
+        and not _is_assignable(
+            calendar_gate, external_load_gate, rid, rtype, hour_index
+        )
+    ]
+    if not unassignable:
+        return None
+    for hour in range(hour_index + 1, last_hour + 1):
+        if any(
+            _is_assignable(calendar_gate, external_load_gate, rid, rtype, hour)
+            for rid, rtype in unassignable
+        ):
+            return hour
+    return None
+
+
 def _resource_blocked_wake(
     now,
     blocked_resources,
     calendar_gate,
+    external_load_gate,
     needed_res_types,
     resource_queues,
     resource_id_type_map,
@@ -1242,8 +1327,8 @@ def _resource_blocked_wake(
     """Earliest time a resource-blocked instance can make progress.
 
     Only a release of a needed type or a free resource of a needed type turning
-    present can unblock it. If neither happens before the horizon, it sleeps
-    until then.
+    assignable (present and not reserved for external work) can unblock it. If
+    neither happens before the horizon, it sleeps until then.
     """
     wake = _next_resource_free(
         blocked_resources, now, needed_res_types, resource_id_type_map
@@ -1253,12 +1338,16 @@ def _resource_blocked_wake(
         for res_type in needed_res_types
         for rid in resource_queues.get(res_type, ())
     ]
-    presence_hour = calendar_gate.next_presence_hour(
-        candidates, hour_index, (base_ts + sim_duration_s) // 3600
+    assignable_hour = _next_assignable_hour(
+        calendar_gate,
+        external_load_gate,
+        candidates,
+        hour_index,
+        (base_ts + sim_duration_s) // 3600,
     )
-    if presence_hour is not None:
-        presence_wake = presence_hour * 3600 - base_ts
-        wake = presence_wake if wake is None else min(wake, presence_wake)
+    if assignable_hour is not None:
+        assignable_wake = assignable_hour * 3600 - base_ts
+        wake = assignable_wake if wake is None else min(wake, assignable_wake)
     return sim_duration_s if wake is None else wake
 
 
@@ -1436,6 +1525,7 @@ class VariantPlayoutStrategy:
             _expand_resource_pool(resource_pool)
         )
         calendar_gate = _build_calendar_gate(simulation_model, resource_pool_expanded)
+        external_load_gate = _ExternalLoadGate(simulation_model.pa_capacity_shares)
 
         blocked_resources = set()  # Resources currently blocked (on cooldown)
         active_executions = []
@@ -1538,14 +1628,15 @@ class VariantPlayoutStrategy:
                         )
                         needed_res_cache[node] = needed_res_types
 
-                    # Restrict to resources available this hour (calendar gating);
-                    # falls back to the full free pool when no calendars are set.
-                    available_queues = _calendar_filtered_queues(
+                    # Restrict to resources assignable this hour (calendar and
+                    # external-load gating); falls back to the full free pool when
+                    # neither gate is active.
+                    available_queues = _available_queues(
                         calendar_gate,
+                        external_load_gate,
                         resource_queues,
                         needed_res_types,
                         hour_index,
-                        hour_ts,
                     )
 
                     # Cheap availability pre-check: skip the full constraint
@@ -1655,6 +1746,7 @@ class VariantPlayoutStrategy:
                                 now,
                                 blocked_resources,
                                 calendar_gate,
+                                external_load_gate,
                                 blocked_res_types,
                                 resource_queues,
                                 resource_id_type_map,
@@ -1791,6 +1883,7 @@ class StateSpacePlayoutStrategy:
             _expand_resource_pool(resource_pool)
         )
         calendar_gate = _build_calendar_gate(simulation_model, resource_pool_expanded)
+        external_load_gate = _ExternalLoadGate(simulation_model.pa_capacity_shares)
 
         # Per-structure violation budget: a structure's expected activity
         # occurrences (Monte-Carlo) × its resource demand. Mirrors the variant
@@ -1922,12 +2015,12 @@ class StateSpacePlayoutStrategy:
                         variant_res_dist.get(activity, {}), resource_pool_expanded
                     )
                     inst["pending_needed"] = needed_res_types
-                available_queues = _calendar_filtered_queues(
+                available_queues = _available_queues(
                     calendar_gate,
+                    external_load_gate,
                     resource_queues,
                     needed_res_types,
                     hour_index,
-                    hour_ts,
                 )
 
                 resource_blocked = any(
@@ -1957,6 +2050,7 @@ class StateSpacePlayoutStrategy:
                         now,
                         blocked_resources,
                         calendar_gate,
+                        external_load_gate,
                         needed_res_types,
                         resource_queues,
                         resource_id_type_map,

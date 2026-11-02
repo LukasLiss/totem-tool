@@ -40,6 +40,9 @@ export type SimulationOverrides = {
   // the mined shift patterns for that type (every instance follows it).
   type_calendars?: Record<string, CalendarProbability>;
   resource_calendars?: Record<string, CalendarProbability>;
+  // Share of each resource type's capacity left for the process area; 1.0
+  // where the user switched external load off.
+  pa_capacity_shares?: Record<string, number>;
 };
 
 export type SimulationConfig = {
@@ -203,6 +206,9 @@ export type SimulationDetailsResponse = {
   type_calendars: Record<string, CalendarProbability>;
   shift_patterns?: Record<string, ShiftPattern[]>;
   resource_calendars: Record<string, CalendarProbability>;
+  // Discovered process-area capacity share per resource type (event share
+  // inside the area). A type without observed events is absent.
+  pa_capacity_shares?: Record<string, number>;
   log_start_unix: number | null;
   log_duration_days: number | null;
 };

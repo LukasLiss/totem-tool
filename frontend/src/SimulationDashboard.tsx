@@ -44,6 +44,10 @@ import {
 import { ConstraintsEditorPanel } from "@/components/simulation/ConstraintsEditor";
 import { CooldownEditor } from "@/components/simulation/CooldownEditor";
 import {
+  ExternalLoadEditor,
+  type ExternalLoadSetting,
+} from "@/components/simulation/ExternalLoadEditor";
+import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
@@ -299,6 +303,11 @@ export const SimulationDashboard: React.FC = () => {
   const [cooldowns, setCooldowns] = useState<CooldownDistribution>({});
   const [allocationStrategy, setAllocationStrategy] = useState<AllocationStrategy>({});
 
+  // External load: discovered process-area capacity share per resource type and
+  // the user's setting (on/off + share) on top of it.
+  const [discoveredCapacityShares, setDiscoveredCapacityShares] = useState<Record<string, number>>({});
+  const [externalLoad, setExternalLoad] = useState<Record<string, ExternalLoadSetting>>({});
+
   // Simulation results
   const [result, setResult] = useState<SimulationResult | null>(null);
   const [simError, setSimError] = useState("");
@@ -361,6 +370,8 @@ export const SimulationDashboard: React.FC = () => {
     setCalendarOverrides([]);
     setCooldowns({});
     setAllocationStrategy({});
+    setDiscoveredCapacityShares({});
+    setExternalLoad({});
     setPhase("configure");
   }, [fileId]);
 
@@ -579,6 +590,16 @@ export const SimulationDashboard: React.FC = () => {
       setCooldowns(data.cooldown_distribution || {});
       setAllocationStrategy(data.allocation_strategy || {});
 
+      // External load starts on with the discovered share; a type without
+      // observed events has no evidence of external work (share 1.0).
+      const discoveredShares = data.pa_capacity_shares || {};
+      setDiscoveredCapacityShares(discoveredShares);
+      const initialExternalLoad: Record<string, ExternalLoadSetting> = {};
+      for (const rt of resourceTypes) {
+        initialExternalLoad[rt] = { enabled: true, share: discoveredShares[rt] ?? 1 };
+      }
+      setExternalLoad(initialExternalLoad);
+
       setDetailsLoading(false);
       setPhase("details");
     } catch (err: any) {
@@ -695,6 +716,11 @@ export const SimulationDashboard: React.FC = () => {
               ? fallbackConstraints
               : {};
       });
+      // Effective capacity share per type: switched off means the full capacity.
+      const capacityShares: Record<string, number> = {};
+      Object.entries(externalLoad).forEach(([rt, setting]) => {
+        capacityShares[rt] = setting.enabled ? setting.share : 1;
+      });
       overrides = {
         constraints: constraintsPayload,
         global_constraints: globalConstraints,
@@ -703,6 +729,7 @@ export const SimulationDashboard: React.FC = () => {
         allocation_strategy: allocationStrategy,
         type_calendars: editedTypeCalendars,
         resource_calendars: resourceCalendars,
+        pa_capacity_shares: capacityShares,
       };
     }
 
@@ -1244,6 +1271,18 @@ export const SimulationDashboard: React.FC = () => {
                 }));
               }}
               setOverrides={setCalendarOverrides}
+            />
+          </CollapsibleSection>
+
+          {/* External Load */}
+          <CollapsibleSection title="External Resource Load" description="Capacity share left for this process area per resource type">
+            <ExternalLoadEditor
+              resourcePool={resourcePool}
+              discoveredShares={discoveredCapacityShares}
+              settings={externalLoad}
+              onChange={(resourceType, setting) =>
+                setExternalLoad((prev) => ({ ...prev, [resourceType]: setting }))
+              }
             />
           </CollapsibleSection>
 

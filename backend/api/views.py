@@ -39,6 +39,7 @@ from totem_lib.simulation.utils.resource_calendar import (
     type_calendar_from_patterns,
 )
 from totem_lib.simulation.utils.resource_allocation_strategy import calculate_resource_allocation_strategy
+from totem_lib.simulation.utils.resource_external_load import discover_pa_capacity_shares
 from totem_lib.variants.ocvariants import find_object_variants_connected_component
 from totem_lib.variants.state_space_executions import find_object_structure_variants
 import networkx as nx
@@ -2488,9 +2489,10 @@ def _apply_simulation_overrides(simulation_model, overrides):
     """Apply the user's details-phase edits onto a freshly built model.
 
     The frontend lets the user review and adjust the discovered constraints,
-    resource calendars, cooldowns, allocation strategy and per-variant arrival
-    distributions before running. Those edits are sent as ``overrides`` so the
-    simulation uses them instead of the values re-discovered from the log.
+    resource calendars, cooldowns, allocation strategy, external load and
+    per-variant arrival distributions before running. Those edits are sent as
+    ``overrides`` so the simulation uses them instead of the values re-discovered
+    from the log.
 
     Args:
         simulation_model: The freshly built OCProcessAreaSimulationModel.
@@ -2526,6 +2528,19 @@ def _apply_simulation_overrides(simulation_model, overrides):
     resource_calendars = overrides.get("resource_calendars")
     if resource_calendars is not None:
         simulation_model.resource_calendars = resource_calendars
+
+    # The PA capacity share per resource type as the user left it: the
+    # discovered value, an edit, or 1.0 where external load is switched off.
+    # Types the frontend does not send keep their discovered share.
+    capacity_shares = overrides.get("pa_capacity_shares")
+    if capacity_shares:
+        simulation_model.pa_capacity_shares = {
+            **simulation_model.pa_capacity_shares,
+            **{
+                rtype: min(1.0, max(0.0, float(share)))
+                for rtype, share in capacity_shares.items()
+            },
+        }
 
     # --- Variant-keyed overrides (need the ordered variant list) ---
     # The simple playout keys everything on control-flow ``variants``; the advanced
@@ -3064,8 +3079,9 @@ def get_process_areas(request):
 def get_simulation_details(request):
     """
     Pre-compute all simulation details: variants, arrival distribution, resource distribution,
-    constraints, cooldowns, allocation strategy, resource calendars and the
-    shift patterns mined per resource type.
+    constraints, cooldowns, allocation strategy, resource calendars, the
+    shift patterns mined per resource type and the process area's capacity
+    share per resource type (external load).
 
     Expected JSON body:
     {
@@ -3216,6 +3232,12 @@ def get_simulation_details(request):
         )
         serialized_cooldowns = serialize_cooldowns(cooldown_dist)
 
+        # Share of each resource type's capacity left for the process area; the
+        # rest is reserved for its work outside the area (unfiltered log).
+        pa_capacity_shares = discover_pa_capacity_shares(
+            ocel, resource_types, activities
+        )
+
         # Compute resource allocation strategy
         _report_progress(progress_id, _SIM_DETAILS_STEPS, 5)
         allocation_strategy = calculate_resource_allocation_strategy(
@@ -3247,6 +3269,7 @@ def get_simulation_details(request):
             "type_calendars": serialized_type_calendars,
             "shift_patterns": shift_patterns,
             "resource_calendars": {},
+            "pa_capacity_shares": pa_capacity_shares,
             "log_start_unix": filtered_start_unix,
             "log_duration_days": filtered_duration_days,
         }, status=status.HTTP_200_OK)
