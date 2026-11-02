@@ -5,7 +5,7 @@ import random
 from totem_lib.simulation.simulation import (
     OCProcessAreaSimulationConfiguration,
     _allocate_single_type,
-    _estimate_expected_constraint_slots,
+    _estimate_constraint_slots,
     _make_violation_budget,
     _ViolationBudget,
 )
@@ -164,7 +164,7 @@ def test_alloc_unconstrained_type_infeasible_when_too_few_free():
     assert _allocate_single_type(3, ["a"], [], make_budget(0, 5), "FIFO") is None
 
 
-# --- _estimate_expected_constraint_slots ---
+# --- _estimate_constraint_slots ---
 
 
 def test_expected_slots_weighs_occurrences_by_demand():
@@ -175,7 +175,7 @@ def test_expected_slots_weighs_occurrences_by_demand():
         "A": {"Truck": {"count_distribution": {1: 0.5, 2: 0.5}}},  # E[count] = 1.5
         "B": {"Truck": {"count_distribution": {2: 1.0}}},  # E[count] = 2.0
     }
-    slots = _estimate_expected_constraint_slots(
+    slots = _estimate_constraint_slots(
         occurrences, {"A", "B"}, demand, {"Truck": ["t1"]}
     )
     assert slots == 5.0
@@ -188,18 +188,14 @@ def test_expected_slots_only_constrained_activities_count():
         "B": {"Truck": {"count_distribution": {1: 1.0}}},
     }
     # Only A is constrained, so B's occurrences are ignored.
-    slots = _estimate_expected_constraint_slots(
-        occurrences, {"A"}, demand, {"Truck": ["t1"]}
-    )
+    slots = _estimate_constraint_slots(occurrences, {"A"}, demand, {"Truck": ["t1"]})
     assert slots == 2.0
 
 
 def test_expected_slots_res_types_outside_pool_are_ignored():
     occurrences = {"A": 3.0}
     demand = {"A": {"Crane": {"count_distribution": {4: 1.0}}}}
-    slots = _estimate_expected_constraint_slots(
-        occurrences, {"A"}, demand, {"Truck": ["t1"]}
-    )
+    slots = _estimate_constraint_slots(occurrences, {"A"}, demand, {"Truck": ["t1"]})
     assert slots == 0.0
 
 

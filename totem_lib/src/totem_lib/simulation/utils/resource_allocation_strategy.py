@@ -1,15 +1,15 @@
-import json
 from collections import defaultdict
 
 import numpy as np
 
+from .event_resources import event_resource_ids
 from .resource_calendar import availability_probability, wall_clock_end_for_available
 
 ALLOCATION_STRATEGIES = [
     "random",
     "FIFO",
     "LIFO",
-]  # TODO: consider adding more complex strategies(round-robin,...)
+]
 
 # Categories of an informative assignment (the strategy counting vector).
 ASSIGNMENT_CATEGORIES = ("FIFO", "LIFO", "other")
@@ -254,20 +254,14 @@ def count_allocation_evidence(
         lambda: defaultdict(lambda: defaultdict(set))
     )
 
+    resource_ids = event_resource_ids(ocel)
     for row in ocel.events.sort("_timestampUnix", maintain_order=True).iter_rows(
         named=True
     ):
         timestamp: int = row["_timestampUnix"]
         activity: str = row["_activity"]
 
-        if not row["_attributes"]:
-            continue
-        try:
-            attrs = json.loads(row["_attributes"])
-        except json.JSONDecodeError:
-            continue
-
-        resources: list[str] = attrs.get("process_area_resources") or []
+        resources: list[str] = resource_ids[row["_eventId"]]
         if not resources:
             continue
 

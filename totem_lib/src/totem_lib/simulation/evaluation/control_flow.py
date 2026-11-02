@@ -75,7 +75,7 @@ def n_gram_distance_absolute(actual_ocel, simulated_ocel, n: int = 2) -> float:
     padding so every activity instance is counted in exactly n n-grams) and
     returns the sum of absolute frequency differences, normalized by the sum
     of frequencies in both histograms. Result is in [0, 1].
-    As it is normalzed by the total count of n-grams a difference in the absolute nummber of n-grams within the two logs is also punished.
+    As it is normalized by the total count of n-grams a difference in the absolute nummber of n-grams within the two logs is also punished.
 
     Args:
         actual_ocel:     reference log (e.g. test/holdout).
@@ -87,7 +87,7 @@ def n_gram_distance_absolute(actual_ocel, simulated_ocel, n: int = 2) -> float:
     """
     if n < 1:
         raise ValueError("n must be >= 1.")
-    # Calculate the frequncies of n-grams in both logs
+    # Calculate the frequencies of n-grams in both logs
     actual_counts = _build_ngram_counter(_execution_sequences(actual_ocel), n)
     sim_counts = _build_ngram_counter(_execution_sequences(simulated_ocel), n)
 
@@ -131,7 +131,7 @@ def n_gram_distance_relative(actual_ocel, simulated_ocel, n: int = 2) -> float:
     if n < 1:
         raise ValueError("n must be >= 1.")
 
-    # Calculate the frequncies of n-grams in both logs
+    # Calculate the frequencies of n-grams in both logs
     actual_counts = _build_ngram_counter(_execution_sequences(actual_ocel), n)
     sim_counts = _build_ngram_counter(_execution_sequences(simulated_ocel), n)
 

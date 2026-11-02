@@ -8,11 +8,12 @@ Resource-oriented evaluation measures.
   per type.
 """
 
-import json
 import statistics
 from collections import defaultdict
 
 from scipy.stats import wasserstein_distance
+
+from ..utils.event_resources import event_resource_ids
 
 
 def _events_with_resources(ocel, obj_type_map: dict | None = None) -> list[dict]:
@@ -26,8 +27,9 @@ def _events_with_resources(ocel, obj_type_map: dict | None = None) -> list[dict]
     if obj_type_map is None:
         obj_type_map = ocel.obj_type_map
     out = []
+    resource_ids_by_event = event_resource_ids(ocel)
 
-    rows = ocel.events.select(["_timestampUnix", "_activity", "_attributes"]).iter_rows(
+    rows = ocel.events.select(["_eventId", "_timestampUnix", "_activity"]).iter_rows(
         named=True
     )
 
@@ -35,18 +37,10 @@ def _events_with_resources(ocel, obj_type_map: dict | None = None) -> list[dict]
         ts = row["_timestampUnix"]
         if ts is None:
             continue
-        attrs = row["_attributes"]
-        resource_ids: list[str] | None = None
-        if attrs:
-            try:
-                resource_ids = json.loads(attrs).get("process_area_resources")
-            except json.JSONDecodeError:
-                resource_ids = None
-
-        if resource_ids is None:
-            resource_ids = []
-
-        resources = [(rid, obj_type_map.get(rid)) for rid in resource_ids]
+        resources = [
+            (rid, obj_type_map.get(rid))
+            for rid in resource_ids_by_event[row["_eventId"]]
+        ]
         out.append(
             {
                 "timestamp": int(ts),

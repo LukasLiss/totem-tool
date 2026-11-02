@@ -68,6 +68,7 @@ def execution_arrivals_and_cycles(
 
 
 def normalize_label(label: str) -> str:
+    """Strip a trailing ``_<digits>`` suffix from an activity label."""
     head, sep, tail = label.rpartition("_")
     if sep and tail.isdigit():
         return head
@@ -79,8 +80,10 @@ def variant_signature(variant) -> str:
     Stable structural signature for a variant.
 
     Derived from its representative event-object graph (normalized activity
-    labels + typed edges), matching the signature scheme used during variant
-    discovery.
+    labels + typed edges), following the signature scheme of the variant
+    discovery. Labels are normalized by ``normalize_label``, which differs from
+    the discovery's normalization, so the signature is consistent only within
+    the evaluation.
     """
     G = variant.graph
     node_labels = sorted(normalize_label(d["label"]) for _, d in G.nodes(data=True))

@@ -1,6 +1,8 @@
 import datetime as dt
 import random
 
+import pytest
+
 from tests.assets.ocel_helpers import event as _event
 from tests.assets.ocel_helpers import make_ocel as _make_ocel
 from tests.assets.ocel_helpers import obj as _object
@@ -189,45 +191,31 @@ def test_multiple_resources_different_types():
     assert result["Load"]["Crane"]["max_duration_s"] == 120
 
 
-def test_empty_log_returns_empty_result():
+@pytest.mark.parametrize(
+    ("with_events", "objects_to_analyze", "activities"),
+    [
+        pytest.param(False, ["Worker"], ["Load"], id="empty_log"),
+        pytest.param(True, [], ["Load", "Unload"], id="no_objects_to_analyze"),
+        pytest.param(True, ["Worker"], [], id="no_activities"),
+    ],
+)
+def test_empty_input_returns_empty(with_events, objects_to_analyze, activities):
     """
-    Tests that an empty OCEL results in an empty distribution, without errors.
+    Tests that an empty OCEL, an empty list of objects to analyze or an empty
+    list of activities results in an empty distribution, without errors.
     Expected: empty dict.
     """
-    ocel = _make_ocel([], [])
-    result = resource_cooldown_distribution(ocel, ["Worker"], ["Load"])
-    assert dict(result) == {}
-
-
-def test_empty_objects_to_analyze_returns_empty():
-    """
-    Tests that an empty list of objects to analyze results in an empty distribution.
-    Expected: empty dict.
-    """
-    ocel = _make_ocel(
-        [
-            _event("e1", "Load", 0, ["r1"]),
-            _event("e2", "Unload", 100, ["r1"]),
-        ],
-        [_object("r1", "Worker")],
-    )
-    result = resource_cooldown_distribution(ocel, [], ["Load", "Unload"])
-    assert dict(result) == {}
-
-
-def test_empty_activities_returns_empty():
-    """
-    Tests that an empty list of activities results in an empty distribution.
-    Expected: empty dict.
-    """
-    ocel = _make_ocel(
-        [
-            _event("e1", "Load", 0, ["r1"]),
-            _event("e2", "Unload", 100, ["r1"]),
-        ],
-        [_object("r1", "Worker")],
-    )
-    result = resource_cooldown_distribution(ocel, ["Worker"], [])
+    if with_events:
+        ocel = _make_ocel(
+            [
+                _event("e1", "Load", 0, ["r1"]),
+                _event("e2", "Unload", 100, ["r1"]),
+            ],
+            [_object("r1", "Worker")],
+        )
+    else:
+        ocel = _make_ocel([], [])
+    result = resource_cooldown_distribution(ocel, objects_to_analyze, activities)
     assert dict(result) == {}
 
 

@@ -1,7 +1,10 @@
+import logging
 import random
 from collections import defaultdict
 
 from .resource_calendar import available_seconds_between
+
+logger = logging.getLogger(__name__)
 
 
 def resource_cooldown_distribution(
@@ -16,7 +19,7 @@ def resource_cooldown_distribution(
 
     Duration is measured as the gap between the current event's timestamp and the
     next event in which the same resource appears. To end an interval all activites are considered, not only the tracked ones.
-    Although the simulation mainly uses filtered logs, this function considers the entire log to accuratly capture resource cooldowns.
+    Although the simulation mainly uses filtered logs, this function considers the entire log to accurately capture resource cooldowns.
 
     When ``calendars`` is given, an interval's duration is the resource's
     *available* (working) time in the gap rather than the raw wall-clock span:
@@ -53,8 +56,8 @@ def resource_cooldown_distribution(
     calendars = calendars or {}
 
     if ocel.events.is_empty():
-        print(
-            "Error: Cannot compute resource cooldown distribution on an empty event log."
+        logger.warning(
+            "Cannot compute resource cooldown distribution on an empty event log."
         )
         return {}
 

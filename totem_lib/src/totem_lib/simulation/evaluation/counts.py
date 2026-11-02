@@ -12,6 +12,10 @@ import statistics
 from totem_lib.simulation.evaluation._eval_utils import get_variants
 
 
+def _mean(xs: list[int]) -> float:
+    return float(statistics.mean(xs)) if xs else 0.0
+
+
 def count_summary(ocel) -> dict:
     """
     Totals and average sizes of a single log.
@@ -46,15 +50,13 @@ def count_summary(ocel) -> dict:
             n_executions += 1
             execution_sizes.append(len(execution))
 
-    mean = lambda xs: float(statistics.mean(xs)) if xs else 0.0
-
     return {
         "n_executions": n_executions,
         "n_events": int(ocel.events.height),
         "n_variants": n_variants,
-        "avg_events_per_execution": mean(execution_sizes),
-        "avg_events_per_variant": mean(variant_event_sizes),
-        "avg_executions_per_variant": mean(variant_execution_counts),
+        "avg_events_per_execution": _mean(execution_sizes),
+        "avg_events_per_variant": _mean(variant_event_sizes),
+        "avg_executions_per_variant": _mean(variant_execution_counts),
     }
 
 

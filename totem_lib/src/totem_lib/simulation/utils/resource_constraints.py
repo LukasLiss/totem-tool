@@ -1,6 +1,7 @@
 import itertools
-import json
 from collections import Counter, defaultdict
+
+from .event_resources import event_resource_ids
 
 
 def _build_resource_lookup(ocel, resource_type_map):
@@ -21,15 +22,13 @@ def _build_resource_lookup(ocel, resource_type_map):
               Types not used by an event are simply absent from its dict.
     """
     lookup = {}
-    for row in ocel.events.select(["_eventId", "_attributes"]).iter_rows(named=True):
+    for event_id, resources in event_resource_ids(ocel).items():
         by_type: dict[str, set] = defaultdict(set)
-        if row["_attributes"]:
-            resources = json.loads(row["_attributes"]).get("process_area_resources", [])
-            for rid in resources or []:
-                res_type = resource_type_map.get(rid)
-                if res_type is not None:
-                    by_type[res_type].add(rid)
-        lookup[row["_eventId"]] = {t: frozenset(ids) for t, ids in by_type.items()}
+        for rid in resources:
+            res_type = resource_type_map.get(rid)
+            if res_type is not None:
+                by_type[res_type].add(rid)
+        lookup[event_id] = {t: frozenset(ids) for t, ids in by_type.items()}
     return lookup
 
 
@@ -180,9 +179,9 @@ def _mine_constraints_from_executions(
         same_inv = inverse_vector[0] / inverse_total
         # Subset-or-equal: rs1 ⊆ rs2 covers strict subset (idx 1) and equality (idx 0).
         subset_fwd = (vector[1] + vector[0]) / total
-        # If act1 ⊆ act2, the reverse pair (act2, act1) is "neither" (idx 3),
-        # i.e. act2 is a superset of act1.
-        superset_inv = inverse_vector[3] / inverse_total
+        # Superset-or-equal, mirroring subset_fwd: if act1 ⊊ act2, the reverse
+        # pair (act2, act1) is "neither" (idx 3); equal sets stay at idx 0.
+        superset_inv = (inverse_vector[3] + inverse_vector[0]) / inverse_total
         disjoint_fwd = vector[2] / total
         disjoint_inv = inverse_vector[2] / inverse_total
 

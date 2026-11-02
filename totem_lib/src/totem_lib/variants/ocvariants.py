@@ -8,7 +8,10 @@ import networkx as nx
 from typing import Dict
 from collections import defaultdict
 import itertools
+import logging
 import time
+
+logger = logging.getLogger(__name__)
 
 EventId = str
 ExecIdx = int
@@ -387,17 +390,19 @@ def find_object_variants_connected_component(ocel: ObjectCentricEventLog) -> Var
     4. Sort by support and return.
     """
     total_start_time = time.time()
-    print("--- Starting OC Variant Discovery (Connected Components) ---")
+    logger.info("--- Starting OC Variant Discovery (Connected Components) ---")
 
     # STEP 1: build object co-occurrence graph & object→events lookup
     t0 = time.time()
     eog = ocel.eog
     object_graph = nx.Graph()
     object_to_events: Dict[str, List[str]] = defaultdict(list)
+    event_objects: Dict[str, List[str]] = {}
 
     for row in ocel.events.iter_rows(named=True):
         objs = row["_objects"]
         eid = row["_eventId"]
+        event_objects[eid] = list(objs)
 
         for o in objs:
             if not object_graph.has_node(o):
@@ -408,7 +413,7 @@ def find_object_variants_connected_component(ocel: ObjectCentricEventLog) -> Var
             for u, v in itertools.combinations(objs, 2):
                 object_graph.add_edge(u, v)
 
-    print(f"✅ [Step 1/4] Object graph built with {object_graph.number_of_nodes()} nodes in {time.time() - t0:.2f}s")
+    logger.info(f"[Step 1/4] Object graph built with {object_graph.number_of_nodes()} nodes in {time.time() - t0:.2f}s")
 
     # STEP 2: extract EOG subgraph per connected component
     t1 = time.time()
@@ -423,9 +428,16 @@ def find_object_variants_connected_component(ocel: ObjectCentricEventLog) -> Var
         if event_ids:
             process_execution_graph = eog.subgraph(event_ids).copy()
             if process_execution_graph.number_of_nodes() > 0:
+                # Carry each event's objects and the objects' types: an EOG edge
+                # only holds the objects shared with a neighbour event.
+                for eid in process_execution_graph.nodes:
+                    process_execution_graph.nodes[eid]["objects"] = event_objects[eid]
+                process_execution_graph.graph["object_types"] = {
+                    o: object_graph.nodes[o]["type"] for o in comp
+                }
                 process_executions.append(process_execution_graph)
 
-    print(f"✅ [Step 2/4] Found {len(process_executions)} process executions in {time.time() - t1:.2f}s")
+    logger.info(f"[Step 2/4] Found {len(process_executions)} process executions in {time.time() - t1:.2f}s")
 
  
     # STEP 3: group instances by normalized EOG signature
@@ -457,7 +469,7 @@ def find_object_variants_connected_component(ocel: ObjectCentricEventLog) -> Var
             variants_by_signature[signature]["support"] += 1
             variants_by_signature[signature]["executions"].append(list(process_exec_graph.nodes()))
 
-    print(f"✅ [Step 3/4] Grouped into {len(variants_by_signature)} variants in {time.time() - t2:.2f}s")
+    logger.info(f"[Step 3/4] Grouped into {len(variants_by_signature)} variants in {time.time() - t2:.2f}s")
 
     # STEP 4: final formatting and sorting
     t3 = time.time()
@@ -473,9 +485,9 @@ def find_object_variants_connected_component(ocel: ObjectCentricEventLog) -> Var
         )
 
     variant_list.sort(key=lambda v: v.support, reverse=True)
-    print(f"✅ [Step 4/4] Final formatting in {time.time() - t3:.2f}s")
-    print("--- OC Variant Discovery Complete ---")
-    print(f"Total Time: {time.time() - total_start_time:.2f} seconds")
+    logger.info(f"[Step 4/4] Final formatting in {time.time() - t3:.2f}s")
+    logger.info("--- OC Variant Discovery Complete ---")
+    logger.info(f"Total Time: {time.time() - total_start_time:.2f} seconds")
 
     return Variants(variant_list)
 

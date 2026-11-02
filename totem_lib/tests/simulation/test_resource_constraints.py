@@ -141,24 +141,6 @@ def test_aggregation_across_executions():
     assert constraints["Load"]["Unload"] == {"R": "same_resource"}
 
 
-def test_subset_detected():
-    """
-    A uses {r1}, B uses {r1, r2} → A is a strict subset of B.
-    Expected: subset constraint for (A, B).
-    """
-    ocel = _make_ocel(
-        [
-            _event("e1", "A", 1, [], ["r1"]),
-            _event("e2", "B", 2, [], ["r1", "r2"]),
-        ],
-        [],
-    )
-    variant = _variant([["e1", "e2"]])
-
-    constraints = _mine_variant(ocel, variant)
-    assert constraints["A"]["B"] == {"R": "subset"}
-
-
 def test_subset_emits_inverse_superset():
     """
     A uses {r1}, B uses {r1, r2} → A ⊆ B, hence B ⊇ A.

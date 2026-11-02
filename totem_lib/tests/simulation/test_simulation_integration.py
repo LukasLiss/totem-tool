@@ -26,6 +26,7 @@ from totem_lib.simulation.simulation import (
     _CalendarGate,
     _next_resource_free,
     _release_elapsed_cooldowns,
+    generate_arrival_schedule,
 )
 from totem_lib.simulation.utils.resource_calendar import WEEKDAYS
 
@@ -605,6 +606,50 @@ def test_start_is_floored_to_clock_hour():
     assert spawned > 0
     assert int(START.timestamp()) <= min(timestamps)
     assert max(timestamps) < int(START.timestamp()) + HOUR
+
+
+def test_arrival_schedule_only_fills_slots_with_a_rate():
+    """Arrivals fall only into the weekday/hour slots with a positive rate, lie
+    inside the horizon and are sorted by time. Over one week from Monday 10:00,
+    the Monday-10 slot occurs exactly once: in the first hour."""
+    random.seed(1)
+    np.random.seed(1)
+    variant = _single("Load")
+    schedule = generate_arrival_schedule(
+        [variant], _slot_arrivals(variant, rate=5.0), START, 7 * 24 * HOUR
+    )
+    times = [t for t, _ in schedule]
+    assert schedule
+    assert times == sorted(times)
+    assert all(0 <= t < HOUR for t in times)
+
+
+def test_arrival_schedule_assigns_payloads_by_their_slot_rate():
+    """Each arrival carries a payload with a positive rate in its slot; a
+    payload without a rate in that slot never arrives there."""
+    random.seed(2)
+    np.random.seed(2)
+    a, b = _single("A"), _single("B")
+    arrivals = {
+        **_slot_arrivals(a, rate=20.0, hour=10),
+        **_slot_arrivals(b, rate=20.0, hour=11),
+    }
+    schedule = generate_arrival_schedule([a, b], arrivals, START, 2 * HOUR)
+    assert {payload for t, payload in schedule if t < HOUR} == {a}
+    assert {payload for t, payload in schedule if t >= HOUR} == {b}
+
+
+def test_arrival_schedule_count_follows_the_hourly_rate():
+    """The arrivals per slot are Poisson with the slot rate, so their mean over
+    many weeks approaches the rate."""
+    random.seed(3)
+    np.random.seed(3)
+    variant = _single("Load")
+    weeks = 200
+    schedule = generate_arrival_schedule(
+        [variant], _slot_arrivals(variant, rate=3.0), START, weeks * 7 * 24 * HOUR
+    )
+    assert abs(len(schedule) / weeks - 3.0) < 0.5
 
 
 # --- activity durations ---

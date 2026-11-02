@@ -1,16 +1,8 @@
-import json
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 
-WEEKDAY_NAMES = [
-    "Monday",
-    "Tuesday",
-    "Wednesday",
-    "Thursday",
-    "Friday",
-    "Saturday",
-    "Sunday",
-]
+from .event_resources import event_resource_ids
+from .resource_calendar import WEEKDAYS
 
 
 def variant_arrival_distribution(ocel, variants):
@@ -46,7 +38,7 @@ def variant_arrival_distribution(ocel, variants):
     full_weeks, remaining_days = divmod(total_days, 7)
     # Every weekday appears at least full_weeks times; weekdays from start_weekday to (start_weekday + remaining_days - 1) appear one extra time.
     observed_weekdays = {
-        WEEKDAY_NAMES[i]: full_weeks
+        WEEKDAYS[i]: full_weeks
         + (1 if (i - start_dt.weekday()) % 7 < remaining_days else 0)
         for i in range(7)
     }
@@ -65,7 +57,7 @@ def variant_arrival_distribution(ocel, variants):
 
             start_ts = min(timestamps)
             dt = datetime.fromtimestamp(start_ts, tz=timezone.utc)
-            weekday = WEEKDAY_NAMES[dt.weekday()]
+            weekday = WEEKDAYS[dt.weekday()]
             hour = dt.hour
 
             weekday_counts[weekday] += 1
@@ -133,15 +125,7 @@ def resource_distribution_of_variants(ocel, variants, obj_type_map=None):
     """
     obj_type_map = obj_type_map if obj_type_map is not None else ocel.obj_type_map
 
-    # Build event_id -> resource list from _attributes JSON (set by filter_by_process_area)
-    resource_lookup: dict[str, list] = {
-        row["_eventId"]: (
-            json.loads(row["_attributes"]).get("process_area_resources", [])
-            if row["_attributes"]
-            else []
-        )
-        for row in ocel.events.select(["_eventId", "_attributes"]).iter_rows(named=True)
-    }
+    resource_lookup = event_resource_ids(ocel)
 
     result = {}
 

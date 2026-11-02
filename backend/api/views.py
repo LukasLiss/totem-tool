@@ -2678,8 +2678,8 @@ def run_simulation(request):
         _sim_progress_state = {"pct": -1, "cancel_checked_at": 0.0}
 
         def _on_sim_progress(fraction):
-            # The callback fires on every clock tick, so poll the cancel flag at
-            # most twice a second instead of on each tick.
+            # The callback fires on every clock advance, so poll the cancel flag
+            # at most twice a second instead of on each advance.
             now = time.monotonic()
             if now - _sim_progress_state["cancel_checked_at"] >= 0.5:
                 _sim_progress_state["cancel_checked_at"] = now
@@ -2699,10 +2699,10 @@ def run_simulation(request):
                 progress_callback=_on_sim_progress,
             )
 
-        # Filter original OCEL by process area for comparison
+        # Original OCEL filtered by process area, for comparison
         _raise_if_cancelled(progress_id)
         _report_progress(progress_id, _SIM_RUN_STEPS, 4)
-        filtered_ocel = ocel.filter_by_process_area(process_area)
+        filtered_ocel = simulation_model.filtered_ocel
 
         # Multi-perspective evaluation (Chapela-Campa BPM 2023 + OC extras)
         _raise_if_cancelled(progress_id)
@@ -2814,7 +2814,7 @@ def cancel_simulation(request):
 
     The running request cannot be interrupted from the outside, so the flag is
     published to the cache and picked up by the run itself: between its steps
-    and, during the playout, from the tick progress callback. The run then
+    and, during the playout, from the progress callback. The run then
     answers its own (still open) request with HTTP 409.
     """
     progress_id = request.data.get("progress_id")
