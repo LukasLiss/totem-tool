@@ -61,8 +61,30 @@ export const DEFAULT_STORE_SETTINGS: StoreSettings = {
   variantColumn: "variant",
 };
 
+/**
+ * How the explorer computes variants. ``process_areas`` is the beginner
+ * default (connected components per process area, stored in fixed columns);
+ * ``custom`` exposes every extraction / grouping / storing option.
+ */
+export type VariantsMode = "process_areas" | "custom";
+export const DEFAULT_VARIANTS_MODE: VariantsMode = "process_areas";
+
+/** Columns the process-area mode writes into the events table. */
+export type ProcessAreaColumns = {
+  executionColumn: string;
+  variantColumn: string;
+};
+
+export const DEFAULT_PROCESS_AREA_COLUMNS: ProcessAreaColumns = {
+  executionColumn: "process-executions-cc-process-areas",
+  variantColumn: "variant-cc-process-areas",
+};
+
 /** The settings a dashboard persists for a Variants component. */
 export type AdvancedSettings = {
+  mode: VariantsMode;
+  area_execution_column: string;
+  area_variant_column: string;
   extraction: Extraction;
   iso: IsoStrategy;
   timeout_s: number;
@@ -131,5 +153,37 @@ export type StoredExecutionsResponse = {
   unassigned_event_count: number;
   variant_count: number | null;
   variants: Variant[] | null;
+  object_types: string[];
+};
+
+/** One process area as sent to `POST /api/files/{id}/process_area_variants/`. */
+export type ProcessAreaRequest = {
+  label: string;
+  object_types: string[];
+  activities: string[];
+};
+
+/** The variants of one process area. */
+export type ProcessAreaVariants = ProcessAreaRequest & {
+  execution_count: number;
+  variant_count: number;
+  variants: Variant[];
+  /** Why no executions were computed for this area, if it was skipped. */
+  skipped_reason: string | null;
+};
+
+/** Response of `POST /api/files/{id}/process_area_variants/`. */
+export type ProcessAreaVariantsResponse = {
+  file_id: number;
+  stored: boolean;
+  execution_column: string | null;
+  variant_column: string | null;
+  execution_count: number;
+  variant_count: number;
+  total_event_count: number;
+  assigned_event_count: number;
+  ambiguous_event_count: number;
+  unassigned_event_count: number;
+  areas: ProcessAreaVariants[];
   object_types: string[];
 };

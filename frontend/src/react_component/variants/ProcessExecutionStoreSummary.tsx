@@ -2,8 +2,28 @@ import { AlertTriangle, CheckCircle2, Database } from "lucide-react";
 
 import type { StoredExecutionsResponse } from "./types";
 
+export type StoreSummaryResult = Pick<
+  StoredExecutionsResponse,
+  | "execution_column"
+  | "variant_column"
+  | "execution_count"
+  | "assigned_event_count"
+  | "unassigned_event_count"
+  | "ambiguous_event_count"
+  | "variant_count"
+>;
+
+const DEFAULT_AMBIGUOUS_HINT =
+  "Use an extraction whose executions do not overlap (connected components or resource-aware) to assign every event.";
+
 /** What happened when process executions were written into the event log. */
-export function ProcessExecutionStoreSummary({ result }: { result: StoredExecutionsResponse }) {
+export function ProcessExecutionStoreSummary({
+  result,
+  ambiguousHint = DEFAULT_AMBIGUOUS_HINT,
+}: {
+  result: StoreSummaryResult;
+  ambiguousHint?: string;
+}) {
   const hasAmbiguous = result.ambiguous_event_count > 0;
   const columns = [result.execution_column, result.variant_column].filter(Boolean) as string[];
 
@@ -44,8 +64,7 @@ export function ProcessExecutionStoreSummary({ result }: { result: StoredExecuti
               <span>
                 {result.ambiguous_event_count.toLocaleString()} event
                 {result.ambiguous_event_count === 1 ? "" : "s"} belong to more than one
-                execution and got no id. Use an extraction whose executions do not
-                overlap (connected components or resource-aware) to assign every event.
+                execution and got no id. {ambiguousHint}
               </span>
             </p>
           ) : null}

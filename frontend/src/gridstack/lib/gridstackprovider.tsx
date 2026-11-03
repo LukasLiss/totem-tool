@@ -309,6 +309,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           timeout_s: node.timeout_s ?? 10.0,
           business_object_types: node.business_object_types ?? [],
           business_activities: node.business_activities ?? [],
+          variants_mode: node.variants_mode ?? 'process_areas',
+          area_execution_column: node.area_execution_column ?? 'process-executions-cc-process-areas',
+          area_variant_column: node.area_variant_column ?? 'variant-cc-process-areas',
         };
       } else if (component_name === "LogStatisticsComponent") {
         props = {
@@ -327,6 +330,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           color_by: node.color_by ?? "activity",
           shape_by: node.shape_by ?? "none",
           row_order: node.row_order ?? "first_occurrence",
+          row_order_direction: node.row_order_direction ?? "asc",
           max_points: node.max_points ?? 10000,
         };
       } else if (component_name === "NewOCDFGComponent" || component_name === "NewOCDFGVariantsComponent") {
@@ -356,6 +360,11 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         props = {
           automatic_loading: node.automatic_loading ?? false,
           timeout_s: node.timeout_s ?? 30.0,
+        };
+      } else if (component_name === "OCPNFlattenedReplayComponent") {
+        props = {
+          ocpn_asset_id: node.ocpn_asset_id ?? null,
+          automatic_loading: node.automatic_loading ?? false,
         };
       } else if (component_name === "SqlQueryComponent") {
         props = {
@@ -524,6 +533,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "Object-Centric DFG (Variants)";
         } else if (item.component_name === "OCPNComponent") {
           content = "OC Petri Net";
+        } else if (item.component_name === "OCPNFlattenedReplayComponent") {
+          content = "OCPN Flattened Replay";
         } else if (item.component_name === "OCCNComponent") {
           content = "Object-Centric Causal Net (OCCN)";
         } else if (item.component_name === "SqlQueryComponent") {
@@ -589,6 +600,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             timeout_s: item.timeout_s,
             business_object_types: item.business_object_types,
             business_activities: item.business_activities,
+            variants_mode: item.variants_mode,
+            area_execution_column: item.area_execution_column,
+            area_variant_column: item.area_variant_column,
             // LogStatisticsComponent properties
             show_num_events: item.show_num_events,
             show_num_activities: item.show_num_activities,
@@ -606,6 +620,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             color_by: item.color_by,
             shape_by: item.shape_by,
             row_order: item.row_order,
+            row_order_direction: item.row_order_direction,
             max_points: item.max_points,
             layout_direction: item.layout_direction,
             // PieChartComponent properties
@@ -617,6 +632,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             value_column: item.value_column,
             show_legend: item.show_legend,
             show_tooltip: item.show_tooltip,
+            // OCPNFlattenedReplayComponent properties
+            ocpn_asset_id: item.ocpn_asset_id,
             // OCCNComponent properties
             relative_occurrence_threshold: item.relative_occurrence_threshold,
             object_types: item.object_types,
@@ -703,6 +720,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node.timeout_s = item.timeout_s;     // For VariantsComponent advanced settings
               node.business_object_types = item.business_object_types; // VariantsComponent resource-aware
               node.business_activities = item.business_activities;     // VariantsComponent resource-aware
+              node.variants_mode = item.variants_mode;                 // VariantsComponent method
+              node.area_execution_column = item.area_execution_column; // VariantsComponent process-area mode
+              node.area_variant_column = item.area_variant_column;     // VariantsComponent process-area mode
               // LogStatisticsComponent properties
               node.show_num_events = item.show_num_events;
               node.show_num_activities = item.show_num_activities;
@@ -729,8 +749,11 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node.color_by = item.color_by;
               node.shape_by = item.shape_by;
               node.row_order = item.row_order;
+              node.row_order_direction = item.row_order_direction;
               node.max_points = item.max_points;
               node.layout_direction = item.layout_direction;
+              // OCPNFlattenedReplayComponent properties
+              node.ocpn_asset_id = item.ocpn_asset_id;
               // OCCNComponent properties
               node.relative_occurrence_threshold = item.relative_occurrence_threshold;
               node.object_types = item.object_types;

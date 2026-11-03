@@ -35,6 +35,9 @@ declare module 'gridstack' {
     timeout_s?: number;
     business_object_types?: string[];
     business_activities?: string[];
+    variants_mode?: 'process_areas' | 'custom';
+    area_execution_column?: string;
+    area_variant_column?: string;
     show_num_events?: boolean;
     show_num_activities?: boolean;
     show_num_objects?: boolean;
@@ -50,6 +53,7 @@ declare module 'gridstack' {
     color_by?: string;
     shape_by?: string;
     row_order?: 'first_occurrence' | 'last_occurrence';
+    row_order_direction?: 'asc' | 'desc';
     max_points?: number;
     show_minimap?: boolean;
     layout_direction?: 'TB' | 'LR';
@@ -58,6 +62,8 @@ declare module 'gridstack' {
     image_asset_url?: string | null;
     image_fit?: string;
     image_alignment?: string;
+    // OCPNFlattenedReplayComponent
+    ocpn_asset_id?: number | null;
     // OCCNComponent
     relative_occurrence_threshold?: number;
     object_types?: string;

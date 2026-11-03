@@ -18,6 +18,7 @@ import {
   NewOCDFGComponent,
   NewOCDFGVariantsComponent,
   OCPNComponent,
+  OCPNFlattenedReplayComponent,
   OCCNComponent,
   SqlQueryComponent,
 } from "./componentMap";
@@ -40,6 +41,7 @@ export const componentMap: Record<string, React.FC<ComponentProps>> = {
   NewOCDFGComponent,
   NewOCDFGVariantsComponent,
   OCPNComponent,
+  OCPNFlattenedReplayComponent,
   PieChartComponent,
   OCCNComponent,
   SqlQueryComponent,

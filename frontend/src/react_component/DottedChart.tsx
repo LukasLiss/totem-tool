@@ -16,6 +16,7 @@ import { Slider } from "@/components/ui/slider";
 import { Skeleton } from "@/components/ui/skeleton";
 import { VisualizerEmptyState } from "@/components/ui/VisualizerEmptyState";
 import { cn } from "@/lib/utils";
+import { X } from "lucide-react";
 import { Map as MapIcon } from "lucide-react";
 import { useFilterVersion } from "@/store/filterStore";
 import {
@@ -30,6 +31,7 @@ import {
   type ChartPoint,
   type DottedChartViewport,
   type OCEvent,
+  type RowOrderDirection,
   type RowOrderOption,
 } from "./dottedChart/dottedChartUtils";
 import {
@@ -46,6 +48,7 @@ interface DottedChartProps {
   colorBy?: AxisOption;
   shapeBy?: AxisOption;
   rowOrder?: RowOrderOption;
+  rowOrderDirection?: RowOrderDirection;
   maxPoints?: number;
   viewport?: DottedChartViewport;
   showControls?: boolean;
@@ -61,6 +64,7 @@ const DEFAULT_Y_AXIS: AxisOption = { type: "activity" };
 const DEFAULT_COLOR_BY: AxisOption = { type: "activity" };
 const DEFAULT_SHAPE_BY: AxisOption = { type: "none" };
 const DEFAULT_ROW_ORDER: RowOrderOption = "first_occurrence";
+const DEFAULT_ROW_ORDER_DIRECTION: RowOrderDirection = "asc";
 const MIN_BRUSH_POINTS = 10;
 const MIN_VISIBLE_ROWS = 1;
 const CHART_MARGIN = { top: 72, right: 8, bottom: 18, left: 0 };
@@ -78,6 +82,7 @@ export default function DottedChart({
   colorBy = DEFAULT_COLOR_BY,
   shapeBy = DEFAULT_SHAPE_BY,
   rowOrder = DEFAULT_ROW_ORDER,
+  rowOrderDirection = DEFAULT_ROW_ORDER_DIRECTION,
   maxPoints = 20_000,
   viewport,
   showControls = false,
@@ -94,9 +99,10 @@ export default function DottedChart({
       colorBy,
       shapeBy,
       rowOrder,
+      rowOrderDirection,
       maxPoints,
     }),
-    [colorBy, maxPoints, rowOrder, shapeBy, xAxis, yAxis]
+    [colorBy, maxPoints, rowOrder, rowOrderDirection, shapeBy, xAxis, yAxis]
   );
   const [config, setConfig] = useState<DottedChartConfig>(defaultConfig);
   const effectiveConfig = showControls ? config : defaultConfig;
@@ -166,6 +172,9 @@ export default function DottedChart({
   const dragSelectionRef = useRef<DragSelection | null>(null);
   const dragOverlayRef = useRef<HTMLDivElement | null>(null);
   const dragFrameRef = useRef<number | null>(null);
+  const pressStartRef = useRef<{ clientX: number; clientY: number } | null>(null);
+  const pressedPointRef = useRef<ChartPoint | null>(null);
+  const [pinnedEvent, setPinnedEvent] = useState<PinnedEvent | null>(null);
   const effectiveBrushRange = useMemo(
     () => clampBrushRange(brushRange, points.length),
     [brushRange, points.length]
@@ -178,8 +187,8 @@ export default function DottedChart({
   const xLabels = useMemo(() => makeAxisLabelLookup(points, "x"), [points]);
   const yLabels = useMemo(() => makeAxisLabelLookup(points, "y"), [points]);
   const yTicks = useMemo(
-    () => orderDisplayedYTicks(points, effectiveConfig.rowOrder),
-    [effectiveConfig.rowOrder, points]
+    () => orderDisplayedYTicks(points, effectiveConfig.rowOrder, effectiveConfig.rowOrderDirection),
+    [effectiveConfig.rowOrder, effectiveConfig.rowOrderDirection, points]
   );
   const [yBrushRange, setYBrushRange] = useState<BrushRange>({ startIndex: 0, endIndex: 0 });
   const effectiveYBrushRange = useMemo(
@@ -474,10 +483,76 @@ export default function DottedChart({
     yDomain,
   ]);
   const handleChartMouseLeave = useCallback(() => {
+    pressStartRef.current = null;
+    pressedPointRef.current = null;
     dragSelectionRef.current = null;
     setChartInteractionEnabled(chartInteractionRef.current, true);
     hideDragOverlay(dragOverlayRef.current);
   }, []);
+
+  // A press-and-release without movement is a click: pin the card of the dot
+  // under the cursor, or dismiss the pinned card when clicking empty space.
+  const handleWrapperMouseDown = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      pressStartRef.current = { clientX: event.clientX, clientY: event.clientY };
+      handleChartMouseDown(event);
+    },
+    [handleChartMouseDown]
+  );
+  const handleWrapperMouseUp = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      const pressStart = pressStartRef.current;
+      const pressedPoint = pressedPointRef.current;
+      pressStartRef.current = null;
+      pressedPointRef.current = null;
+      handleChartMouseUp(event);
+      if (!pressStart) return;
+      const isClick =
+        Math.abs(pressStart.clientX - event.clientX) < 6 &&
+        Math.abs(pressStart.clientY - event.clientY) < 6;
+      if (!isClick) return;
+      const wrapper = chartWrapperRef.current;
+      if (!pressedPoint || !wrapper) {
+        setPinnedEvent(null);
+        return;
+      }
+      const bounds = wrapper.getBoundingClientRect();
+      const left = event.clientX - bounds.left;
+      const top = event.clientY - bounds.top;
+      setPinnedEvent({
+        point: pressedPoint,
+        left,
+        top,
+        alignRight: left > bounds.width / 2,
+        alignBottom: top > bounds.height / 2,
+      });
+      onEventClick?.(pressedPoint);
+    },
+    [handleChartMouseUp, onEventClick]
+  );
+
+  useEffect(() => {
+    if (!pinnedEvent) return;
+    const handleDocumentMouseDown = (event: MouseEvent) => {
+      if (chartWrapperRef.current?.contains(event.target as Node)) return;
+      setPinnedEvent(null);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPinnedEvent(null);
+    };
+    document.addEventListener("mousedown", handleDocumentMouseDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleDocumentMouseDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [pinnedEvent]);
+
+  // The pinned card is anchored to a pixel position, so drop it whenever the
+  // plotted points change (zoom, resample, new configuration).
+  useEffect(() => {
+    setPinnedEvent(null);
+  }, [displayedPoints]);
 
   const handleResetViewport = useCallback(() => {
     setBrushRange({ startIndex: 0, endIndex: Math.max(0, points.length - 1) });
@@ -583,9 +658,9 @@ export default function DottedChart({
       <div
         ref={chartWrapperRef}
         className="relative shrink-0 select-none"
-        onMouseDown={handleChartMouseDown}
+        onMouseDown={handleWrapperMouseDown}
         onMouseMove={handleChartMouseMove}
-        onMouseUp={handleChartMouseUp}
+        onMouseUp={handleWrapperMouseUp}
         onMouseLeave={handleChartMouseLeave}
       >
         <div ref={chartInteractionRef}>
@@ -623,6 +698,7 @@ export default function DottedChart({
                 animationDuration={0}
                 content={
                   <DottedChartTooltip
+                    hidden={pinnedEvent !== null}
                     xAxis={effectiveConfig.xAxis}
                     yAxis={effectiveConfig.yAxis}
                     colorBy={effectiveConfig.colorBy}
@@ -637,12 +713,38 @@ export default function DottedChart({
                   const point = props.payload as ChartPoint;
                   const color = colorScale.get(colorGroupKey(point.colorKey, colorKeys)) ?? "var(--chart-1)";
                   const shape = shapeScale.get(point.shapeKey) ?? "circle";
-                  return renderPointShape(props.cx, props.cy, color, shape, () => onEventClick?.(point));
+                  return renderPointShape(props.cx, props.cy, color, shape, undefined, () => {
+                    pressedPointRef.current = point;
+                  });
                 }}
               />
             </ScatterChart>
           </ChartContainer>
         </div>
+        {pinnedEvent && (
+          <div
+            className="absolute z-30 cursor-auto select-text"
+            style={{
+              left: pinnedEvent.left,
+              top: pinnedEvent.top,
+              transform: `translate(${pinnedEvent.alignRight ? "calc(-100% - 8px)" : "8px"}, ${
+                pinnedEvent.alignBottom ? "calc(-100% - 8px)" : "8px"
+              })`,
+            }}
+            onMouseDown={(event) => event.stopPropagation()}
+            onMouseMove={(event) => event.stopPropagation()}
+            onMouseUp={(event) => event.stopPropagation()}
+          >
+            <DottedChartEventCard
+              point={pinnedEvent.point}
+              xAxis={effectiveConfig.xAxis}
+              yAxis={effectiveConfig.yAxis}
+              colorBy={effectiveConfig.colorBy}
+              pinned
+              onClose={() => setPinnedEvent(null)}
+            />
+          </div>
+        )}
         <div
           ref={dragOverlayRef}
           className="pointer-events-none fixed z-20 hidden border border-ring bg-ring/10"
@@ -1396,7 +1498,12 @@ function sampleAxisTicks(ticks: number[], maxLabels: number): number[] {
   return ticks.filter((tick) => sampled.has(tick));
 }
 
-function orderDisplayedYTicks(points: ChartPoint[], rowOrder: RowOrderOption): number[] {
+function orderDisplayedYTicks(
+  points: ChartPoint[],
+  rowOrder: RowOrderOption,
+  direction: RowOrderDirection
+): number[] {
+  const sign = direction === "desc" ? -1 : 1;
   const rowTimes = new Map<number, { first: number; last: number }>();
 
   points.forEach((point) => {
@@ -1417,7 +1524,7 @@ function orderDisplayedYTicks(points: ChartPoint[], rowOrder: RowOrderOption): n
     .sort(([leftTick, left], [rightTick, right]) => {
       const leftValue = rowOrder === "last_occurrence" ? left.last : left.first;
       const rightValue = rowOrder === "last_occurrence" ? right.last : right.first;
-      return leftValue - rightValue || leftTick - rightTick;
+      return sign * (leftValue - rightValue || leftTick - rightTick);
     })
     .map(([tick]) => tick);
 }
@@ -1579,6 +1686,7 @@ function dottedChartConfigKey(config: DottedChartConfig): string {
     axisOptionKey(config.colorBy),
     axisOptionKey(config.shapeBy),
     config.rowOrder,
+    config.rowOrderDirection,
     config.maxPoints,
   ].join("|");
 }
@@ -1596,28 +1704,83 @@ function DottedChartState({ className, message }: { className?: string; message:
   );
 }
 
+type PinnedEvent = {
+  point: ChartPoint;
+  left: number;
+  top: number;
+  alignRight: boolean;
+  alignBottom: boolean;
+};
+
+const MAX_HOVER_OBJECTS_PER_TYPE = 5;
+
 function DottedChartTooltip({
   active,
   payload,
+  hidden,
   xAxis,
   yAxis,
   colorBy,
 }: {
   active?: boolean;
   payload?: Array<{ payload: ChartPoint }>;
+  hidden?: boolean;
   xAxis: AxisOption;
   yAxis: AxisOption;
   colorBy: AxisOption;
 }) {
-  if (!active || !payload?.length) return null;
-
-  const point = payload[0].payload as ChartPoint;
+  if (hidden || !active || !payload?.length) return null;
 
   return (
-    <div className="max-w-[360px] rounded-md border bg-background px-3 py-2 text-xs shadow-md">
-      <div className="mb-1 flex items-center justify-between gap-3">
+    <DottedChartEventCard
+      point={payload[0].payload as ChartPoint}
+      xAxis={xAxis}
+      yAxis={yAxis}
+      colorBy={colorBy}
+    />
+  );
+}
+
+function DottedChartEventCard({
+  point,
+  xAxis,
+  yAxis,
+  colorBy,
+  pinned = false,
+  onClose,
+}: {
+  point: ChartPoint;
+  xAxis: AxisOption;
+  yAxis: AxisOption;
+  colorBy: AxisOption;
+  pinned?: boolean;
+  onClose?: () => void;
+}) {
+  const objectEntries = Object.entries(point.objects ?? {});
+
+  return (
+    <div
+      className={cn(
+        "max-w-[360px] rounded-md border bg-background px-3 py-2 text-xs shadow-md",
+        pinned && "max-h-[420px] overflow-auto ring-1 ring-ring/40"
+      )}
+    >
+      <div className="mb-1 flex items-start justify-between gap-3">
         <span className="font-medium text-foreground">Activity: {point.activity}</span>
-        <span className="text-muted-foreground">activity_id: {point.id}</span>
+        <div className="flex items-center gap-1">
+          <span className="text-muted-foreground">event_id: {point.id}</span>
+          {pinned && (
+            <button
+              type="button"
+              className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+              onClick={onClose}
+              aria-label="Close event details"
+              title="Close (Esc)"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          )}
+        </div>
       </div>
       <div className="grid gap-1 text-muted-foreground">
         <div>
@@ -1633,6 +1796,23 @@ function DottedChartTooltip({
             <span className="text-foreground">{formatAxisLabel(colorBy)} (Color):</span> {valueLabel(point.color_value)}
           </div>
         )}
+        <div className="mt-1 border-t pt-1">
+          <div className="mb-0.5 text-foreground">Objects:</div>
+          {objectEntries.length === 0 ? (
+            <div>No related objects</div>
+          ) : (
+            objectEntries.map(([objectType, objectIds]) => {
+              const shownIds = pinned ? objectIds : objectIds.slice(0, MAX_HOVER_OBJECTS_PER_TYPE);
+              const hiddenCount = objectIds.length - shownIds.length;
+              return (
+                <div key={objectType} className="break-words">
+                  <span className="text-foreground">{objectType}:</span> {shownIds.join(", ")}
+                  {hiddenCount > 0 && ` (+${hiddenCount} more, click to see all)`}
+                </div>
+              );
+            })
+          )}
+        </div>
       </div>
     </div>
   );
@@ -1643,4 +1823,4 @@ function valueLabel(value: number | string | null | undefined): string {
   return String(value);
 }
 
-export type { AxisOption, DottedChartViewport, OCEvent, RowOrderOption };
+export type { AxisOption, DottedChartViewport, OCEvent, RowOrderDirection, RowOrderOption };

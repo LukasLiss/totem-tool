@@ -76,7 +76,7 @@ describe("ModelAssetsView row actions", () => {
   it.each([
     ["Reference TOTeM", "totem", 42],
     ["Reference OCCN", "occn", 43],
-    ["Reference OCPN", "ocAlignment", 44],
+    ["Reference OCPN", "ocpnReplay", 44],
   ] as const)(
     "opens %s conformance with the row model preselected",
     async (name, component, assetId) => {

@@ -3,6 +3,11 @@
 import math
 
 from totem_lib.totem import Totem, totem_to_dict
+from totem_lib.totem.totem import (
+    get_most_precise_ec,
+    get_most_precise_lc,
+    get_most_precise_tr,
+)
 from totem_lib.process_areas import INDICATOR_NAMES
 
 
@@ -133,4 +138,53 @@ def _serialize_mlpa(process_view: dict, totem: Totem) -> dict:
         "type_relations": totem_data["type_relations"],
         "all_event_types": totem_data["all_event_types"],
         "object_type_to_event_types": totem_data["object_type_to_event_types"],
+        "relation_stats": _serialize_relation_stats(totem),
     }
+
+
+# Which histogram feeds which relation family, and how the strict (tau = 1)
+# value of that family is derived from it.
+_RELATION_FAMILIES = (
+    ("temporal", "h_temporal_relations", get_most_precise_tr),
+    ("event_cardinality", "h_event_cardinalities", get_most_precise_ec),
+    ("log_cardinality", "h_log_cardinalities", get_most_precise_lc),
+)
+
+
+def _serialize_relation_stats(totem: Totem) -> list[dict]:
+    """
+    Per directed pair of connected object types: the raw histogram counts of
+    every relation family plus the strict (tau = 1) TOTeM value.
+
+    The visualizer only draws the dominant relation of each arc; this lets its
+    hover card show both directions at tau = 1 and, on click, the share of
+    related pairs that satisfy every possible value. Cardinality classes are
+    cumulative (``0...1`` counts both ``0`` and ``1``), exactly as the TOTeM
+    discovery counts them. Totems built without histograms yield ``[]``.
+    """
+    histograms = {
+        family: getattr(totem, attribute, None)
+        for family, attribute, _ in _RELATION_FAMILIES
+    }
+    if any(histogram is None for histogram in histograms.values()):
+        return []
+
+    stats = []
+    for relation in sorted(
+        tuple(sorted(pair)) for pair in (totem.type_relations or set())
+    ):
+        if len(relation) != 2:
+            continue
+        source, target = relation
+        for a, b in ((source, target), (target, source)):
+            entry = {"from": a, "to": b, "counts": {}, "strict": {}}
+            for family, _, most_precise in _RELATION_FAMILIES:
+                counts = histograms[family].get((a, b), {}) or {}
+                entry["counts"][family] = {
+                    str(key): int(value) for key, value in counts.items()
+                }
+                entry["strict"][family] = most_precise(
+                    (a, b), 1.0, histograms[family]
+                )
+            stats.append(entry)
+    return stats

@@ -11,6 +11,7 @@ export type AxisOption =
   | { type: "none" };
 
 export type RowOrderOption = "first_occurrence" | "last_occurrence";
+export type RowOrderDirection = "asc" | "desc";
 
 export interface OCEvent {
   id: string;
@@ -185,8 +186,10 @@ export function renderPointShape(
   cy: number,
   color: string,
   shape: ShapeName,
-  onClick?: () => void
+  onClick?: () => void,
+  onMouseDown?: () => void
 ): ReactElement<SVGElement> {
+  const interactive = Boolean(onClick || onMouseDown);
   const common = {
     fill: color,
     stroke: color,
@@ -194,7 +197,8 @@ export function renderPointShape(
     role: "button",
     tabIndex: 0,
     onClick,
-    style: { cursor: onClick ? "pointer" : "default" },
+    onMouseDown,
+    style: { cursor: interactive ? "pointer" : "default" },
   };
 
   if (shape === "square") {

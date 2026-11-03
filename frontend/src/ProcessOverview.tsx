@@ -10,6 +10,7 @@ import { DevDashboard } from "./components/dev_dashboard";
 import { AnalysisView } from "./components/AnalysisView";
 import { OccnConformanceView } from "./components/occn-conformance/OccnConformanceView";
 import { TotemConformanceView } from "./components/totem-conformance/TotemConformanceView";
+import { OcpnFlattenedReplayView } from "./components/ocpn-flattened-replay/OcpnFlattenedReplayView";
 import { OCAlignmentView } from "./components/oc-alignment/OCAlignmentView";
 import { ModelAssetsView } from "./components/ModelAssetsView";
 import { ImageAssetsView } from "./components/ImageAssetsView";
@@ -39,6 +40,9 @@ export function ProcessOverview() {
       case 'conformance':
         if (viewMode.component === 'totem') {
           return <TotemConformanceView initialAssetId={viewMode.assetId} />;
+        }
+        if (viewMode.component === 'ocpnReplay') {
+          return <OcpnFlattenedReplayView initialAssetId={viewMode.assetId} />;
         }
         if (viewMode.component === 'ocAlignment') {
           return <OCAlignmentView initialAssetId={viewMode.assetId} />;

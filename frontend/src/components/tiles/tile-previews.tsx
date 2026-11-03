@@ -167,6 +167,22 @@ export const OcpnTile = () => (
   </TilePreview>
 );
 
+/** The Petri net with a deviation halo around its middle place. */
+export const OcpnReplayTile = () => (
+  <TilePreview label="OCPN Flattened Replay">
+    <line x1="16" y1="25" x2="27" y2="25" stroke={SLATE} strokeWidth="2" strokeLinecap="round" />
+    <line x1="35" y1="25" x2="41" y2="25" stroke={SLATE} strokeWidth="2" strokeLinecap="round" />
+    <line x1="59" y1="25" x2="65" y2="25" stroke={SLATE} strokeWidth="2" strokeLinecap="round" />
+    <line x1="73" y1="25" x2="83" y2="25" stroke={SLATE} strokeWidth="2" strokeLinecap="round" />
+    <circle cx="10" cy="25" r="6" fill="#FFFFFF" stroke={BLUE} strokeWidth="2" />
+    <rect x="27" y="16" width="8" height="18" rx="2" fill={INK} />
+    <circle cx="50" cy="25" r="12" fill={ROSE} fillOpacity="0.3" />
+    <circle cx="50" cy="25" r="7" fill="#FFFFFF" stroke={GREEN} strokeWidth="2" />
+    <rect x="65" y="16" width="8" height="18" rx="2" fill={INK} />
+    <circle cx="89" cy="25" r="6" fill="#FFFFFF" stroke={VIOLET} strokeWidth="2" />
+  </TilePreview>
+);
+
 /** A stack of traces, one chevron row per variant. */
 export const VariantsTile = () => (
   <TilePreview label="Variants Explorer">
