@@ -156,6 +156,10 @@ type NodeSide = 'top' | 'bottom' | 'left' | 'right';
 const CORNER_RADIUS = 16;
 // Line width of every relation arc (before the zoom-dependent edge scale).
 const ARC_STROKE_WIDTH = 2.6;
+// Largest side length of the square cap of a during arc.
+const DEPENDENT_CAP_MAX_SIZE = 18;
+// Thickness of the two bars at each end of a parallel arc.
+const PARALLEL_BAR_STROKE_WIDTH = 4.5;
 
 // Discrete attachment slots for each side
 type HorizontalSlot = 'left' | 'center' | 'right'; // For top/bottom sides (3 positions)
@@ -1641,7 +1645,10 @@ function buildParallelBars({
   const targetPerpY = targetNormal ? targetNormal.x : defaultPerpY;
 
   const maxOffset = Math.max(0, effectiveLength - 0.75);
-  const outerOffset = 0;
+  // The bars are stroked centred on their position; offsetting the outer bar
+  // by half its thickness keeps all of it outside the node, so it does not
+  // look thicker than the inner bar.
+  const outerOffset = Math.min((PARALLEL_BAR_STROKE_WIDTH * edgeScale) / 2, maxOffset);
   const minGap = Math.max(
     3 * edgeScale,
     Math.min(5 * edgeScale, effectiveLength * 0.15),
@@ -1990,8 +1997,6 @@ function buildDependentCap({
   tipY,
   normalX,
   normalY,
-  effectiveLength,
-  edgeScale,
 }: {
   baseX: number;
   baseY: number;
@@ -1999,23 +2004,18 @@ function buildDependentCap({
   tipY: number;
   normalX: number;
   normalY: number;
-  effectiveLength: number;
-  edgeScale: number;
 }): string | undefined {
   const capLength = Math.hypot(tipX - baseX, tipY - baseY);
   if (!Number.isFinite(capLength) || capLength < 1) {
     return undefined;
   }
+  // The cap is a square: as wide across the arc as it is long along it.
   const normLength = Math.hypot(normalX, normalY) || 1;
   const unitNormalX = normalX / normLength;
   const unitNormalY = normalY / normLength;
   const unitTangentX = -unitNormalY;
   const unitTangentY = unitNormalX;
-  const capWidth = Math.min(
-    Math.max(10 * edgeScale, effectiveLength * 0.28),
-    20 * edgeScale,
-  );
-  const halfWidth = capWidth / 2;
+  const halfWidth = capLength / 2;
 
   const p1x = baseX + unitTangentX * halfWidth;
   const p1y = baseY + unitTangentY * halfWidth;
@@ -2128,7 +2128,7 @@ function recalculateEdgeDecorations(
     // Recalculate dependent cap
     const rawCap = Math.min(
       Math.max(12 * edgeScale, finalSegmentLength * 0.35),
-      24 * edgeScale,
+      DEPENDENT_CAP_MAX_SIZE * edgeScale,
     );
     const maxAvailable = Math.max(finalSegmentLength - 8 * edgeScale, 0);
     const capLength = Math.min(rawCap, maxAvailable);
@@ -2142,8 +2142,6 @@ function recalculateEdgeDecorations(
         tipY: collisionY,
         normalX: targetNormal.x,
         normalY: targetNormal.y,
-        effectiveLength: finalSegmentLength,
-        edgeScale,
       });
       segment.capPath = cap;
       renderEnd = { x: baseX, y: baseY };
@@ -2882,7 +2880,7 @@ function computeEdgeSegments(
       // Use final segment length for sizing, but position along actual final segment direction
       const rawCap = Math.min(
         Math.max(12 * edgeScale, finalSegmentLength * 0.35),
-        24 * edgeScale,
+        DEPENDENT_CAP_MAX_SIZE * edgeScale,
       );
       const maxAvailable = Math.max(finalSegmentLength - 8 * edgeScale, 0);
       const capLength = Math.min(rawCap, maxAvailable);
@@ -3113,8 +3111,6 @@ function computeEdgeSegments(
         tipY: dependentTip.y,
         normalX: targetNormal?.x ?? dirFinalX,
         normalY: targetNormal?.y ?? dirFinalY,
-        effectiveLength: finalSegmentLength,
-        edgeScale,
       });
       if (cap) {
         segment.capPath = cap;
@@ -3684,7 +3680,7 @@ function isOrthogonalRoute(waypoints: Point2D[]): boolean {
 function endpointHalfWidth(relation: RelationType, atTarget: boolean, edgeScale: number): number {
   if (relation === 'P') return 12 * edgeScale;
   if (atTarget && relation === 'I') return 13 * edgeScale;
-  if (atTarget && relation === 'D') return 10 * edgeScale;
+  if (atTarget && relation === 'D') return (DEPENDENT_CAP_MAX_SIZE / 2) * edgeScale;
   return 2 * edgeScale;
 }
 
@@ -5797,7 +5793,8 @@ function TotemVisualizer({
                   const strokeWidth =
                     (edge.relation === 'A' ? 2.2 : ARC_STROKE_WIDTH) * edgeStrokeScale;
                   const strokeColor = edge.color ?? '#0F172A';
-                  const barStrokeWidth = edge.relation === 'P' ? 4.5 * edgeStrokeScale : strokeWidth;
+                  const barStrokeWidth =
+                    edge.relation === 'P' ? PARALLEL_BAR_STROKE_WIDTH * edgeStrokeScale : strokeWidth;
                   return (
                     <g
                       key={`${edge.id}-primary`}

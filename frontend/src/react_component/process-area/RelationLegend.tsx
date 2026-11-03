@@ -42,7 +42,8 @@ function ParallelGlyph() {
   const bars = [3, 8, GLYPH_WIDTH - 8, GLYPH_WIDTH - 3];
   return (
     <svg width={GLYPH_WIDTH} height={GLYPH_HEIGHT} aria-hidden>
-      <line x1={2} y1={MID_Y} x2={GLYPH_WIDTH - 2} y2={MID_Y} stroke={STROKE} strokeWidth={2.6} strokeLinecap="round" />
+      {/* The line runs between the inner bars only, as on the chart. */}
+      <line x1={8} y1={MID_Y} x2={GLYPH_WIDTH - 8} y2={MID_Y} stroke={STROKE} strokeWidth={2.6} />
       {bars.map((x) => (
         <line key={x} x1={x} y1={MID_Y - 5} x2={x} y2={MID_Y + 5} stroke={STROKE} strokeWidth={2.6} />
       ))}
