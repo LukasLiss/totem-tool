@@ -23,7 +23,7 @@ const MID_Y = GLYPH_HEIGHT / 2;
 function DuringGlyph() {
   return (
     <svg width={GLYPH_WIDTH} height={GLYPH_HEIGHT} aria-hidden>
-      <line x1={2} y1={MID_Y} x2={32} y2={MID_Y} stroke={STROKE} strokeWidth={2.4} strokeLinecap="round" />
+      <line x1={2} y1={MID_Y} x2={32} y2={MID_Y} stroke={STROKE} strokeWidth={2.6} strokeLinecap="round" />
       <rect x={32} y={MID_Y - 5} width={10} height={10} fill={STROKE} />
     </svg>
   );
@@ -32,7 +32,7 @@ function DuringGlyph() {
 function PrecedesGlyph() {
   return (
     <svg width={GLYPH_WIDTH} height={GLYPH_HEIGHT} aria-hidden>
-      <line x1={2} y1={MID_Y} x2={31} y2={MID_Y} stroke={STROKE} strokeWidth={2.2} strokeLinecap="round" />
+      <line x1={2} y1={MID_Y} x2={31} y2={MID_Y} stroke={STROKE} strokeWidth={2.6} strokeLinecap="round" />
       <path d={`M 30 ${MID_Y - 6} L 42 ${MID_Y} L 30 ${MID_Y + 6} Z`} fill={STROKE} />
     </svg>
   );
@@ -42,7 +42,7 @@ function ParallelGlyph() {
   const bars = [3, 8, GLYPH_WIDTH - 8, GLYPH_WIDTH - 3];
   return (
     <svg width={GLYPH_WIDTH} height={GLYPH_HEIGHT} aria-hidden>
-      <line x1={2} y1={MID_Y} x2={GLYPH_WIDTH - 2} y2={MID_Y} stroke={STROKE} strokeWidth={1.5} strokeLinecap="round" />
+      <line x1={2} y1={MID_Y} x2={GLYPH_WIDTH - 2} y2={MID_Y} stroke={STROKE} strokeWidth={2.6} strokeLinecap="round" />
       {bars.map((x) => (
         <line key={x} x1={x} y1={MID_Y - 5} x2={x} y2={MID_Y + 5} stroke={STROKE} strokeWidth={2.6} />
       ))}

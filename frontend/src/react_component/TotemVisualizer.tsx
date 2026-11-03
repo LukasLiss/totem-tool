@@ -23,6 +23,8 @@ import { HoverTooltip, type TooltipRow } from './MetricTooltip';
 import { useProcessAreaStore } from '../store/processAreaStore';
 import { ProcessAreaFilterAction } from './process-area/ProcessAreaFilterAction';
 import { RelationLegend } from './process-area/RelationLegend';
+import { RelationStatsCard } from './process-area/RelationStatsCard';
+import { indexRelationStats, type RelationStats } from './process-area/relationStats';
 
 type MlpaLayerArea = {
   objectTypes: string[];
@@ -43,6 +45,8 @@ type TotemApiResponse = {
   type_relations?: Array<string[]>;
   all_event_types?: string[];
   object_type_to_event_types?: Record<string, string[]>;
+  /** Per directed pair: relation histograms and the strict (tau = 1) TOTeM. */
+  relation_stats?: RelationStats[];
 };
 
 type ProcessAreaDefinition = {
@@ -148,12 +152,10 @@ type Point2D = { x: number; y: number };
 
 type NodeSide = 'top' | 'bottom' | 'left' | 'right';
 
-// Softer, sweeping corners for S/Z-shaped postprocessed edges only
-const FLOWING_S_CURVE = {
-  cornerScale: 1.15,
-  maxCornerRadius: 290,
-  minCornerRadius: 18,
-};
+// Radius of every rounded corner of a routed arc.
+const CORNER_RADIUS = 16;
+// Line width of every relation arc (before the zoom-dependent edge scale).
+const ARC_STROKE_WIDTH = 2.6;
 
 // Discrete attachment slots for each side
 type HorizontalSlot = 'left' | 'center' | 'right'; // For top/bottom sides (3 positions)
@@ -1464,10 +1466,7 @@ function findBestRoute(
  * Builds a smooth curved path from waypoints.
  * Converts orthogonal waypoints into smooth Bezier curves.
  */
-function buildCurvedPathFromWaypoints(
-  waypoints: Point2D[],
-  options?: { cornerScale?: number; maxCornerRadius?: number; minCornerRadius?: number },
-): string {
+function buildCurvedPathFromWaypoints(waypoints: Point2D[]): string {
   if (waypoints.length < 2) {
     return '';
   }
@@ -1475,10 +1474,6 @@ function buildCurvedPathFromWaypoints(
   if (waypoints.length === 2) {
     return `M ${waypoints[0].x} ${waypoints[0].y} L ${waypoints[1].x} ${waypoints[1].y}`;
   }
-
-  const dynamicCornerScale = options?.cornerScale ?? 0.4;
-  const dynamicMaxRadius = options?.maxCornerRadius ?? 40;
-  const dynamicMinRadius = options?.minCornerRadius ?? 0;
 
   // For 3+ points, create smooth curves through the corners
   const parts: string[] = [`M ${waypoints[0].x} ${waypoints[0].y}`];
@@ -1501,19 +1496,9 @@ function buildCurvedPathFromWaypoints(
     const limitAfter = i + 1 === waypoints.length - 1 ? lenAfter : lenAfter * 0.5;
     const maxAllowedRadius = Math.min(limitBefore, limitAfter);
 
-    let cornerRadius = Math.min(
-      lenBefore * dynamicCornerScale,
-      lenAfter * dynamicCornerScale,
-      dynamicMaxRadius
-    );
-    // Apply dynamicMinRadius but make sure it never exceeds the geometric limit
-    if (cornerRadius < dynamicMinRadius) {
-      cornerRadius = Math.min(dynamicMinRadius, maxAllowedRadius);
-    }
-    // Cap to ensure it fits the segment geometries and prevents overshooting/overlaps
-    if (cornerRadius > maxAllowedRadius) {
-      cornerRadius = maxAllowedRadius;
-    }
+    // Every corner gets the same radius; only a segment too short to hold
+    // it forces a tighter one.
+    const cornerRadius = Math.min(CORNER_RADIUS, maxAllowedRadius);
 
     // Calculate points along segments where curve should start/end
     const beforeDir = {
@@ -2053,7 +2038,6 @@ function recalculateEdgeDecorations(
   waypoints: Point2D[],
   relation: string,
   edgeScale: number,
-  curveOptions?: { cornerScale?: number; maxCornerRadius?: number; minCornerRadius?: number },
 ): void {
   if (waypoints.length < 2) return;
 
@@ -2233,7 +2217,7 @@ function recalculateEdgeDecorations(
   segment.renderEnd = renderEnd;
 
   if (pathNeedsUpdate) {
-    segment.path = buildCurvedPathFromWaypoints(updatedWaypoints, curveOptions);
+    segment.path = buildCurvedPathFromWaypoints(updatedWaypoints);
     // Do NOT overwrite debugWaypoints with the trimmed updatedWaypoints.
     // Preserving the original node-boundary endpoints allows the overlap pass
     // to clamp correctly, preventing decorations from drifting/dangling in space
@@ -3342,12 +3326,12 @@ function computeEdgeSegments(
 
         const bestZ = zCandidates[0];
         if (bestZ) {
-          segment.path = buildCurvedPathFromWaypoints(bestZ.waypoints, FLOWING_S_CURVE);
+          segment.path = buildCurvedPathFromWaypoints(bestZ.waypoints);
           segment.debugWaypoints = bestZ.waypoints;
           segment.crossesNode = bestZ.crossings > 0;
           segment.crossingPoints = undefined;
-          // Recalculate decorations for the new path (preserve flowing radius)
-          recalculateEdgeDecorations(segment, bestZ.waypoints, edge.relation, edgeScale, FLOWING_S_CURVE);
+          // Recalculate decorations for the new path
+          recalculateEdgeDecorations(segment, bestZ.waypoints, edge.relation, edgeScale);
         }
       }
     }
@@ -3663,18 +3647,225 @@ function computeEdgeSegments(
     });
   });
 
-  // Finally, regenerate path strings and recalculate decorations for modified segments only
+  // Keep the arc ends that share a node side apart, so their caps, arrow
+  // heads and bars never touch.
+  spreadSharedEndpoints(segments, edges, positions, edgeScale, modifiedSegmentIds);
+
+  // Finally, regenerate path strings and decorations from the final
+  // waypoints. Every orthogonal route is rebuilt, not just the modified ones,
+  // so all arcs get the same corner radius and decoration geometry no matter
+  // which routing stage produced them.
   segments.forEach((seg) => {
-    if (seg.relation === 'A' || !seg.debugWaypoints || !modifiedSegmentIds.has(seg.id)) return;
+    if (seg.relation === 'A' || !seg.debugWaypoints) return;
+    if (!modifiedSegmentIds.has(seg.id) && !isOrthogonalRoute(seg.debugWaypoints)) return;
 
-    const isFlowingZCurve = seg.debugWaypoints.length >= 4;
-    const curveOpts = isFlowingZCurve ? FLOWING_S_CURVE : undefined;
-
-    seg.path = buildCurvedPathFromWaypoints(seg.debugWaypoints, curveOpts);
-    recalculateEdgeDecorations(seg, seg.debugWaypoints, seg.relation, edgeScale, curveOpts);
+    seg.path = buildCurvedPathFromWaypoints(seg.debugWaypoints);
+    recalculateEdgeDecorations(seg, seg.debugWaypoints, seg.relation, edgeScale);
   });
 
   return segments;
+}
+
+function isOrthogonalRoute(waypoints: Point2D[]): boolean {
+  if (waypoints.length < 2) return false;
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    const dx = Math.abs(waypoints[i + 1].x - waypoints[i].x);
+    const dy = Math.abs(waypoints[i + 1].y - waypoints[i].y);
+    if (dx > 1 && dy > 1) return false;
+  }
+  return true;
+}
+
+/**
+ * Half the width, across the arc, of what is drawn where an arc meets a node:
+ * the box cap (D), arrow head (I) or bars (P) at the target, the bars of a
+ * parallel arc at the source, or just the line itself.
+ */
+function endpointHalfWidth(relation: RelationType, atTarget: boolean, edgeScale: number): number {
+  if (relation === 'P') return 12 * edgeScale;
+  if (atTarget && relation === 'I') return 13 * edgeScale;
+  if (atTarget && relation === 'D') return 10 * edgeScale;
+  return 2 * edgeScale;
+}
+
+/** Which side of `node` the boundary point `point` lies on. */
+function sideOfBoundaryPoint(node: NodePosition, point: Point2D): NodeSide {
+  const distances: Array<[NodeSide, number]> = [
+    ['top', Math.abs(point.y - (node.centerY - node.height / 2))],
+    ['bottom', Math.abs(point.y - (node.centerY + node.height / 2))],
+    ['left', Math.abs(point.x - (node.centerX - node.width / 2))],
+    ['right', Math.abs(point.x - (node.centerX + node.width / 2))],
+  ];
+  distances.sort((a, b) => a[1] - b[1]);
+  return distances[0][0];
+}
+
+/**
+ * Spreads the arc ends that attach to the same side of the same node so that
+ * neighbouring ends are at least the width of their decorations (plus a gap)
+ * apart. Ends are moved along the side; the first segment of the route moves
+ * with them so it still leaves the node perpendicularly. Mutates the
+ * segments' `debugWaypoints` and records every moved segment in `modified`.
+ */
+function spreadSharedEndpoints(
+  segments: EdgeSegment[],
+  edges: EdgeDescriptor[],
+  positions: Record<string, NodePosition>,
+  edgeScale: number,
+  modified: Set<string>,
+): void {
+  const gap = 14 * edgeScale;
+  const edgeById = new Map(edges.map((edge) => [edge.id, edge]));
+
+  type EndRef = {
+    seg: EdgeSegment;
+    index: number; // 0 or the last waypoint index
+    nodeId: string;
+    otherNodeId: string;
+    side: NodeSide;
+    halfWidth: number;
+  };
+
+  const along = (side: NodeSide, p: Point2D) =>
+    side === 'top' || side === 'bottom' ? p.x : p.y;
+  const setAlong = (side: NodeSide, p: Point2D, value: number) => {
+    if (side === 'top' || side === 'bottom') p.x = value;
+    else p.y = value;
+  };
+  const sideRange = (node: NodePosition, side: NodeSide): [number, number] => {
+    const margin = 10 * edgeScale;
+    if (side === 'top' || side === 'bottom') {
+      return [node.centerX - node.width / 2 + margin, node.centerX + node.width / 2 - margin];
+    }
+    return [node.centerY - node.height / 2 + margin, node.centerY + node.height / 2 - margin];
+  };
+  // Pins the perpendicular coordinate of a boundary point onto its side.
+  const snapToSide = (node: NodePosition, side: NodeSide, p: Point2D) => {
+    if (side === 'top') p.y = node.centerY - node.height / 2;
+    else if (side === 'bottom') p.y = node.centerY + node.height / 2;
+    else if (side === 'left') p.x = node.centerX - node.width / 2;
+    else p.x = node.centerX + node.width / 2;
+  };
+
+  const collect = (): Map<string, EndRef[]> => {
+    const groups = new Map<string, EndRef[]>();
+    segments.forEach((seg) => {
+      if (seg.relation === 'A') return;
+      const wps = seg.debugWaypoints;
+      if (!wps || wps.length < 2 || !isOrthogonalRoute(wps)) return;
+      const edge = edgeById.get(seg.id);
+      if (!edge) return;
+      const ends: Array<[number, string, string, boolean]> = [
+        [0, edge.from, edge.to, false],
+        [wps.length - 1, edge.to, edge.from, true],
+      ];
+      ends.forEach(([index, nodeId, otherNodeId, atTarget]) => {
+        const node = positions[nodeId];
+        if (!node) return;
+        const side = sideOfBoundaryPoint(node, wps[index]);
+        const key = `${nodeId}::${side}`;
+        const ref: EndRef = {
+          seg,
+          index,
+          nodeId,
+          otherNodeId,
+          side,
+          halfWidth: endpointHalfWidth(seg.relation, atTarget, edgeScale),
+        };
+        const list = groups.get(key);
+        if (list) list.push(ref);
+        else groups.set(key, [ref]);
+      });
+    });
+    return groups;
+  };
+
+  // A straight two-point arc moves at both ends, which can push into another
+  // group; a second round settles those.
+  for (let round = 0; round < 2; round++) {
+    let changed = false;
+    collect().forEach((refs) => {
+      if (refs.length < 2) return;
+      const node = positions[refs[0].nodeId];
+      const side = refs[0].side;
+      const [rangeMin, rangeMax] = sideRange(node, side);
+
+      // Order along the side; ties (ends sharing a slot) are broken by where
+      // the arc is heading, so the spread does not make the arcs cross.
+      const farAlong = (ref: EndRef) => {
+        const wps = ref.seg.debugWaypoints!;
+        const far = ref.index === 0 ? wps[wps.length - 1] : wps[0];
+        return along(side, far);
+      };
+      const sorted = refs
+        .map((ref) => ({ ref, pos: along(side, ref.seg.debugWaypoints![ref.index]) }))
+        .sort((a, b) => (Math.abs(a.pos - b.pos) > 0.5 ? a.pos - b.pos : farAlong(a.ref) - farAlong(b.ref)));
+
+      const required = sorted.slice(1).map(
+        (item, i) => sorted[i].ref.halfWidth + item.ref.halfWidth + gap,
+      );
+      const crowded = required.some(
+        (minDistance, i) => sorted[i + 1].pos - sorted[i].pos < minDistance - 0.5,
+      );
+      if (!crowded) return;
+
+      // Push neighbours apart, then centre the block on where the ends were.
+      const targets = sorted.map((item) => item.pos);
+      for (let i = 1; i < targets.length; i++) {
+        targets[i] = Math.max(targets[i], targets[i - 1] + required[i - 1]);
+      }
+      const originalMean = sorted.reduce((sum, item) => sum + item.pos, 0) / sorted.length;
+      const newMean = targets.reduce((sum, value) => sum + value, 0) / targets.length;
+      let shift = originalMean - newMean;
+      const span = targets[targets.length - 1] - targets[0];
+      const available = rangeMax - rangeMin;
+      if (span > available && span > 0) {
+        // Not enough room for the full spacing: distribute over the side.
+        const factor = available / span;
+        const first = targets[0];
+        for (let i = 0; i < targets.length; i++) {
+          targets[i] = rangeMin + (targets[i] - first) * factor;
+        }
+        shift = 0;
+      } else {
+        shift = Math.max(rangeMin - targets[0], Math.min(rangeMax - targets[targets.length - 1], shift));
+      }
+
+      sorted.forEach((item, i) => {
+        const delta = targets[i] + shift - item.pos;
+        if (Math.abs(delta) < 0.5) return;
+        const wps = item.ref.seg.debugWaypoints!;
+        const endIndex = item.ref.index;
+        const neighbourIndex = endIndex === 0 ? 1 : wps.length - 2;
+        const end = wps[endIndex];
+        const neighbour = wps[neighbourIndex];
+        // The first segment leaves the node perpendicularly when it does not
+        // move along the side; keep it that way by moving it as a whole.
+        const leavesPerpendicular = Math.abs(along(side, neighbour) - along(side, end)) < 2;
+
+        snapToSide(node, side, end);
+        setAlong(side, end, along(side, end) + delta);
+        if (leavesPerpendicular) {
+          if (wps.length === 2) {
+            // A straight arc: move the far end too so it stays straight, as
+            // far as the far node's side allows.
+            const otherNode = positions[item.ref.otherNodeId];
+            if (otherNode) {
+              const otherSide = sideOfBoundaryPoint(otherNode, neighbour);
+              const [otherMin, otherMax] = sideRange(otherNode, otherSide);
+              const moved = Math.max(otherMin, Math.min(otherMax, along(side, neighbour) + delta));
+              setAlong(side, neighbour, moved);
+            }
+          } else {
+            setAlong(side, neighbour, along(side, neighbour) + delta);
+          }
+        }
+        modified.add(item.ref.seg.id);
+        changed = true;
+      });
+    });
+    if (!changed) break;
+  }
 }
 
 function describeSimplePathGeometry({
@@ -4191,6 +4382,13 @@ function TotemVisualizer({
   const [tooltipState, setTooltipState] = useState<
     { x: number; y: number; title?: string; rows: TooltipRow[] } | null
   >(null);
+  /** The hovered (or, once clicked, pinned) relation arc. */
+  const [arcCard, setArcCard] = useState<
+    { x: number; y: number; from: string; to: string; relation: RelationType; pinned: boolean } | null
+  >(null);
+  const closeArcCard = useCallback(() => setArcCard(null), []);
+  /** Where the pointer went down on an arc, to tell a click from a pan. */
+  const arcPressRef = useRef<{ x: number; y: number } | null>(null);
   const effectiveReloadSignal = reloadSignal ?? internalReloadSignal;
   /** Sequence number of the most recently started hierarchy request. */
   const latestTotemRequestRef = useRef(0);
@@ -4727,6 +4925,10 @@ function TotemVisualizer({
   const baseEdges = useMemo(
     () => extractEdges(rawTotem?.tempgraph),
     [rawTotem?.tempgraph],
+  );
+  const relationStats = useMemo(
+    () => indexRelationStats(rawTotem?.relation_stats),
+    [rawTotem],
   );
   const dynamicAreaEdges = useMemo(() => {
     const descriptors: EdgeDescriptor[] = [];
@@ -5590,39 +5792,49 @@ function TotemVisualizer({
                 }}
               >
                 {primaryEdgeSegments.map((edge) => {
+                  // All relations share one line width; only the end
+                  // decorations tell them apart.
                   const strokeWidth =
-                    (edge.relation === 'D'
-                      ? 3.2
-                      : edge.relation === 'P'
-                        ? 1.5
-                        : edge.relation === 'A'
-                          ? 2.2
-                          : 2.6) * edgeStrokeScale;
+                    (edge.relation === 'A' ? 2.2 : ARC_STROKE_WIDTH) * edgeStrokeScale;
                   const strokeColor = edge.color ?? '#0F172A';
                   const barStrokeWidth = edge.relation === 'P' ? 4.5 * edgeStrokeScale : strokeWidth;
                   return (
                     <g
                       key={`${edge.id}-primary`}
-                      style={{ pointerEvents: 'auto' }}
+                      style={{ pointerEvents: 'auto', cursor: 'pointer' }}
                       onMouseEnter={(e) => {
-                        setTooltipState({
+                        if (!edge.from || !edge.to) return;
+                        const { from, to, relation } = edge;
+                        setArcCard((prev) =>
+                          prev?.pinned
+                            ? prev
+                            : { x: e.clientX, y: e.clientY, from, to, relation, pinned: false },
+                        );
+                      }}
+                      onMouseLeave={() => setArcCard((prev) => (prev?.pinned ? prev : null))}
+                      onMouseMove={(e) => {
+                        setArcCard((prev) =>
+                          prev && !prev.pinned ? { ...prev, x: e.clientX, y: e.clientY } : prev,
+                        );
+                      }}
+                      onMouseDown={(e) => {
+                        arcPressRef.current = { x: e.clientX, y: e.clientY };
+                      }}
+                      onClick={(e) => {
+                        if (!edge.from || !edge.to) return;
+                        const press = arcPressRef.current;
+                        arcPressRef.current = null;
+                        // A drag that started on the arc pans; it is no click.
+                        if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 4) return;
+                        e.stopPropagation();
+                        setArcCard({
                           x: e.clientX,
                           y: e.clientY,
-                          title:
-                            edge.from && edge.to
-                              ? `${edge.from} \u2192 ${edge.to}`
-                              : undefined,
-                          rows: [
-                            {
-                              label: 'Relation',
-                              value: RELATION_LABELS[edge.relation] ?? edge.relation,
-                            },
-                          ],
+                          from: edge.from,
+                          to: edge.to,
+                          relation: edge.relation,
+                          pinned: true,
                         });
-                      }}
-                      onMouseLeave={() => setTooltipState(null)}
-                      onMouseMove={(e) => {
-                        setTooltipState(prev => prev ? { ...prev, x: e.clientX, y: e.clientY } : null);
                       }}
                     >
                       <path
@@ -5654,13 +5866,7 @@ function TotemVisualizer({
                 })}
                 {violatingEdgeSegments.map((edge, vIndex) => {
                   const strokeWidth =
-                    (edge.relation === 'D'
-                      ? 3.2
-                      : edge.relation === 'P'
-                        ? 3
-                        : edge.relation === 'A'
-                          ? 2.2
-                          : 2.6) * edgeStrokeScale;
+                    (edge.relation === 'A' ? 2.2 : ARC_STROKE_WIDTH) * edgeStrokeScale;
                   const highlightWidth = strokeWidth + 1.6;
                   const highlightColor = '#ec4899';
                   const markerStroke = '#be185d';
@@ -6239,6 +6445,18 @@ function TotemVisualizer({
         </div>
       )}
       {tooltipState && <HoverTooltip {...tooltipState} />}
+      {arcCard && (
+        <RelationStatsCard
+          x={arcCard.x}
+          y={arcCard.y}
+          from={arcCard.from}
+          to={arcCard.to}
+          relationLabel={RELATION_LABELS[arcCard.relation] ?? arcCard.relation}
+          stats={relationStats}
+          pinned={arcCard.pinned}
+          onClose={closeArcCard}
+        />
+      )}
     </div>
   );
 
