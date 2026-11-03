@@ -38,6 +38,7 @@ from .ocdfg import NewOCDFGViewSet, OCDFGBlockStructureView
 from .occn import OCCNViewSet, _occn_base_cache
 from .ochandover import event_log_table, ochandover, profile_matrix
 from .playout import playout, playout_export_ocel
+from .project_settings import project_view_settings
 from .variants import _layout_shim, variants
 
 __all__ = [
@@ -54,6 +55,7 @@ __all__ = [
     "event_log_table",
     "playout",
     "playout_export_ocel",
+    "project_view_settings",
     "greeting",
     "health_check",
     "delete_user_data",

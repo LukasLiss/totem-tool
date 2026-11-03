@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { describeBlock, detectBlocks, fromProcessTree, linearize, orderFlowers } from '../blocks';
-import { EXAMPLES } from '../examples';
+import { EXAMPLES } from './fixtures';
 import { greedyFasOrder, dfsOrder, springRankOrder, bfsOrder } from '../flow';
 import { filterGraph, fromBackendDfg, fromTraces } from '../graph';
 import { computeLayout } from '../layout';

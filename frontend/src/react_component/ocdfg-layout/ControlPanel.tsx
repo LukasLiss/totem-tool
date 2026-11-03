@@ -1,21 +1,42 @@
-/** The option controls of the layout lab, grouped by aspect. */
-import { LayoutGrid } from 'lucide-react';
-import { ASPECTS, type Aspect, type AspectGroup } from './options';
+/** The option controls of the OC-DFG layout panel, grouped by aspect. */
+import { ArrowDown, ArrowUp, LayoutGrid } from 'lucide-react';
+import { ASPECTS, NUMERIC_BOUNDS, type Aspect, type AspectGroup, type NumericOption } from './options';
 import type { LayoutOptions } from './types';
 
 interface ControlPanelProps {
   options: LayoutOptions;
   onChange: (patch: Partial<LayoutOptions>) => void;
-  onGallery: (aspect: Aspect) => void;
-  hasVariantRanks: boolean;
+  onGallery?: (aspect: Aspect) => void;
+  /** Current lane order (left to right) for the manual reordering list. */
+  laneOrder?: string[];
+  colors?: Record<string, string>;
 }
 
 const GROUPS: AspectGroup[] = ['Structure', 'Object types', 'Arcs', 'Look'];
 
-export default function ControlPanel({ options, onChange, onGallery, hasVariantRanks }: ControlPanelProps) {
+export default function ControlPanel({ options, onChange, onGallery, laneOrder = [], colors = {} }: ControlPanelProps) {
   const o = options;
+  const range = (key: NumericOption, label: string, format: (v: number) => string, hint?: string, onValue?: (v: number) => void) => (
+    <Range
+      label={label}
+      value={o[key]}
+      {...NUMERIC_BOUNDS[key]}
+      format={format}
+      onChange={onValue ?? ((v) => onChange({ [key]: v } as Partial<LayoutOptions>))}
+      hint={hint}
+    />
+  );
+  const px = (v: number) => `${v}px`;
+  const moveLane = (type: string, delta: number) => {
+    const order = [...laneOrder];
+    const i = order.indexOf(type);
+    const j = i + delta;
+    if (i < 0 || j < 0 || j >= order.length) return;
+    [order[i], order[j]] = [order[j], order[i]];
+    onChange({ laneOrder: 'manual', manualLaneOrder: order });
+  };
   return (
-    <div className="flex flex-col gap-2 text-xs" data-testid="layout-lab-controls">
+    <div className="flex flex-col gap-2 text-xs" data-testid="layout-controls">
       {GROUPS.map((group) => (
         <details key={group} open className="rounded-md border border-slate-200 bg-white">
           <summary className="cursor-pointer select-none px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
@@ -27,30 +48,44 @@ export default function ControlPanel({ options, onChange, onGallery, hasVariantR
             ))}
             {group === 'Structure' && (
               <>
-                {o.blockDetection === 'light' && (
-                  <Range label="Noise threshold (IMf)" value={o.blockNoise} min={0} max={0.5} step={0.01} format={(v) => `${Math.round(v * 100)} %`} onChange={(v) => onChange({ blockNoise: v })} hint="Arcs lighter than this share of their source's heaviest outgoing arc are ignored while searching cuts." />
-                )}
-                <Range label="Layer gap" value={o.rankGap} min={24} max={140} step={2} format={(v) => `${v}px`} onChange={(v) => onChange({ rankGap: v })} />
+                {o.blockDetection === 'light' &&
+                  range('blockNoise', 'Noise threshold (IMf)', (v) => `${Math.round(v * 100)} %`, "Arcs lighter than this share of their source's heaviest outgoing arc are ignored while searching cuts.")}
+                {range('rankGap', 'Layer gap', px)}
               </>
             )}
             {group === 'Object types' && (
               <>
-                <Range label="Gap between nodes" value={o.nodeGap} min={8} max={90} step={2} format={(v) => `${v}px`} onChange={(v) => onChange({ nodeGap: v })} />
-                <Range label="Gap between lanes" value={o.laneGap} min={0} max={160} step={4} format={(v) => `${v}px`} onChange={(v) => onChange({ laneGap: v })} />
+                {laneOrder.length > 1 && (
+                  <div className="flex flex-col gap-0.5" data-testid="layout-lane-order">
+                    <span className="font-medium text-slate-700">Lanes (left to right)</span>
+                    {laneOrder.map((t, i) => (
+                      <div key={t} className="flex items-center gap-1.5">
+                        <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: colors[t] ?? '#64748b' }} />
+                        <span className="flex-1 truncate text-slate-700">{t}</span>
+                        <button type="button" className="rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-30" disabled={i === 0} onClick={() => moveLane(t, -1)} aria-label={`Move ${t} left`}>
+                          <ArrowUp className="h-3 w-3 -rotate-90" />
+                        </button>
+                        <button type="button" className="rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-30" disabled={i === laneOrder.length - 1} onClick={() => moveLane(t, 1)} aria-label={`Move ${t} right`}>
+                          <ArrowDown className="h-3 w-3 -rotate-90" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {range('nodeGap', 'Gap between nodes', px)}
+                {range('laneGap', 'Gap between lanes', px)}
                 <Toggle label="Show lanes" checked={o.showLanes} onChange={(v) => onChange({ showLanes: v })} />
               </>
             )}
             {group === 'Arcs' && (
               <>
                 <Toggle label="Merge points (join arcs of a type before a node)" checked={o.mergePoints} onChange={(v) => onChange({ mergePoints: v })} />
-                {(o.edgeStyle === 'orthogonal' || o.edgeStyle === 'octilinear') && (
-                  <Range label="Corner radius" value={o.cornerRadius} min={0} max={30} step={1} format={(v) => `${v}px`} onChange={(v) => onChange({ cornerRadius: v })} />
-                )}
-                <Range label="Track gap" value={o.trackGap} min={1} max={16} step={0.5} format={(v) => `${v}px`} onChange={(v) => onChange({ trackGap: v })} hint="Space between parallel lines (highways, channels, ports)." />
-                <Range label="Min. width" value={o.minWidth} min={0.5} max={8} step={0.1} format={(v) => v.toFixed(1)} onChange={(v) => onChange({ minWidth: v, maxWidth: Math.max(v, o.maxWidth) })} />
-                <Range label="Max. width" value={o.maxWidth} min={0.5} max={16} step={0.1} format={(v) => v.toFixed(1)} onChange={(v) => onChange({ maxWidth: v, minWidth: Math.min(v, o.minWidth) })} />
-                <Range label="Arrow size" value={o.arrowSize} min={0.4} max={2.5} step={0.05} format={(v) => `${v.toFixed(2)}×`} onChange={(v) => onChange({ arrowSize: v })} />
-                <Range label="Opacity" value={o.arcOpacity} min={0.2} max={1} step={0.05} format={(v) => `${Math.round(v * 100)} %`} onChange={(v) => onChange({ arcOpacity: v })} />
+                {(o.edgeStyle === 'orthogonal' || o.edgeStyle === 'octilinear') && range('cornerRadius', 'Corner radius', px)}
+                {range('trackGap', 'Track gap', px, 'Space between parallel lines (highways, channels, ports).')}
+                {range('minWidth', 'Min. width', (v) => v.toFixed(1), undefined, (v) => onChange({ minWidth: v, maxWidth: Math.max(v, o.maxWidth) }))}
+                {range('maxWidth', 'Max. width', (v) => v.toFixed(1), undefined, (v) => onChange({ maxWidth: v, minWidth: Math.min(v, o.minWidth) }))}
+                {range('arrowSize', 'Arrow size', (v) => `${v.toFixed(2)}×`)}
+                {range('arcOpacity', 'Opacity', (v) => `${Math.round(v * 100)} %`)}
                 <Toggle label="White halo (crossings read over/under)" checked={o.arcHalo} onChange={(v) => onChange({ arcHalo: v })} />
                 <Toggle label="Frequency labels on arcs" checked={o.arcLabels === 'frequency'} onChange={(v) => onChange({ arcLabels: v ? 'frequency' : 'none' })} />
               </>
@@ -65,31 +100,6 @@ export default function ControlPanel({ options, onChange, onGallery, hasVariantR
           </div>
         </details>
       ))}
-      <div className="flex flex-col gap-2.5 rounded-md border border-slate-200 bg-white px-3 py-3">
-        <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Data</div>
-        <Range
-          label="Min. arc frequency"
-          value={o.arcThreshold}
-          min={0}
-          max={0.5}
-          step={0.01}
-          format={(v) => `${Math.round(v * 100)} %`}
-          onChange={(v) => onChange({ arcThreshold: v })}
-          hint="Hide arcs lighter than this share of their object type's heaviest arc."
-        />
-        {hasVariantRanks && (
-          <Range
-            label="Variant coverage"
-            value={o.variantCoverage}
-            min={0.01}
-            max={1}
-            step={0.01}
-            format={(v) => `${Math.round(v * 100)} %`}
-            onChange={(v) => onChange({ variantCoverage: v })}
-            hint="Only arcs of the most frequent variants of each object type (share of all variants)."
-          />
-        )}
-      </div>
     </div>
   );
 }
@@ -103,7 +113,7 @@ function AspectSelect({
   aspect: Aspect;
   value: string;
   onChange: (patch: Partial<LayoutOptions>) => void;
-  onGallery: (aspect: Aspect) => void;
+  onGallery?: (aspect: Aspect) => void;
 }) {
   const current = aspect.choices.find((c) => c.value === value);
   const id = `lab-${aspect.key}`;
@@ -113,7 +123,7 @@ function AspectSelect({
         <label htmlFor={id} className="font-medium text-slate-700">
           {aspect.label}
         </label>
-        <button
+        {onGallery && <button
           type="button"
           className="flex items-center gap-1 rounded px-1 py-0.5 text-[10px] text-slate-500 hover:bg-slate-100 hover:text-slate-800"
           onClick={() => onGallery(aspect)}
@@ -121,7 +131,7 @@ function AspectSelect({
           aria-label={`Compare ${aspect.label}`}
         >
           <LayoutGrid className="h-3 w-3" /> compare
-        </button>
+        </button>}
       </div>
       <select
         id={id}

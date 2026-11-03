@@ -6280,3 +6280,127 @@ class HostingLimitsTests(TestCase):
             self.client.get("/api/upload-limits/").data,
             {"max_upload_bytes": 2097152, "max_projects_per_user": 3, "project_count": 1},
         )
+
+
+# ---------------------------------------------------------------------------
+# Layout preferences of OC-DFG views (dashboard widgets and projects)
+# ---------------------------------------------------------------------------
+
+_PREFS = {"version": 1, "options": {"edgeStyle": "orthogonal", "selfLoopStyle": "badge"}}
+
+
+class OcdfgDashboardLayoutTests(TestCase):
+    """layout_options of NewOCDFGComponent: save_layout, get_layout and the
+    view-mode PATCH that finds a widget by its grid position."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="layout-owner")
+        self.other = User.objects.create_user(username="layout-other")
+        self.project = Project.objects.create(name="Layouts")
+        self.project.users.add(self.user)
+        self.dashboard = Dashboard.objects.create(project=self.project, name="D", order_in_project=0)
+        self.client.force_authenticate(user=self.user)
+
+    def _save(self, layout):
+        return self.client.post(
+            f"/api/dashboard/{self.dashboard.pk}/save_layout/", {"layout": layout}, format="json"
+        )
+
+    def _layout(self):
+        return self.client.get(f"/api/dashboard/{self.dashboard.pk}/get_layout/").json()
+
+    def _widget(self, **extra):
+        return {"x": 2, "y": 4, "w": 6, "h": 8, "component_name": "NewOCDFGVariantsComponent", **extra}
+
+    def _patch(self, body):
+        return self.client.patch(
+            f"/api/dashboard/{self.dashboard.pk}/ocdfg_layout/", body, format="json"
+        )
+
+    def test_save_and_get_layout_keep_layout_options(self):
+        self.assertEqual(self._save([self._widget(layout_options=_PREFS)]).status_code, 200)
+        self.assertEqual(self._layout()[0]["layout_options"], _PREFS)
+
+    def test_missing_or_invalid_layout_options_are_stored_as_null(self):
+        self._save([self._widget(), self._widget(x=8, layout_options="not an object")])
+        self.assertEqual([c["layout_options"] for c in self._layout()], [None, None])
+
+    def test_patch_by_position_updates_and_resets(self):
+        self._save([self._widget(), {"x": 0, "y": 0, "w": 2, "h": 2, "component_name": "TextBoxComponent", "text": "t"}])
+        response = self._patch({"x": 2, "y": 4, "layout_options": _PREFS})
+        self.assertEqual(response.status_code, 200)
+        ocdfg = [c for c in self._layout() if c["component_name"] == "NewOCDFGVariantsComponent"][0]
+        self.assertEqual(ocdfg["layout_options"], _PREFS)
+
+        self.assertEqual(self._patch({"x": 2, "y": 4, "layout_options": None}).status_code, 200)
+        ocdfg = [c for c in self._layout() if c["component_name"] == "NewOCDFGVariantsComponent"][0]
+        self.assertIsNone(ocdfg["layout_options"])
+
+    def test_patch_without_widget_at_position_is_404(self):
+        self._save([self._widget()])
+        self.assertEqual(self._patch({"x": 0, "y": 0, "layout_options": _PREFS}).status_code, 404)
+        # A non-OC-DFG widget at the position is no match either.
+        self._save([{"x": 2, "y": 4, "w": 2, "h": 2, "component_name": "TextBoxComponent", "text": "t"}])
+        self.assertEqual(self._patch({"x": 2, "y": 4, "layout_options": _PREFS}).status_code, 404)
+
+    def test_patch_rejects_bad_input(self):
+        self._save([self._widget()])
+        for body in (
+            {"x": "2", "y": 4, "layout_options": _PREFS},
+            {"x": True, "y": 4, "layout_options": _PREFS},
+            {"x": 2, "y": 4},
+            {"x": 2, "y": 4, "layout_options": ["a"]},
+            {"x": 2, "y": 4, "layout_options": {"blob": "x" * 20000}},
+        ):
+            self.assertEqual(self._patch(body).status_code, 400, body)
+
+    def test_patch_on_foreign_dashboard_is_404(self):
+        self._save([self._widget()])
+        self.client.force_authenticate(user=self.other)
+        self.assertEqual(self._patch({"x": 2, "y": 4, "layout_options": _PREFS}).status_code, 404)
+
+
+class ProjectViewSettingsTests(TestCase):
+    """GET/PUT /api/projects/<id>/view-settings/<key>/."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="settings-owner")
+        self.other = User.objects.create_user(username="settings-other")
+        self.project = Project.objects.create(name="Settings")
+        self.project.users.add(self.user)
+        self.client.force_authenticate(user=self.user)
+
+    def _url(self, key="ocdfg-variants", project=None):
+        return f"/api/projects/{(project or self.project).pk}/view-settings/{key}/"
+
+    def test_get_without_entry_returns_null(self):
+        response = self.client.get(self._url())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"key": "ocdfg-variants", "value": None})
+
+    def test_put_get_and_remove(self):
+        self.assertEqual(self.client.put(self._url(), {"value": _PREFS}, format="json").status_code, 200)
+        self.assertEqual(self.client.get(self._url()).json()["value"], _PREFS)
+        # Another key does not touch the first one.
+        self.client.put(self._url("ocdfg-arc-weight"), {"value": {"version": 1, "options": {}}}, format="json")
+        self.assertEqual(self.client.get(self._url()).json()["value"], _PREFS)
+
+        self.assertEqual(self.client.put(self._url(), {"value": None}, format="json").status_code, 200)
+        self.assertIsNone(self.client.get(self._url()).json()["value"])
+        self.project.refresh_from_db()
+        self.assertEqual(list(self.project.view_settings), ["ocdfg-arc-weight"])
+
+    def test_rejects_bad_keys_and_values(self):
+        self.assertEqual(self.client.get(self._url("Bad Key")).status_code, 400)
+        self.assertEqual(self.client.get(self._url("x" * 65)).status_code, 400)
+        for body in ({}, {"value": [1, 2]}, {"value": "x"}, {"value": {"blob": "x" * 20000}}):
+            self.assertEqual(self.client.put(self._url(), body, format="json").status_code, 400, body)
+
+    def test_other_users_project_is_404(self):
+        self.client.force_authenticate(user=self.other)
+        self.assertEqual(self.client.get(self._url()).status_code, 404)
+        self.assertEqual(self.client.put(self._url(), {"value": _PREFS}, format="json").status_code, 404)
+        self.project.refresh_from_db()
+        self.assertEqual(self.project.view_settings, {})

@@ -1,10 +1,10 @@
 /**
- * Small synthetic object-centric logs for exploring the layout without an
- * uploaded event log. Each example is a set of trace variants per object
- * type; the DFG is derived with `fromTraces`.
+ * Small synthetic object-centric logs the layout tests run on. Each example
+ * is a set of trace variants per object type; the DFG is derived with
+ * `fromTraces`.
  */
-import { fromTraces } from './graph';
-import type { LabGraph } from './types';
+import { fromTraces } from '../graph';
+import type { LabGraph } from '../types';
 
 export interface Example {
   id: string;

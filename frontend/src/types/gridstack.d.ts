@@ -57,6 +57,8 @@ declare module 'gridstack' {
     max_points?: number;
     show_minimap?: boolean;
     layout_direction?: 'TB' | 'LR';
+    // NewOCDFGComponent: layout panel settings ({version, options}), null = defaults
+    layout_options?: unknown;
     // ImageComponent (asset store)
     image_asset?: number | null;
     image_asset_url?: string | null;

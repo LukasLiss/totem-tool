@@ -29,12 +29,22 @@ export function fromBackendDfg(dfg: BackendDfg, variantCounts?: Record<string, n
   const nodes: LabNode[] = [];
   const typeSet = new Set<string>();
   for (const n of dfg.nodes ?? []) {
-    const role = n.role === 'start' || n.role === 'end' ? n.role : null;
-    const types = role && n.object_type ? [n.object_type] : [...(n.types ?? [])];
+    const id = String(n.id);
+    // Start/end nodes carry a role; drill-down data may only have the id scheme.
+    const role =
+      n.role === 'start' || n.role === 'end'
+        ? n.role
+        : id.startsWith('__start__:')
+          ? 'start'
+          : id.startsWith('__end__:')
+            ? 'end'
+            : null;
+    const objectType = n.object_type ?? (role ? id.slice(id.indexOf(':') + 1) : null);
+    const types = role && objectType ? [objectType] : [...(n.types ?? [])];
     types.forEach((t) => typeSet.add(t));
     nodes.push({
-      id: String(n.id),
-      label: role ? String(n.object_type ?? n.label ?? n.id) : String(n.label ?? n.id),
+      id,
+      label: role ? String(objectType ?? n.label ?? n.id) : String(n.label ?? n.id),
       kind: role === 'start' ? 'start' : role === 'end' ? 'end' : 'activity',
       types,
       frequency: n.metrics?.frequency ?? 0,
@@ -146,6 +156,36 @@ export function filterGraph(graph: LabGraph, hiddenTypes: string[], coverage: nu
     nodes,
     arcs: arcs.filter((a) => nodeIds.has(a.source) && nodeIds.has(a.target)),
     types: types.filter((t) => arcs.some((a) => a.type === t)),
+    variantCounts: graph.variantCounts,
+  };
+}
+
+/**
+ * The graph with only the arcs `keepArc` accepts. Nodes without any kept arc
+ * are dropped, and every node keeps only the object types of its kept arcs,
+ * so lanes and shared-activity placement follow what is actually drawn.
+ */
+export function subgraph(graph: LabGraph, keepArc: (arc: LabArc) => boolean): LabGraph {
+  const arcs = graph.arcs.filter(keepArc);
+  const typesAt = new Map<string, Set<string>>();
+  for (const a of arcs) {
+    for (const id of [a.source, a.target]) {
+      const set = typesAt.get(id) ?? new Set<string>();
+      set.add(a.type);
+      typesAt.set(id, set);
+    }
+  }
+  const nodes = graph.nodes
+    .filter((n) => typesAt.has(n.id))
+    .map((n) => ({ ...n, types: n.types.filter((t) => typesAt.get(n.id)!.has(t)) }))
+    .filter((n) => n.types.length > 0);
+  const kept = new Set(nodes.map((n) => n.id));
+  const finalArcs = arcs.filter((a) => kept.has(a.source) && kept.has(a.target));
+  const usedTypes = new Set(finalArcs.map((a) => a.type));
+  return {
+    nodes,
+    arcs: finalArcs,
+    types: graph.types.filter((t) => usedTypes.has(t)),
     variantCounts: graph.variantCounts,
   };
 }

@@ -1,4 +1,4 @@
-import { ChevronRight, BarChart3, Network, TextAlignStart, ChartScatter, Workflow, CircleDot, Database, Users, FlaskConical } from "lucide-react"
+import { ChevronRight, BarChart3, Network, TextAlignStart, ChartScatter, Workflow, CircleDot, Database, Users } from "lucide-react"
 import { BoxesArrowRight, CausalNet } from "@/components/icons/totem-icons"
 import { useContext } from 'react'
 import {
@@ -23,7 +23,6 @@ const analysisItems: { id: AnalysisComponent; label: string; icon: typeof BarCha
   { id: 'occn', label: 'OCCN', icon: CausalNet },
   { id: 'ocPetriNet', label: 'OC Petri Net', icon: CircleDot },
   { id: 'ocdfg', label: 'OC-DFG', icon: BoxesArrowRight },
-  { id: 'ocdfgLayoutLab', label: 'OC-DFG Layout Lab', icon: FlaskConical },
   { id: 'variants', label: 'Variants', icon: TextAlignStart },
   { id: 'dottedChart', label: 'OC Dotted Chart', icon: ChartScatter },
   { id: 'sqlQuery', label: 'SQL Queries', icon: Database },

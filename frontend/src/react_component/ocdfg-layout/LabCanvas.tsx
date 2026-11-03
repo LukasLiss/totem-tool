@@ -5,6 +5,7 @@
  */
 import { forwardRef, useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { backgroundForTypes, textColorForBackground } from '@/utils/objectColors';
+import { HoverTooltip, type TooltipRow } from '../MetricTooltip';
 import { dist, pathD, pointAt, polylineLength, trimEnd } from './geometry';
 import type { LayoutOptions, LayoutResult, PlacedNode, Pt, RoutedArc } from './types';
 
@@ -24,12 +25,21 @@ interface LabCanvasProps {
   options: LayoutOptions;
   colors: Record<string, string>;
   interactive?: boolean;
+  /** Pan and zoom with mouse/wheel (hover highlighting works either way). */
+  panZoom?: boolean;
+  /** Flowing dashes along the arcs. */
+  animate?: boolean;
+  /** Screen space (px) kept free around the graph when fitting, e.g. for a legend. */
+  fitPadding?: Partial<Record<'top' | 'right' | 'bottom' | 'left', number>>;
+  /** Largest zoom used when fitting a small graph. */
+  maxFitScale?: number;
   /** Changes of this key re-fit the view even after the user panned/zoomed. */
   fitKey?: string;
   highlightType?: string | null;
   className?: string;
 }
 
+/** Hovered element and the pointer position (viewport coordinates). */
 type Hover =
   | { kind: 'arc'; arc: RoutedArc; x: number; y: number }
   | { kind: 'node'; node: PlacedNode; x: number; y: number }
@@ -39,17 +49,54 @@ const PAD = 36;
 const FONT = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
 
 const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas(
-  { result, options, colors, interactive = true, fitKey, highlightType = null, className, view: controlledView, onViewChange },
+  {
+    result,
+    options,
+    colors,
+    interactive = true,
+    panZoom = interactive,
+    animate = false,
+    fitPadding,
+    maxFitScale = 1.6,
+    fitKey,
+    highlightType = null,
+    className,
+    view: controlledView,
+    onViewChange,
+  },
   ref,
 ) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const gid = useId().replace(/:/g, '');
+  // Container size, to fit with padding in screen pixels.
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const update = () => setSize((prev) => (prev.w === el.clientWidth && prev.h === el.clientHeight ? prev : { w: el.clientWidth, h: el.clientHeight }));
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  const padKey = JSON.stringify(fitPadding ?? {});
   const fitBox = useMemo(() => {
     const b = result.bounds;
     if (!Number.isFinite(b.minX)) return { x: -100, y: -100, w: 200, h: 200 };
-    return { x: b.minX - PAD, y: b.minY - PAD, w: Math.max(80, b.maxX - b.minX + 2 * PAD), h: Math.max(80, b.maxY - b.minY + 2 * PAD) };
-  }, [result.bounds]);
+    const bw = Math.max(40, b.maxX - b.minX);
+    const bh = Math.max(40, b.maxY - b.minY);
+    if (size.w < 40 || size.h < 40) {
+      return { x: b.minX - PAD, y: b.minY - PAD, w: bw + 2 * PAD, h: bh + 2 * PAD };
+    }
+    const p = { top: PAD / 2, right: PAD / 2, bottom: PAD / 2, left: PAD / 2, ...JSON.parse(padKey) };
+    const availW = Math.max(40, size.w - p.left - p.right);
+    const availH = Math.max(40, size.h - p.top - p.bottom);
+    const s = Math.min(availW / bw, availH / bh, maxFitScale);
+    const offX = p.left + (availW - bw * s) / 2;
+    const offY = p.top + (availH - bh * s) / 2;
+    return { x: b.minX - offX / s, y: b.minY - offY / s, w: size.w / s, h: size.h / s };
+  }, [result.bounds, size, padKey, maxFitScale]);
   const [ownView, setOwnView] = useState(fitBox);
   const view = controlledView ?? ownView;
   const viewRef = useRef(view);
@@ -102,7 +149,7 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
   // Wheel zoom must be a non-passive listener to prevent page scrolling.
   useEffect(() => {
     const el = svgRef.current;
-    if (!el || !interactive) return;
+    if (!el || !panZoom) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const pt = el.createSVGPoint();
@@ -114,11 +161,11 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
-  }, [interactive, zoomAt]);
+  }, [panZoom, zoomAt]);
 
   const drag = useRef<{ x: number; y: number; vx: number; vy: number } | null>(null);
   const onPointerDown = (e: React.PointerEvent) => {
-    if (!interactive || e.button !== 0) return;
+    if (!panZoom || e.button !== 0) return;
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
     drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y };
   };
@@ -135,10 +182,7 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
 
   const [hover, setHover] = useState<Hover>(null);
   const hoverNode = hover?.kind === 'node' ? hover.node.id : null;
-  const relPos = (e: React.MouseEvent) => {
-    const r = wrapRef.current?.getBoundingClientRect();
-    return { x: e.clientX - (r?.left ?? 0), y: e.clientY - (r?.top ?? 0) };
-  };
+  const relPos = (e: React.MouseEvent) => ({ x: e.clientX, y: e.clientY });
 
   // Hovering a lane title highlights that object type, like the legend does.
   const [laneHover, setLaneHover] = useState<string | null>(null);
@@ -184,7 +228,8 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
         height="100%"
         viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
         preserveAspectRatio="xMidYMid meet"
-        style={{ cursor: interactive ? (drag.current ? 'grabbing' : 'grab') : 'default', fontFamily: FONT, background: '#ffffff', touchAction: 'none' }}
+        className={animate ? 'ocdfg-animate' : undefined}
+        style={{ cursor: panZoom ? (drag.current ? 'grabbing' : 'grab') : 'default', fontFamily: FONT, background: '#ffffff', touchAction: panZoom ? 'none' : 'auto' }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -192,6 +237,10 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
         role="img"
         aria-label="OC-DFG layout"
       >
+        {animate && (
+          <style>{`@keyframes ocdfg-layout-flow { to { stroke-dashoffset: -20; } }
+.ocdfg-animate .ocdfg-arc-body { stroke-dasharray: 10 10; animation: ocdfg-layout-flow 0.9s linear infinite; }`}</style>
+        )}
         <defs>
           {o.nodeStyle === 'gradient' &&
             result.nodes
@@ -344,42 +393,7 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
           )}
       </svg>
 
-      {interactive && hover && (
-        <div
-          className="pointer-events-none absolute z-20 max-w-xs rounded-md border border-slate-200 bg-white/95 px-3 py-2 text-xs text-slate-700 shadow-lg"
-          style={{ left: Math.min(hover.x + 14, (wrapRef.current?.clientWidth ?? 600) - 220), top: hover.y + 14 }}
-        >
-          {hover.kind === 'arc' ? (
-            <>
-              <div className="flex items-center gap-1.5 font-semibold">
-                <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: color(hover.arc.type) }} />
-                {hover.arc.type}
-                <span className="ml-1 rounded bg-slate-100 px-1 text-[10px] font-normal uppercase text-slate-500">{hover.arc.cls}</span>
-              </div>
-              <div className="mt-1">
-                {labelOf(result, hover.arc.source)} → {labelOf(result, hover.arc.target)}
-              </div>
-              <div className="text-slate-500">
-                frequency {hover.arc.weight}
-                {hover.arc.avgLeadTime != null ? ` · ⌀ ${formatDuration(hover.arc.avgLeadTime)}` : ''}
-                {hover.arc.bundleSize > 1 ? ` · bundle of ${hover.arc.bundleSize}` : ''}
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="font-semibold">{hover.node.kind === 'activity' ? hover.node.label : `${hover.node.objectType} ${hover.node.kind}`}</div>
-              {hover.node.kind === 'activity' && <div className="text-slate-500">{hover.node.frequency} events</div>}
-              <div className="mt-1 flex flex-wrap gap-1">
-                {hover.node.types.map((t) => (
-                  <span key={t} className="rounded px-1 text-[10px] text-white" style={{ background: color(t) }}>
-                    {t}
-                  </span>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      )}
+      {interactive && hover && <HoverTooltip x={hover.x} y={hover.y} title={tooltipTitle(result, hover)} rows={tooltipRows(hover)} />}
     </div>
   );
 });
@@ -390,6 +404,27 @@ export default LabCanvas;
 
 function cssId(s: string) {
   return s.replace(/[^a-zA-Z0-9_-]/g, (c) => `_${c.charCodeAt(0)}`);
+}
+
+function tooltipTitle(result: LayoutResult, hover: NonNullable<Hover>): string {
+  if (hover.kind === 'arc') return `${labelOf(result, hover.arc.source)} → ${labelOf(result, hover.arc.target)}`;
+  const n = hover.node;
+  return n.kind === 'activity' ? n.label : `${n.objectType} ${n.kind}`;
+}
+
+function tooltipRows(hover: NonNullable<Hover>): TooltipRow[] {
+  if (hover.kind === 'arc') {
+    const rows: TooltipRow[] = [
+      { label: 'Object type', value: hover.arc.type },
+      { label: 'Frequency', value: hover.arc.weight.toLocaleString() },
+    ];
+    if (hover.arc.avgLeadTime != null) rows.push({ label: 'Avg Time', value: formatDuration(hover.arc.avgLeadTime) });
+    return rows;
+  }
+  const rows: TooltipRow[] = [];
+  if (hover.node.kind === 'activity') rows.push({ label: 'Frequency', value: hover.node.frequency.toLocaleString() });
+  rows.push({ label: hover.node.types.length > 1 ? 'Object types' : 'Object type', value: hover.node.types.join(', ') });
+  return rows;
 }
 
 function labelOf(result: LayoutResult, id: string) {
@@ -513,7 +548,18 @@ function ArcShape({
     }
     body = <>{parts}</>;
   } else {
-    body = <path d={pathD(pts)} fill="none" stroke={color} strokeWidth={arc.width} strokeLinecap="round" strokeLinejoin="round" strokeDasharray={dash} />;
+    body = (
+      <path
+        className={dash ? undefined : 'ocdfg-arc-body'}
+        d={pathD(pts)}
+        fill="none"
+        stroke={color}
+        strokeWidth={arc.width}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeDasharray={dash}
+      />
+    );
   }
 
   let chevrons: React.ReactNode = null;

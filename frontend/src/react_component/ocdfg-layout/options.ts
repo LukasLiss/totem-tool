@@ -193,8 +193,8 @@ export const ASPECTS: Aspect[] = [
     label: 'Self loops',
     group: 'Arcs',
     choices: [
-      { value: 'cornerRing', label: 'Ring at a corner', hint: 'Small ring on the node\'s corner, one per type.' },
       { value: 'sideLoop', label: 'Loop on the side', hint: 'Teardrop leaving and re-entering the side.' },
+      { value: 'cornerRing', label: 'Ring at a corner', hint: 'Small ring on the node\'s corner, one per type.' },
       { value: 'badge', label: 'Badge', hint: '↻ badge with the count, no line.' },
       { value: 'hidden', label: 'Hidden', hint: 'Not drawn.' },
     ],
@@ -270,6 +270,34 @@ export const ASPECTS: Aspect[] = [
   },
 ];
 
+/** Project view-settings key of the analysis/overview OC-DFG layout. */
+export const OCDFG_PROJECT_LAYOUT_KEY = 'ocdfg-variants';
+
+/** Width of the layout panel of an OC-DFG view (px). */
+export const LAYOUT_PANEL_WIDTH = 320;
+
+/** Graphs with more arcs are only laid out on request. */
+export const MAX_AUTO_LAYOUT_ARCS = 1500;
+
+/** Bounds of the numeric options (sliders, and validation of stored layouts). */
+export const NUMERIC_BOUNDS = {
+  blockNoise: { min: 0, max: 0.5, step: 0.01 },
+  rankGap: { min: 24, max: 140, step: 2 },
+  nodeGap: { min: 8, max: 90, step: 2 },
+  laneGap: { min: 0, max: 160, step: 4 },
+  cornerRadius: { min: 0, max: 30, step: 1 },
+  trackGap: { min: 1, max: 16, step: 0.5 },
+  minWidth: { min: 0.5, max: 8, step: 0.1 },
+  maxWidth: { min: 0.5, max: 16, step: 0.1 },
+  arrowSize: { min: 0.4, max: 2.5, step: 0.05 },
+  arcOpacity: { min: 0.2, max: 1, step: 0.05 },
+} as const satisfies Partial<Record<keyof LayoutOptions, { min: number; max: number; step: number }>>;
+
+export type NumericOption = keyof typeof NUMERIC_BOUNDS;
+
+/** Switches among the options. */
+export const BOOLEAN_OPTIONS = ['mergePoints', 'arcHalo', 'fitNodeWidth', 'showFrequencies', 'showLanes', 'showRanks'] as const satisfies ReadonlyArray<keyof LayoutOptions>;
+
 export const ASPECT_BY_KEY: Partial<Record<keyof LayoutOptions, Aspect>> = Object.fromEntries(
   ASPECTS.map((a) => [a.key, a]),
 );
@@ -295,7 +323,7 @@ export const DEFAULT_OPTIONS: LayoutOptions = {
   mergePoints: false,
   bundling: 'highway',
   parallelArcs: 'dimmed',
-  selfLoopStyle: 'cornerRing',
+  selfLoopStyle: 'sideLoop',
   widthScale: 'sqrt',
   widthNormalization: 'perType',
   minWidth: 1.2,
