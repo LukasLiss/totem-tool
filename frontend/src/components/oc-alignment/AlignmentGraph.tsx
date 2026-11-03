@@ -17,6 +17,9 @@ import {
 } from "./layout";
 
 const SHADE_ALPHA = [1, 0.7, 0.5, 0.35];
+const EDGE_COLOR = "#64748B";
+const ARROW_LENGTH = 9;
+const ARROW_HALF_WIDTH = 4.5;
 
 function hexToRgb(hex: string): [number, number, number] {
   const value = hex.replace("#", "");
@@ -201,26 +204,35 @@ export function AlignmentGraph({ moves, objectsByType, showSilentMoves, height =
             style={{ width: layout.width, height: layout.height, transform: `scale(${zoom})` }}
           >
             <svg className="pointer-events-none absolute inset-0" width={layout.width} height={layout.height}>
-              <defs>
-                <marker id="oc-alignment-arrow" viewBox="0 0 10 10" refX="9" refY="5"
-                  markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-                  <path d="M0,0 L10,5 L0,10 z" fill="#64748B" />
-                </marker>
-              </defs>
               {layout.edges.map(({ from, to }) => {
+                // The curve stops where the arrowhead starts and arrives
+                // horizontally, so line and head form one continuous stroke.
                 const x1 = from.x + NODE_WIDTH;
                 const y1 = from.y + NODE_HALF_HEIGHT;
-                const x2 = to.x;
+                const xEnd = to.x - ARROW_LENGTH;
                 const y2 = to.y + NODE_HALF_HEIGHT;
-                const dx = Math.max(24, (x2 - x1) / 2);
+                const dx = Math.max(16, (xEnd - x1) / 2);
                 return (
                   <path
                     key={`${from.position}-${to.position}`}
-                    d={`M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2 - 2},${y2}`}
+                    d={`M${x1},${y1} C${x1 + dx},${y1} ${xEnd - dx},${y2} ${xEnd},${y2}`}
                     fill="none"
-                    stroke="#64748B"
+                    stroke={EDGE_COLOR}
                     strokeWidth={1.5}
-                    markerEnd="url(#oc-alignment-arrow)"
+                    strokeLinecap="butt"
+                  />
+                );
+              })}
+              {/* One head per target: edges into the same move share it. */}
+              {[...new Map(layout.edges.map(({ to }) => [to.position, to])).values()].map((to) => {
+                const tipX = to.x;
+                const y = to.y + NODE_HALF_HEIGHT;
+                return (
+                  <path
+                    key={`head-${to.position}`}
+                    data-testid="oc-alignment-arrowhead"
+                    d={`M${tipX - ARROW_LENGTH},${y - ARROW_HALF_WIDTH} L${tipX},${y} L${tipX - ARROW_LENGTH},${y + ARROW_HALF_WIDTH} Z`}
+                    fill={EDGE_COLOR}
                   />
                 );
               })}
