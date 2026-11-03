@@ -58,6 +58,8 @@ export function DottedChartControls({
     [options.y_axis]
   );
   const selectedYObjectType = getObjectTypeValue(draftConfig.yAxis, objectTypeOptions);
+  const showsObjectTypeSelect =
+    axisToPrimaryControlValue(draftConfig.yAxis) === OBJECT_TYPE_CONTROL_VALUE;
   const selectOptions = useMemo(
     () => ({
       x_axis: withCurrentOption(options.x_axis, draftConfig.xAxis),
@@ -101,7 +103,16 @@ export function DottedChartControls({
       </div>
 
       <CollapsibleContent>
-        <div className="grid gap-3 border-t px-3 py-3 md:grid-cols-3 xl:grid-cols-6">
+        <div
+          className={cn(
+            "grid gap-3 border-t px-3 py-3 md:grid-cols-3",
+            // Give the Y Axis Order column extra room so its label and the
+            // Asc/Desc toggle fit on one line.
+            showsObjectTypeSelect
+              ? "xl:grid-cols-[repeat(5,minmax(0,1fr))_minmax(0,1.6fr)]"
+              : "xl:grid-cols-[repeat(4,minmax(0,1fr))_minmax(0,1.6fr)]"
+          )}
+        >
           <AxisSelect
             label="X Axis"
             value={axisToControlValue(draftConfig.xAxis)}
@@ -123,7 +134,7 @@ export function DottedChartControls({
               )
             }
           />
-          {axisToPrimaryControlValue(draftConfig.yAxis) === OBJECT_TYPE_CONTROL_VALUE && (
+          {showsObjectTypeSelect && (
             <AxisSelect
               label="Object Type"
               value={selectedYObjectType}
@@ -147,12 +158,12 @@ export function DottedChartControls({
           />
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
-              <Label className="text-xs text-muted-foreground">Y Axis Order</Label>
+              <Label className="whitespace-nowrap text-xs text-muted-foreground">Y Axis Order</Label>
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="h-5 gap-1 px-1.5 text-xs text-muted-foreground"
+                className="-my-0.5 h-5 shrink-0 gap-1 px-1.5 text-xs text-muted-foreground"
                 title={
                   draftConfig.rowOrderDirection === "desc"
                     ? "Descending order. Click to sort ascending."
@@ -191,7 +202,7 @@ export function DottedChartControls({
               ))}
             </select>
           </div>
-          <div className="space-y-2 md:col-span-3 xl:col-span-6">
+          <div className="space-y-2 md:col-span-3 xl:col-span-full">
             <div className="flex items-center justify-between gap-3">
               <Label className="text-xs text-muted-foreground">Max Points</Label>
               <span className="text-xs tabular-nums text-muted-foreground">
@@ -208,7 +219,7 @@ export function DottedChartControls({
               }
             />
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-2 md:col-span-3 xl:col-span-6">
+          <div className="flex flex-wrap items-center justify-end gap-2 md:col-span-3 xl:col-span-full">
             <span className="mr-auto text-xs text-muted-foreground">
               {loadingOptions
                 ? "Loading available columns..."
