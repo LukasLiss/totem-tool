@@ -194,10 +194,16 @@ export interface RoutedArc {
 
 export interface Trunk {
   type: string;
+  /** The node whose port the trunk attaches to. */
+  node: string;
+  /** Ids of the arcs joined by this trunk. */
+  arcs: string[];
   points: Pt[];
   width: number;
   arrow: boolean;
 }
+
+export type Junction = Pt & { type: string; node: string; arcs: string[] };
 
 export interface SelfLoop {
   node: string;
@@ -246,7 +252,7 @@ export interface LayoutResult {
   nodes: PlacedNode[];
   arcs: RoutedArc[];
   trunks: Trunk[];
-  junctions: Array<Pt & { type: string }>;
+  junctions: Junction[];
   selfLoops: SelfLoop[];
   lanes: LaneBand[];
   rankLines: Array<{ a: Pt; b: Pt }>;

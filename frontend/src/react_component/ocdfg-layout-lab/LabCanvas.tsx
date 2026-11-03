@@ -140,15 +140,37 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
     return { x: e.clientX - (r?.left ?? 0), y: e.clientY - (r?.top ?? 0) };
   };
 
+  // Hovering a lane title highlights that object type, like the legend does.
+  const [laneHover, setLaneHover] = useState<string | null>(null);
+  const activeType = laneHover ?? highlightType;
+  // Nodes directly connected to the hovered node (arcs in either direction).
+  const neighbours = useMemo(() => {
+    const set = new Set<string>();
+    if (!hoverNode) return set;
+    set.add(hoverNode);
+    for (const a of result.arcs) {
+      if (a.source === hoverNode) set.add(a.target);
+      if (a.target === hoverNode) set.add(a.source);
+    }
+    return set;
+  }, [hoverNode, result.arcs]);
+  const arcById = useMemo(() => new Map(result.arcs.map((a) => [a.id, a])), [result.arcs]);
+
   const dimArc = (a: { type: string; source?: string; target?: string }) => {
-    if (highlightType && a.type !== highlightType) return true;
+    if (activeType && a.type !== activeType) return true;
     if (hoverNode && a.source !== hoverNode && a.target !== hoverNode) return true;
     return false;
   };
   const dimNode = (n: PlacedNode) => {
-    if (highlightType && !n.types.includes(highlightType)) return true;
+    if (activeType && !n.types.includes(activeType)) return true;
+    if (hoverNode && !neighbours.has(n.id)) return true;
     return false;
   };
+  /** Trunks and junctions of merge points follow the arcs they join. */
+  const dimJoined = (arcIds: string[]) => arcIds.every((id) => {
+    const a = arcById.get(id);
+    return !a || dimArc(a);
+  });
 
   const color = (t: string) => colors[t] ?? '#64748b';
   const o = options;
@@ -184,24 +206,42 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
         </defs>
 
         {o.showLanes &&
-          result.lanes.map((l) => (
-            <g key={`lane-${l.type}`} opacity={highlightType && highlightType !== l.type ? 0.35 : 1}>
-              <rect x={l.x} y={l.y} width={l.width} height={l.height} rx={12} fill={color(l.type)} fillOpacity={0.06} stroke={color(l.type)} strokeOpacity={0.18} strokeDasharray="4 4" />
-              <text
-                x={o.direction === 'LR' || o.direction === 'RL' ? l.x + 8 : l.x + l.width / 2}
-                y={o.direction === 'LR' || o.direction === 'RL' ? l.y + l.height / 2 : l.y + 14}
-                textAnchor={o.direction === 'LR' || o.direction === 'RL' ? 'start' : 'middle'}
-                dominantBaseline="middle"
-                fontSize={11}
-                fontWeight={600}
-                fill={color(l.type)}
-                opacity={0.8}
-                style={{ letterSpacing: 0.5, textTransform: 'uppercase' }}
-              >
-                {l.type}
-              </text>
-            </g>
-          ))}
+          result.lanes.map((l) => {
+            const horizontal = o.direction === 'LR' || o.direction === 'RL';
+            const tx = horizontal ? l.x + 8 : l.x + l.width / 2;
+            const ty = horizontal ? l.y + l.height / 2 : l.y + 14;
+            // Generous invisible hit area around the title (uppercase, letter-spaced).
+            const hitW = Math.min(horizontal ? 400 : l.width, l.type.length * 8.5 + 24);
+            const active = laneHover === l.type;
+            return (
+              <g key={`lane-${l.type}`} opacity={activeType && activeType !== l.type ? 0.35 : 1}>
+                <rect x={l.x} y={l.y} width={l.width} height={l.height} rx={12} fill={color(l.type)} fillOpacity={active ? 0.1 : 0.06} stroke={color(l.type)} strokeOpacity={active ? 0.45 : 0.18} strokeDasharray="4 4" />
+                <g
+                  data-testid={`lane-title-${l.type}`}
+                  style={{ cursor: 'pointer' }}
+                  onMouseEnter={() => setLaneHover(l.type)}
+                  onMouseLeave={() => setLaneHover((t) => (t === l.type ? null : t))}
+                >
+                  <rect x={horizontal ? tx - 6 : tx - hitW / 2} y={ty - 11} width={hitW} height={22} rx={4} fill={color(l.type)} fillOpacity={active ? 0.12 : 0} />
+                  <text
+                    x={tx}
+                    y={ty}
+                    textAnchor={horizontal ? 'start' : 'middle'}
+                    dominantBaseline="middle"
+                    fontSize={11}
+                    fontWeight={active ? 700 : 600}
+                    fill={color(l.type)}
+                    opacity={active ? 1 : 0.8}
+                    pointerEvents="none"
+                    style={{ letterSpacing: 0.5, textTransform: 'uppercase' }}
+                  >
+                    {l.type}
+                  </text>
+                  <title>{`Highlight ${l.type}`}</title>
+                </g>
+              </g>
+            );
+          })}
 
         {o.showRanks &&
           result.rankLines.map((r, i) => (
@@ -232,19 +272,19 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
           const head = t.arrow ? arrowHead(t.points, t.width, o) : null;
           const pts = head ? trimEnd(t.points, head.trim) : t.points;
           return (
-            <g key={`trunk-${i}`} opacity={highlightType && highlightType !== t.type ? 0.12 : o.arcOpacity}>
+            <g key={`trunk-${i}`} opacity={dimJoined(t.arcs) ? 0.08 : o.arcOpacity}>
               <path d={pathD(pts)} fill="none" stroke={color(t.type)} strokeWidth={t.width} strokeLinecap="butt" />
               {head && <HeadShape head={head} color={color(t.type)} width={t.width} />}
             </g>
           );
         })}
         {result.junctions.map((j, i) => (
-          <circle key={`j-${i}`} cx={j.x} cy={j.y} r={3.2} fill="#ffffff" stroke={color(j.type)} strokeWidth={2} opacity={highlightType && highlightType !== j.type ? 0.2 : 1} />
+          <circle key={`j-${i}`} cx={j.x} cy={j.y} r={3.2} fill="#ffffff" stroke={color(j.type)} strokeWidth={2} opacity={dimJoined(j.arcs) ? 0.15 : 1} />
         ))}
 
         {result.selfLoops.map((s, i) => {
           const c = color(s.type);
-          const dim = highlightType ? highlightType !== s.type : hoverNode ? hoverNode !== s.node : false;
+          const dim = (activeType !== null && activeType !== s.type) || (hoverNode !== null && hoverNode !== s.node);
           if (s.style === 'badge') {
             return (
               <g key={`self-${i}`} opacity={dim ? 0.2 : 1}>
@@ -504,7 +544,7 @@ function ArcShape({
   }
 
   return (
-    <g opacity={opacity} onMouseEnter={onEnter} onMouseLeave={onLeave}>
+    <g opacity={opacity} onMouseEnter={onEnter} onMouseLeave={onLeave} data-arc-id={arc.id}>
       {/* Wide transparent hit area for hovering thin arcs. */}
       <path d={pathD(arc.points)} fill="none" stroke="transparent" strokeWidth={Math.max(8, arc.width + 6)} />
       {body}
@@ -556,7 +596,7 @@ function NodeShape({
 }) {
   const x = n.x - n.width / 2;
   const y = n.y - n.height / 2;
-  const common = { opacity: dim ? 0.3 : 1, onMouseEnter: onEnter, onMouseLeave: onLeave };
+  const common = { opacity: dim ? 0.3 : 1, onMouseEnter: onEnter, onMouseLeave: onLeave, 'data-node-id': n.id };
   const horizontal = o.direction === 'LR' || o.direction === 'RL';
 
   if (n.kind !== 'activity') {

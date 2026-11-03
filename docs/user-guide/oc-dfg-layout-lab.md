@@ -89,7 +89,9 @@ under arcs, frequency labels and the lane/layer overlays are sliders and switche
 - The metrics bar counts arc **crossings**, **overlapping arcs** (lines on top of each other),
   **arcs through nodes**, bends and loop arcs for the current layout; in the comparison the
   variant with the fewest problems is outlined in green.
-- Hovering an object type in the legend highlights its arcs, hovering a node highlights its arcs.
+- Hovering a lane's title (or an object type in the legend) highlights only the arcs of that
+  object type and fades the activities it does not touch. Hovering an activity highlights its arcs
+  and fades every activity that is not directly connected to it.
   The legend's checkboxes hide object types, its arrows reorder the lanes by hand.
 - **Min. arc frequency** hides arcs lighter than a share of their object type's heaviest arc and
   **Variant coverage** keeps only the arcs of the most frequent variants. Use them (or hide

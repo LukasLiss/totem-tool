@@ -53,6 +53,7 @@ import type {
   LayoutExtras,
   LayoutOptions,
   LayoutResult,
+  Junction,
   PlacedNode,
   Pt,
   RoutedArc,
@@ -1069,9 +1070,12 @@ export function computeLayout(graph: LabGraph, options: LayoutOptions, extras: L
   }
 
   const trunks: Trunk[] = [];
-  const junctions: Array<Pt & { type: string }> = [];
+  const junctions: Junction[] = [];
   if (mergePoints) {
-    const byPort = new Map<string, { pt: Pt; j: Pt; type: string; w: number; count: number; incoming: boolean }>();
+    const byPort = new Map<
+      string,
+      { node: string; pt: Pt; j: Pt; type: string; w: number; arcs: string[]; incoming: boolean }
+    >();
     for (const grp of groups) {
       if (grp.cls === 'interleave' || !grp.srcJ || !grp.tgtJ) continue;
       const m = grp.members[0];
@@ -1080,16 +1084,23 @@ export function computeLayout(graph: LabGraph, options: LayoutOptions, extras: L
         const e = byPort.get(k);
         if (e) {
           e.w += m.weight;
-          e.count++;
-        } else byPort.set(k, { pt, j, type: m.type, w: m.weight, count: 1, incoming });
+          e.arcs.push(m.id);
+        } else byPort.set(k, { node, pt, j, type: m.type, w: m.weight, arcs: [m.id], incoming });
       };
       add(grp.s, grp.srcSide, grp.srcPt, grp.srcJ, false);
       add(grp.t, grp.tgtSide, grp.tgtPt, grp.tgtJ, true);
     }
     for (const e of byPort.values()) {
       const width = Math.min(opts.maxWidth * 1.4, widthOf(e.w, e.type));
-      trunks.push({ type: e.type, points: e.incoming ? [e.j, e.pt] : [e.pt, e.j], width, arrow: e.incoming });
-      if (e.count > 1) junctions.push({ ...e.j, type: e.type });
+      trunks.push({
+        type: e.type,
+        node: e.node,
+        arcs: e.arcs,
+        points: e.incoming ? [e.j, e.pt] : [e.pt, e.j],
+        width,
+        arrow: e.incoming,
+      });
+      if (e.arcs.length > 1) junctions.push({ ...e.j, type: e.type, node: e.node, arcs: e.arcs });
     }
   }
 
@@ -1176,7 +1187,7 @@ export function computeLayout(graph: LabGraph, options: LayoutOptions, extras: L
     m.ctrl = m.ctrl.map(T);
   }
   for (const t of trunks) t.points = t.points.map(T);
-  const jScreen = junctions.map((j) => ({ ...T(j), type: j.type }));
+  const jScreen = junctions.map((j) => ({ ...j, ...T(j) }));
   for (const s of selfLoops) {
     s.points = s.points.map(T);
     s.center = T(s.center);
