@@ -1,4 +1,4 @@
-import { ChevronRight, FileStack, Settings2, Plus } from "lucide-react"
+import { ChevronRight, FileStack, Settings2, Plus, Upload } from "lucide-react"
 import { useContext, useRef, useState } from 'react'
 import {
   Collapsible,
@@ -35,9 +35,40 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
 import { toast } from "sonner"
-import { addDashboard, deleteDashboard, renameDashboard } from "@/api/dashboardApi"
+import {
+  addDashboard,
+  deleteDashboard,
+  renameDashboard,
+  exportDashboard,
+  importDashboard,
+  DASHBOARD_BUNDLE_SCHEMA,
+  DASHBOARD_BUNDLE_VERSION,
+  type DashboardImportWarning,
+} from "@/api/dashboardApi"
+import { downloadJson, openJsonFile, toFilename } from "@/editors/shared/io"
 import { SelectedFileContext } from "@/contexts/SelectedFileContext"
 import { DashboardContext } from "@/contexts/DashboardContext";
+
+/**
+ * Why a dropped file is not a dashboard, phrased for the user. Checked before
+ * the request so an OCCN or TOTeM model picked by mistake is named as such
+ * rather than coming back as a generic 400.
+ */
+function wrongFormatMessage(parsed: unknown): string | null {
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return "That file does not contain a dashboard.";
+  }
+  const { schema, version } = parsed as { schema?: unknown; version?: unknown };
+  if (schema !== DASHBOARD_BUNDLE_SCHEMA) {
+    return typeof schema === "string"
+      ? `That is a "${schema}" file, not a dashboard.`
+      : "That file does not contain a dashboard.";
+  }
+  if (typeof version !== "number" || version > DASHBOARD_BUNDLE_VERSION) {
+    return "That file was written by a newer version of TOTeM.";
+  }
+  return null;
+}
 
 
 
@@ -56,6 +87,10 @@ export function NavDashboard({
   const [ openDelete, setOpenDelete ] = useState(false);
   const [dashboardToRename, setDashboardToRename] = useState<null | { id: number; name: string }>(null);
   const [dashboardToDelete, setDashboardToDelete] = useState<null | { id: number; name: string }>(null);
+  const [importResult, setImportResult] = useState<null | {
+    dashboard: { id: number; name: string };
+    warnings: DashboardImportWarning[];
+  }>(null);
 
 
 
@@ -120,6 +155,64 @@ export function NavDashboard({
     }
   };
 
+  const handleExport = async (dashboard: { id: number; name: string }) => {
+    try {
+      const bundle = await exportDashboard(dashboard.id);
+      const filename = toFilename(dashboard.name, "dashboard");
+      downloadJson(filename, bundle);
+      toast.success(`Saved ${filename}.json`);
+    } catch {
+      toast.error("Dashboard could not be exported");
+    }
+  };
+
+  const handleImport = async () => {
+    if (!selectedFile?.project) {
+      toast.warning("Open an event log first — an imported dashboard needs a project.");
+      return;
+    }
+    if (!beginSubmit()) return;
+
+    try {
+      let parsed: unknown;
+      try {
+        parsed = await openJsonFile();
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "The file could not be read.");
+        return;
+      }
+      // The picker was cancelled: not an error, and nothing to say about it.
+      if (parsed === null) return;
+
+      const wrongFormat = wrongFormatMessage(parsed);
+      if (wrongFormat) {
+        toast.error(wrongFormat);
+        return;
+      }
+
+      const result = await importDashboard(
+        selectedFile.project,
+        selectedFile.id ?? null,
+        parsed
+      );
+      await refreshDashboards();
+      toast.success(`Imported "${result.dashboard.name}"`);
+      if (result.warnings.length > 0) {
+        // Shown in a dialog rather than a stack of toasts: each line is
+        // something the user has to go and fix, and toasts disappear.
+        setImportResult(result);
+      } else {
+        setViewMode({ type: "dashboard", id: result.dashboard.id });
+      }
+    } catch (err) {
+      const detail =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      toast.error(detail || "Dashboard could not be imported");
+    } finally {
+      endSubmit();
+    }
+  };
+
   const handleDeleteDashboard = async () => {
     if (!dashboardToDelete) return;
     if (!beginSubmit()) return;
@@ -177,6 +270,9 @@ export function NavDashboard({
                     <SidebarMenuSubItem key={dashboard.id} className="flex w-full items-center">
                       <SidebarMenuSubButton
                         className="min-w-0 flex-1"
+                        data-active={
+                          viewMode.type === 'dashboard' && viewMode.id === dashboard.id
+                        }
                         onClick={() => {
                           setViewMode({ type: 'dashboard', id: dashboard.id });
                         }}
@@ -206,6 +302,9 @@ export function NavDashboard({
                             }}
                           >
                             Rename
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleExport(dashboard)}>
+                            Export
                           </DropdownMenuItem>
                           <DropdownMenuItem
                             onClick={() => {
@@ -259,7 +358,7 @@ export function NavDashboard({
                                   value={dashboardname}
                                   onChange={(e) => setDashboardname(e.target.value)}
                                   placeholder="Dashboard Name"
-                                  maxLength={100}
+                                  maxLength={30}
                                   autoFocus
                                 />
                               </div>
@@ -280,6 +379,22 @@ export function NavDashboard({
                           </form>
                         </DialogContent>
                       </Dialog>
+                  </SidebarMenuSubItem>
+
+                  {/* Import creates a dashboard rather than acting on one, so
+                      it belongs here beside "Add Dashboard" and not in a row's
+                      own menu. The file picker is the dialog. */}
+                  <SidebarMenuSubItem>
+                    <SidebarMenuSubButton
+                      className="cursor-pointer"
+                      aria-disabled={isSubmitting}
+                      onClick={() => {
+                        if (!isSubmitting) handleImport();
+                      }}
+                    >
+                      <Upload className="size-4 shrink-0" />
+                      <span className="truncate">Import Dashboard</span>
+                    </SidebarMenuSubButton>
                   </SidebarMenuSubItem>
                 </SidebarMenuSub>
               </CollapsibleContent>
@@ -316,7 +431,7 @@ export function NavDashboard({
                   value={dashboardname}
                   onChange={(e) => setDashboardname(e.target.value)}
                   placeholder={dashboardToRename?.name || "Dashboard Name"}
-                  maxLength={100}
+                  maxLength={30}
                 />
               </div>
             </div>
@@ -376,7 +491,60 @@ export function NavDashboard({
             </DialogFooter>
           </form>
         </DialogContent>
-      </Dialog>  
+      </Dialog>
+
+    {/* What an import could not carry over. Every line is something to go and
+        fix, so it waits for a click instead of fading like a toast. */}
+    <Dialog
+      open={importResult !== null}
+      onOpenChange={(next) => {
+        if (!next) setImportResult(null);
+      }}
+    >
+      <DialogContent className="sm:max-w-[520px]">
+        <DialogHeader>
+          <DialogTitle>
+            Imported “{importResult?.dashboard.name}” with{" "}
+            {importResult?.warnings.length}{" "}
+            {importResult?.warnings.length === 1 ? "issue" : "issues"}
+          </DialogTitle>
+          <DialogDescription>
+            The layout came across. These parts could not, because they refer to
+            things this project does not have.
+          </DialogDescription>
+        </DialogHeader>
+        <ul className="grid gap-3 py-2 text-sm max-h-[50vh] overflow-y-auto">
+          {importResult?.warnings.map((warning, index) => (
+            <li key={`${warning.code}-${index}`} className="grid gap-1">
+              {warning.component_name && (
+                <span className="text-xs font-medium text-muted-foreground">
+                  {warning.component_name}
+                </span>
+              )}
+              <span>{warning.detail}</span>
+            </li>
+          ))}
+        </ul>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button type="button" variant="outline">
+              Close
+            </Button>
+          </DialogClose>
+          <Button
+            type="button"
+            onClick={() => {
+              if (importResult) {
+                setViewMode({ type: "dashboard", id: importResult.dashboard.id });
+              }
+              setImportResult(null);
+            }}
+          >
+            Open dashboard
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
 
     </div>
   )

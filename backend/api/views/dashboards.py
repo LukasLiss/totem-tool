@@ -7,10 +7,13 @@ from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Max
+from django.utils.text import slugify
 import os
 
 from ..models import (
     Dashboard,
+    EventLog,
     ImageAsset,
     Project,
     ProjectAsset,
@@ -48,6 +51,12 @@ from totem_lib.orgamining import (
     NORMALIZATIONS,
 )
 
+from ..dashboard_bundle import (
+    build_dashboard_bundle,
+    resolve_bundle_components,
+    unique_dashboard_name,
+    validate_dashboard_bundle_dict,
+)
 from ..rich_text import (
     FONT_SIZE_MAX,
     FONT_SIZE_MIN,
@@ -247,6 +256,12 @@ class DashboardViewSet(viewsets.ModelViewSet):
     # component_name -> concrete model used to re-fetch the polymorphic child row.
     _LAYOUT_COMPONENT_MODELS = {
         "TextBoxComponent": TextBoxComponent,
+        # `_replace_components` stores this one as "NumberOfEventsComponent"
+        # (capital O), which is also what the React registry uses. Without that
+        # key the row never downcast, so `get_layout` served the base component
+        # and the widget lost its `color` on every load. The old spelling stays
+        # for any row written before the fix.
+        "NumberOfEventsComponent": NumberofEventsComponent,
         "NumberofEventsComponent": NumberofEventsComponent,
         "ImageComponent": ImageComponent,
         "VariantsComponent": VariantsComponent,
@@ -318,6 +333,111 @@ class DashboardViewSet(viewsets.ModelViewSet):
             )
 
         return Response({"status": "saved"})
+
+    @action(detail=True, methods=["GET"])
+    def export(self, request, pk=None):
+        """Download this dashboard's structure as a portable JSON document.
+
+        Authorization comes from `get_object()` against the membership-scoped
+        queryset, so a dashboard in somebody else's project is a 404.
+        """
+        dashboard = self.get_object()
+        response = Response(build_dashboard_bundle(dashboard))
+        filename = f"{slugify(dashboard.name) or 'dashboard'}.json"
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
+
+    @action(detail=False, methods=["POST"], url_path="import")
+    def import_bundle(self, request):
+        """Create a new dashboard from an exported bundle.
+
+        Always creates; never overwrites. Whatever could not be carried over
+        comes back in `warnings` rather than failing the import, because a
+        dashboard that is 90% right and says what to fix beats a refusal.
+        """
+        project_id = request.data.get("project")
+        project = Project.objects.filter(
+            pk=project_id, users=request.user
+        ).first()
+        if project is None:
+            # Same answer for "no such project" and "not yours", so project ids
+            # cannot be probed by guessing.
+            return Response(
+                {"error": "You do not have access to this project."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        bundle = request.data.get("bundle")
+        try:
+            validate_dashboard_bundle_dict(bundle)
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        event_log_id = request.data.get("event_log")
+        if event_log_id is not None:
+            # Only a log of this project: a dotted chart must never be pointed
+            # at somebody else's data.
+            event_log_id = (
+                EventLog.objects.filter(pk=event_log_id, project=project)
+                .values_list("pk", flat=True)
+                .first()
+            )
+
+        try:
+            with transaction.atomic():
+                next_order = (
+                    Dashboard.objects.filter(project=project).aggregate(
+                        Max("order_in_project")
+                    )["order_in_project__max"]
+                    or 0
+                ) + 1
+                bundle_name = bundle["dashboard"]["name"]
+                dashboard = Dashboard.objects.create(
+                    project=project,
+                    name=unique_dashboard_name(project, bundle_name),
+                    order_in_project=next_order,
+                )
+                # Resolved after the row exists so a text box linking to the
+                # bundle's own dashboard points at this copy.
+                layout, warnings = resolve_bundle_components(
+                    bundle["components"],
+                    project=project,
+                    user=request.user,
+                    event_log_id=event_log_id,
+                    self_dashboard=dashboard,
+                    self_name=bundle_name,
+                )
+                self._replace_components(dashboard, layout, request)
+
+                # `_replace_components` drops anything its chain does not
+                # handle, silently and by design. We have already filtered the
+                # names it knows, so a shortfall here means the two have
+                # drifted apart — say so rather than leave a hole.
+                stored = dashboard.components.count()
+                if stored < len(layout):
+                    warnings.append(
+                        {
+                            "code": "component_unknown",
+                            "component_name": None,
+                            "detail": (
+                                f"{len(layout) - stored} widget(s) could not be "
+                                f"stored and were left out."
+                            ),
+                        }
+                    )
+        except RichTextTooLarge as exc:
+            return Response(
+                {"error": f"a text box's content is too large: {exc}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            {
+                "dashboard": DashboardSerializer(dashboard).data,
+                "warnings": warnings,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
     def _replace_components(self, dashboard, layout, request):
         # Clear existing components
