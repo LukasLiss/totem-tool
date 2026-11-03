@@ -40,6 +40,7 @@ Subclasses (each adds component-specific config fields):
 | `OCDFGComponent` | `show_controls` (True), `initial_interaction_locked` (True) | `"OCDFGComponent"` |
 | `OCDottedChartComponent` | `file_id`, `x_axis` ("time"), `y_axis` ("activity"), `color_by` ("activity"), `shape_by` ("none"), `row_order` ("first_occurrence"), `max_points` (10000), `show_minimap` (True), `show_controls` (True) | `"OCDottedChartComponent"` |
 | `NewOCDFGComponent` | `show_controls` (True), `initial_interaction_locked` (True), `layout_direction` (choices `TB`/`LR`, default `TB`) | `"NewOCDFGComponent"` (also matches `"NewOCDFGVariantsComponent"`) |
+| `OCAlignmentComponent` | `show_controls`, `automatic_loading`, `model_asset` (FK→ProjectAsset OCPN, SET_NULL), `execution_source` (`area`/`stored`), `execution_column`, `business_object_types` / `business_activities` (JSON lists), `execution_id`, `max_states`, `timeout_s`, `show_silent_moves` | `"OCAlignmentComponent"` |
 | `OCCNComponent` | `relative_occurrence_threshold` (FloatField 0..1, validators MinValueValidator(0.0)/MaxValueValidator(1.0)), `show_controls` (True), `initial_interaction_locked` (True), `layout_direction` (default `LR`), `object_types` (TextField, comma-separated) | `"OCCNComponent"` |
 
 ### Upload path helpers
@@ -104,6 +105,9 @@ Subclasses (each adds component-specific config fields):
 | `GET /api/variants/?file_id=` | `variants` | `IsAuthenticated` |
 | `GET /api/files/<pk>/event_columns/` | `views_process_executions.event_columns` | `IsAuthenticated` |
 | `POST /api/files/<pk>/process_executions/` | `views_process_executions.process_executions` | `IsAuthenticated` |
+| `POST /api/files/<pk>/oc_alignment_executions/` | `EventLogViewSet` action (mixin in `views/oc_alignment.py`) | `IsAuthenticated` |
+| `POST /api/files/<pk>/oc_alignment/` | `EventLogViewSet` action (mixin in `views/oc_alignment.py`) | `IsAuthenticated` |
+| `POST /api/files/<pk>/oc_alignment_batch/` | `EventLogViewSet` action (mixin in `views/oc_alignment.py`) | `IsAuthenticated` |
 | `POST /api/playout/` | `playout` | `IsAuthenticated` |
 | `POST /api/playout/export-ocel/` | `playout_export_ocel` | `IsAuthenticated` |
 | `DELETE /api/delete-data/` | `delete_user_data` | `IsAuthenticated` |
@@ -285,6 +289,7 @@ return Response({"error": f"Invalid iso '{iso}'. Allowed: {sorted(_VALID_ISOS)}"
 
 - `docs/MODEL_ASSETS.md` — canonical TOTeM v1 / OCCN v1 model-asset JSON formats, `/api/assets/` behavior, and the 7-step checklist for adding a new asset type.
 - `docs/MODEL_EDITORS.md` — the three visual editors (TOTeM, OCCN, OCPN) and their **editor-side** JSON formats (`format: "totem-model" | "occn" | "ocpn"`) — these are what `/api/playout/` receives in `model`, distinct from the canonical asset-store format.
+- `docs/OC_ALIGNMENTS.md` — object-centric alignments (Liß 2023): search, heuristics, limits, endpoints, dashboard widget.
 - `docs/RESOURCE_AWARE_VARIANTS.md` — resource-aware extraction, stored process-execution columns, OCCN conformance on stored columns, process-area filter action.
 - `docs/PLAYOUT.md` — playout semantics (canonical ordering, exact vs. lower/upper-bound counts, silent-transition budgets), backend request/response contract, and where the engine lives in `totem_lib/playout/`.
 - `docs/OCCN_PRECISION.md` — math behind the OCCN context-based precision metric.

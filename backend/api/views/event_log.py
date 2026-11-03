@@ -100,6 +100,7 @@ from ._process_view import (
     _serialize_process_layers,
 )
 from .occn import _get_or_discover_base_occn
+from .oc_alignment import OCAlignmentActionsMixin
 # Bounds for the client-supplied discovery watchdog (seconds).
 MIN_TIMEOUT_S = 1.0
 MAX_TIMEOUT_S = 300.0
@@ -274,7 +275,7 @@ def _discard_upload(event_log):
     _remove_file(file_path)
 
 
-class EventLogViewSet(viewsets.ModelViewSet):
+class EventLogViewSet(OCAlignmentActionsMixin, viewsets.ModelViewSet):
     serializer_class = EventLogSerializer
     permission_classes = [IsAuthenticated]
     # PATCH is allowed only so the `rename` action below can be reached;

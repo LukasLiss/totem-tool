@@ -32,6 +32,7 @@ Available components include:
 - **Log Statistics** (number of events, objects, activities, time span, …),
 - analysis components: **Process Area**, **TOTeM Miner**, **OCCN**, **OC Petri Net**, **OC-DFG**,
   **Variants Explorer**, **OC Dotted Chart**, **Handover of Work**, and **Resource Profiling**,
+- conformance components: **Object-Centric Alignment** (see [Object-Centric Alignments](oc-alignments.md)),
 - SQL-based components: **SQL Editor**, **Pie Chart**, **Bar Chart**, **Scatter Plot**, and **KPI**.
 
 SQL-based components can **link** a stored query from the [Project Asset Store](project-asset-store.md).

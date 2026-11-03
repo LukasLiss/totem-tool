@@ -202,6 +202,13 @@ export interface ComponentProps {
     w_divergence?: number;
     alpha?: number;
     beta?: number;
+    // OCAlignmentComponent properties
+    model_asset?: number | null;
+    execution_source?: 'area' | 'stored';
+    execution_column?: string;
+    execution_id?: string;
+    max_states?: number;
+    show_silent_moves?: boolean;
     // OCHandoverComponent / ResourceProfilingComponent properties
     resource_types?: string[];
     businessobject_types?: string[];

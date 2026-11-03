@@ -29,6 +29,7 @@ const conformanceItems: {
   { id: "totem", label: "TOTeM Conformance", icon: WorkflowAlert },
   { id: "occn", label: "OCCN Conformance", icon: CausalNetAlert },
   { id: "ocpnReplay", label: "OCPN Flattened Replay", icon: CircleDotAlert },
+  { id: "ocAlignment", label: "OC Alignments", icon: GitCompareArrows },
 ];
 
 export function NavConformance() {
