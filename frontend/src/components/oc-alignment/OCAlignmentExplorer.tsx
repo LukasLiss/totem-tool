@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Info, LoaderCircle, Play } from "lucide-react";
+import { Info, ListChecks, LoaderCircle, Play } from "lucide-react";
 
 import {
   MAX_OC_ALIGNMENT_MAX_STATES,
@@ -10,10 +10,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-import { useAlignmentRun, useExecutions, useLogOptions, useOcpnAssets } from "./hooks";
+import { useAlignmentRun, useBatchRun, useExecutions, useLogOptions, useOcpnAssets } from "./hooks";
+import { OCAlignmentBatchView } from "./OCAlignmentBatchView";
 import { OCAlignmentResultView } from "./OCAlignmentResultView";
 import { OCAlignmentSettingsPanel } from "./OCAlignmentSettingsPanel";
-import { alignmentBlocker, sourceBlocker, type OCAlignmentSettings } from "./settings";
+import { alignmentBlocker, batchBlocker, sourceBlocker, sourceKey, type OCAlignmentSettings } from "./settings";
 
 export interface OCAlignmentExplorerProps {
   fileId: number | null | undefined;
@@ -59,7 +60,11 @@ export function OCAlignmentExplorer({
   const options = useLogOptions(fileId, showControls);
   const executions = useExecutions(showControls ? fileId : null, settings, filterEnabled);
   const alignment = useAlignmentRun(fileId, filterEnabled);
+  const batch = useBatchRun(fileId, filterEnabled);
   const [lastRun, setLastRun] = useState<string | null>(null);
+  const [lastBatch, setLastBatch] = useState<string | null>(null);
+  const batchKey = `${settings.assetId}|${sourceKey(settings)}`;
+  const busy = alignment.running || batch.running;
   const blocker = alignmentBlocker(settings);
   const autoStarted = useRef(false);
 
@@ -74,6 +79,19 @@ export function OCAlignmentExplorer({
   const run = () => {
     setLastRun(runKey(settings));
     void alignment.run(settings);
+  };
+
+  const runAll = () => {
+    setLastBatch(batchKey);
+    void batch.run(settings);
+  };
+
+  // A row of the batch result opens that execution's alignment.
+  const openExecution = (executionId: string) => {
+    const next = { ...settings, executionId };
+    onSettingsChange(next);
+    setLastRun(runKey(next));
+    void alignment.run(next);
   };
 
   useEffect(() => {
@@ -113,7 +131,7 @@ export function OCAlignmentExplorer({
             executionsError={executions.error}
             executionsBlocker={fileId ? sourceBlocker(settings) : "Select an event log first."}
             onRetryExecutions={executions.retry}
-            disabled={alignment.running}
+            disabled={busy}
             compact={compact}
           />
           <div className="flex flex-wrap items-end gap-3 border-t pt-4">
@@ -127,7 +145,7 @@ export function OCAlignmentExplorer({
                 max={MAX_OC_ALIGNMENT_MAX_STATES}
                 step={10_000}
                 value={settings.maxStates}
-                disabled={alignment.running}
+                disabled={busy}
                 onChange={(e) => {
                   const n = Number(e.target.value);
                   if (Number.isFinite(n)) {
@@ -148,7 +166,7 @@ export function OCAlignmentExplorer({
                 min={1}
                 max={MAX_OC_ALIGNMENT_TIMEOUT_S}
                 value={settings.timeoutS}
-                disabled={alignment.running}
+                disabled={busy}
                 onChange={(e) => {
                   const n = Number(e.target.value);
                   if (Number.isFinite(n)) {
@@ -157,15 +175,59 @@ export function OCAlignmentExplorer({
                 }}
               />
             </div>
-            <Button type="button" onClick={run} disabled={Boolean(blocker) || alignment.running || !fileId}>
+            <Button type="button" onClick={run} disabled={Boolean(blocker) || busy || !fileId}>
               {alignment.running ? <LoaderCircle className="animate-spin" /> : <Play />}
               {alignment.running ? "Computing alignment" : "Compute alignment"}
             </Button>
-            {blocker && !alignment.running ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={runAll}
+              disabled={Boolean(batchBlocker(settings)) || busy || !fileId}
+              title="Align every process execution of the source (at most 50,000 states and 5 s each, 4 minutes in total)"
+            >
+              {batch.running ? <LoaderCircle className="animate-spin" /> : <ListChecks />}
+              {batch.running
+                ? "Aligning all executions"
+                : `Compute for all executions${executions.data ? ` (${executions.data.total.toLocaleString()})` : ""}`}
+            </Button>
+            {batch.running ? (
+              <Button type="button" variant="ghost" size="sm" onClick={batch.cancel}>
+                Cancel
+              </Button>
+            ) : null}
+            {blocker && !busy ? (
               <p className="pb-2 text-xs text-muted-foreground">{blocker}</p>
             ) : null}
           </div>
         </section>
+      ) : null}
+
+      {batch.error ? (
+        <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+          {batch.error}
+        </div>
+      ) : null}
+      {batch.running && !batch.result ? (
+        <div role="status" className="flex items-center gap-2 rounded-md border bg-muted/30 p-4 text-sm">
+          <LoaderCircle className="size-4 animate-spin" />
+          Aligning every process execution — progress is shown in the computation panel.
+        </div>
+      ) : null}
+      {batch.result ? (
+        <>
+          {lastBatch !== batchKey && showControls ? (
+            <p className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Info className="size-3.5" /> The model or the execution source changed since these alignments were computed.
+            </p>
+          ) : null}
+          <OCAlignmentBatchView
+            result={batch.result}
+            onOpenExecution={busy ? undefined : openExecution}
+            selectedExecutionId={alignment.result?.execution_id}
+            compact={compact}
+          />
+        </>
       ) : null}
 
       {alignment.error ? (
@@ -192,7 +254,7 @@ export function OCAlignmentExplorer({
           compact={compact}
           graphHeight={graphHeight}
         />
-      ) : !showControls ? (
+      ) : batch.result || batch.running ? null : !showControls ? (
         <div role="status" className="flex flex-col items-center gap-3 p-6 text-center text-sm text-muted-foreground">
           <p>{blocker ?? "Compute the alignment of the preselected process execution."}</p>
           {!blocker ? (

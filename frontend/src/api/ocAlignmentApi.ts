@@ -121,12 +121,61 @@ export interface OCAlignmentResponse {
     model: number;
   }[];
   unknown_activities: string[];
+  /** Concrete reasons when no alignment exists. */
+  diagnostics?: string[];
   states_explored: number;
   states_queued: number;
   elapsed_ms: number;
   execution: OCAlignmentExecutionDetail;
   projection: OCAlignmentProjection;
 }
+
+export type OCAlignmentBatchStatus = OCAlignmentStatus | "skipped";
+
+export interface OCAlignmentBatchRow {
+  id: string;
+  event_count: number;
+  object_count: number;
+  object_type_counts: Record<string, number>;
+  start_unix: number | null;
+  status: OCAlignmentBatchStatus;
+  cost: number | null;
+  exact: boolean;
+  lower_bound: number | null;
+  move_counts: { sync: number; log: number; model: number; silent: number } | null;
+  ignored_object_types: string[];
+  message: string;
+  diagnostics?: string[];
+  elapsed_ms: number;
+}
+
+export interface OCAlignmentBatchResponse {
+  file_id: number;
+  asset_id: number;
+  source: OCAlignmentSource;
+  max_states: number;
+  timeout_s: number;
+  total_timeout_s: number;
+  model_object_types: string[];
+  total: number;
+  status_counts: Partial<Record<OCAlignmentBatchStatus, number>>;
+  aligned: number;
+  fitting: number;
+  exact: number;
+  average_cost: number | null;
+  cost_per_event: number | null;
+  synchronous_event_ratio: number | null;
+  deviations_by_activity: { activity: string; sync: number; log: number; model: number; executions: number }[];
+  /** Object type -> number of executions in which it was ignored. */
+  ignored_object_types: Record<string, number>;
+  stopped_early: boolean;
+  elapsed_ms: number;
+  rows: OCAlignmentBatchRow[];
+}
+
+export const DEFAULT_OC_ALIGNMENT_BATCH_MAX_STATES = 50_000;
+export const DEFAULT_OC_ALIGNMENT_BATCH_TIMEOUT_S = 5;
+export const DEFAULT_OC_ALIGNMENT_BATCH_TOTAL_TIMEOUT_S = 240;
 
 const FILES_URL = "/api/files/";
 
@@ -180,6 +229,34 @@ export async function computeOCAlignment(
   };
   const { data } = await axios.post<OCAlignmentResponse>(
     `${FILES_URL}${eventLogId}/oc_alignment/`,
+    body,
+    { signal: options.signal, _skipGlobalFilter: options.filterEnabled === false },
+  );
+  return data;
+}
+
+/** Alignments of every execution of a source (one compact row each + aggregates). */
+export async function computeOCAlignmentBatch(
+  eventLogId: number,
+  assetId: number,
+  source: OCAlignmentSourceRequest,
+  options: {
+    maxStates?: number;
+    timeoutS?: number;
+    totalTimeoutS?: number;
+    signal?: AbortSignal;
+    filterEnabled?: boolean;
+  } = {},
+): Promise<OCAlignmentBatchResponse> {
+  const body: Record<string, unknown> = {
+    ...buildSourceBody(source),
+    asset_id: assetId,
+    max_states: options.maxStates ?? DEFAULT_OC_ALIGNMENT_BATCH_MAX_STATES,
+    timeout_s: options.timeoutS ?? DEFAULT_OC_ALIGNMENT_BATCH_TIMEOUT_S,
+    total_timeout_s: options.totalTimeoutS ?? DEFAULT_OC_ALIGNMENT_BATCH_TOTAL_TIMEOUT_S,
+  };
+  const { data } = await axios.post<OCAlignmentBatchResponse>(
+    `${FILES_URL}${eventLogId}/oc_alignment_batch/`,
     body,
     { signal: options.signal, _skipGlobalFilter: options.filterEnabled === false },
   );

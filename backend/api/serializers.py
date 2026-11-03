@@ -207,6 +207,15 @@ class OCAlignmentRequestSerializer(OCAlignmentExecutionSourceSerializer):
     timeout_s = serializers.FloatField(min_value=1.0, max_value=600.0, default=60.0)
 
 
+class OCAlignmentBatchRequestSerializer(OCAlignmentExecutionSourceSerializer):
+    asset_id = serializers.IntegerField(min_value=1)
+    # Per execution; smaller defaults than for one alignment.
+    max_states = serializers.IntegerField(min_value=1_000, max_value=2_000_000, default=50_000)
+    timeout_s = serializers.FloatField(min_value=0.5, max_value=600.0, default=5.0)
+    # For the whole batch; executions not reached in time are "skipped".
+    total_timeout_s = serializers.FloatField(min_value=5.0, max_value=3_600.0, default=240.0)
+
+
 class EventLogSerializer(serializers.ModelSerializer):
      # Renamed through the viewset's `rename` action, never by writing here.
      display_name = serializers.CharField(

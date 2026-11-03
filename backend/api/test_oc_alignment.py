@@ -218,6 +218,47 @@ class OCAlignmentEndpointTests(APITestCase):
         self.assertEqual(response.status_code, 400)  # below the minimum
 
 
+    # --- batch ------------------------------------------------------------
+
+    def test_batch_aligns_every_area_execution(self):
+        response = self._post("oc_alignment_batch", self._area(asset_id=self.asset.pk))
+        self.assertEqual(response.status_code, 200, response.data)
+        payload = response.json()
+        self.assertEqual(payload["total"], 3)
+        self.assertEqual(payload["aligned"], 3)
+        self.assertEqual(payload["fitting"], 2)
+        self.assertEqual({r["id"]: r["cost"] for r in payload["rows"]}, {"i1": 0, "i3": 1, "i5": 0})
+        self.assertEqual(payload["max_states"], 50_000)
+        self.assertFalse(payload["stopped_early"])
+        pick = next(r for r in payload["deviations_by_activity"] if r["activity"] == "pick item")
+        self.assertEqual(pick["model"], 1)
+
+    def test_batch_validates_input(self):
+        self.assertEqual(self._post("oc_alignment_batch", self._area()).status_code, 400)
+        response = self._post(
+            "oc_alignment_batch", {"source": "stored", "execution_column": "missing", "asset_id": self.asset.pk}
+        )
+        self.assertEqual(response.status_code, 400)
+        response = self._post(
+            "oc_alignment_batch", self._area(asset_id=self.asset.pk, total_timeout_s=1)
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_no_alignment_comes_with_diagnostics(self):
+        broken = dict(_MODEL)
+        broken["places"] = [dict(p) for p in _MODEL["places"]]
+        item_places = [p for p in broken["places"] if p["objectType"] == "item"]
+        next(p for p in item_places if not p.get("final") and not p.get("initial"))["final"] = True
+        asset = ProjectAsset.objects.create(
+            project=self.project, name="broken", asset_type=ProjectAsset.AssetType.OCPN, content_json=broken
+        )
+        response = self._post("oc_alignment", self._area(asset_id=asset.pk, execution_id="i1"))
+        self.assertEqual(response.status_code, 200, response.data)
+        payload = response.json()
+        self.assertEqual(payload["status"], "no_alignment")
+        self.assertTrue(any("can never get" in d for d in payload["diagnostics"]))
+
+
 @override_settings(MEDIA_ROOT=_MEDIA_ROOT)
 class OCAlignmentComponentLayoutTests(APITestCase):
     def setUp(self):

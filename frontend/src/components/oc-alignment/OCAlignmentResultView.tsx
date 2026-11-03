@@ -107,6 +107,13 @@ export function OCAlignmentResultView({
                   : "Search stopped before the optimum was found"}
             </p>
             <p className="mt-1 opacity-90">{result.message}</p>
+            {result.diagnostics?.length ? (
+              <ul className="mt-2 list-disc space-y-1 pl-4" data-testid="oc-alignment-diagnostics">
+                {result.diagnostics.map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
+              </ul>
+            ) : null}
             {result.status === "state_limit" || result.status === "timeout" ? (
               <p className="mt-1 opacity-90">
                 Raise the state limit or the time limit, or pick a smaller process execution.

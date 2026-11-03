@@ -4,15 +4,17 @@ import { extractAssetApiError, listAssets, type ProjectAsset } from "@/api/asset
 import { getEventLogEventColumns, type EventColumnInfo } from "@/api/occnConformanceApi";
 import {
   computeOCAlignment,
+  computeOCAlignmentBatch,
   describeOCAlignmentError,
   listOCAlignmentExecutions,
+  type OCAlignmentBatchResponse,
   type OCAlignmentExecutionsResponse,
   type OCAlignmentResponse,
 } from "@/api/ocAlignmentApi";
 import { fetchActivities, fetchObjectTypes, fetchProcessAreas } from "@/react_component/variants/variantsApi";
 import { useProcessAreaStore, useProcessAreasForFile } from "@/store/processAreaStore";
 
-import { alignmentBlocker, sourceBlocker, sourceKey, sourceRequest, type OCAlignmentSettings } from "./settings";
+import { alignmentBlocker, batchBlocker, sourceBlocker, sourceKey, sourceRequest, type OCAlignmentSettings } from "./settings";
 
 /** OCPN model assets of the project, newest first. */
 export function useOcpnAssets(projectId: number | null | undefined) {
@@ -223,4 +225,48 @@ export function useAlignmentRun(fileId: number | null | undefined, filterEnabled
   }, []);
 
   return { result, running, error, run, reset };
+}
+
+/** Aligning every execution of the current source. */
+export function useBatchRun(fileId: number | null | undefined, filterEnabled: boolean) {
+  const [result, setResult] = useState<OCAlignmentBatchResponse | null>(null);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const controller = useRef<AbortController | null>(null);
+
+  useEffect(() => () => controller.current?.abort(), []);
+
+  const run = useCallback(
+    async (settings: OCAlignmentSettings) => {
+      if (!fileId || batchBlocker(settings) || !settings.assetId) return;
+      controller.current?.abort();
+      const current = new AbortController();
+      controller.current = current;
+      setRunning(true);
+      setError(null);
+      try {
+        const response = await computeOCAlignmentBatch(fileId, settings.assetId, sourceRequest(settings), {
+          signal: current.signal,
+          filterEnabled,
+        });
+        if (controller.current === current) setResult(response);
+      } catch (err) {
+        if (controller.current === current) {
+          setResult(null);
+          setError(describeOCAlignmentError(err, "The alignments could not be computed."));
+        }
+      } finally {
+        if (controller.current === current) setRunning(false);
+      }
+    },
+    [fileId, filterEnabled],
+  );
+
+  const cancel = useCallback(() => {
+    controller.current?.abort();
+    controller.current = null;
+    setRunning(false);
+  }, []);
+
+  return { result, running, error, run, cancel };
 }

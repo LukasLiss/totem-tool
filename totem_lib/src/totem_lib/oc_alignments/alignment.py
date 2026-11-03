@@ -142,6 +142,8 @@ class OCAlignmentResult:
     message: str = ""
     #: Activities of the execution no transition of the model is labelled with.
     unknown_activities: Tuple[str, ...] = ()
+    #: Concrete reasons why no alignment exists (see :func:`diagnose_no_alignment`).
+    diagnostics: Tuple[str, ...] = ()
     #: False when variable arcs had too many objects to try every subset in
     #: model moves; the alignment is valid but its cost only an upper bound.
     exact: bool = True
@@ -223,6 +225,7 @@ class OCAlignmentResult:
             "deviations_by_activity": self.deviations_by_activity(),
             "deviations_by_object": self.deviations_by_object(),
             "unknown_activities": list(self.unknown_activities),
+            "diagnostics": list(self.diagnostics),
             "states_explored": self.states_explored,
             "states_queued": self.states_queued,
             "elapsed_ms": round(self.elapsed_ms, 1),
@@ -770,6 +773,108 @@ def alignment_edges(moves: Sequence[AlignmentMove], include_silent: bool = True)
     return sorted(edges)
 
 
+def _place_names(net: AlignmentNet, places: Iterable[int]) -> str:
+    names = sorted({net.place_ids[p] for p in places})
+    return ", ".join(names) if names else "none"
+
+
+def diagnose_no_alignment(net: AlignmentNet, execution: ProcessExecution) -> List[str]:
+    """Explain why the model cannot reach its final marking with these objects.
+
+    Checks, per object type of the execution, whether a single object of the
+    type can get from the initial to the final places of its type at all,
+    using only transitions that can fire with the object types the
+    execution has (a regular arc needs exactly one object of its type, so a
+    transition with a regular arc of a type the execution lacks never
+    fires). The remaining case -- every object could finish on its own, but
+    not together -- is reported generically.
+    """
+    counts = Counter(execution.object_types_by_object.values())
+    reasons: List[str] = []
+    blocked: Dict[int, List[str]] = {}
+    for t in net.transitions:
+        missing = [ot for ot in t.regular_types if counts.get(ot, 0) == 0]
+        if missing:
+            blocked[t.index] = missing
+
+    def label(t: NetTransition) -> str:
+        return f'"{t.label}"' if t.label is not None else f"silent transition {t.id}"
+
+    for ot in sorted(counts):
+        initial = tuple(sorted(net.initial_places.get(ot, ())))
+        final = tuple(sorted(net.final_places.get(ot, ())))
+        if not initial:
+            reasons.append(f'Object type "{ot}" has no initial place in the model.')
+            continue
+        if not final:
+            reasons.append(f'Object type "{ot}" has no final place in the model.')
+            continue
+        transitions = [t for t in net.transitions if ot in t.object_types]
+        # Single-object reachability over the type's places, with and without
+        # the transitions that need object types the execution lacks.
+        def reachable(usable):
+            seen, frontier = {initial}, [initial]
+            while frontier and len(seen) < 5_000:
+                marking = frontier.pop()
+                have = Counter(marking)
+                for t in usable:
+                    ins = t.inputs.get(ot, ())
+                    if any(have[p] < 1 for p in ins):
+                        continue
+                    nxt = have.copy()
+                    nxt.subtract(ins)
+                    nxt.update(t.outputs.get(ot, ()))
+                    m = tuple(sorted(p for p, c in nxt.items() for _ in range(c) if c > 0))
+                    if m not in seen:
+                        seen.add(m)
+                        frontier.append(m)
+            return seen
+
+        everything = reachable(transitions)
+        if final not in everything:
+            dead_ends = sorted(m for m in everything if m != initial and all(
+                any(Counter(m)[p] < 1 for p in t.inputs.get(ot, ())) or not t.inputs.get(ot)
+                for t in transitions
+            ))
+            hint = ""
+            if dead_ends:
+                hint = " An object gets stuck in " + "; ".join(
+                    "{" + _place_names(net, m) + "}" for m in dead_ends[:3]
+                ) + "."
+            reasons.append(
+                f'A "{ot}" object can never get from its initial place(s) '
+                f"{{{_place_names(net, initial)}}} to its final place(s) "
+                f"{{{_place_names(net, final)}}} in the model, whatever happens.{hint} "
+                "Check the arcs and the initial/final flags of this object type."
+            )
+            continue
+        usable = [t for t in transitions if t.index not in blocked]
+        if final not in reachable(usable):
+            needed = sorted(
+                {f"{label(t)} (needs {', '.join(repr(m) for m in blocked[t.index])})"
+                 for t in transitions if t.index in blocked}
+            )
+            reasons.append(
+                f'"{ot}" objects can only finish through transitions that need object '
+                f"types this execution does not have: {'; '.join(needed)}. Add these "
+                "object types to the business object types, or use a model without them."
+            )
+    unused = sorted(set(net.object_types) - set(counts))
+    if not reasons:
+        reasons.append(
+            "Every object could reach its final places on its own, but not together: "
+            "transitions shared between object types (or regular arcs that bind exactly "
+            "one object per firing) cannot fire in a combination that brings all "
+            "objects of this execution to their final places."
+        )
+    if unused:
+        reasons.append(
+            "Object types of the model without objects in this execution: "
+            + ", ".join(unused) + "."
+        )
+    return reasons
+
+
 def compute_oc_alignment(
     model,
     execution: ProcessExecution,
@@ -906,8 +1011,12 @@ def compute_oc_alignment(
         message = messages[exact_failure if exact_failure in messages else failure]
         if fallback_used:
             message += " The approximate fallback search did not find an alignment either."
+        diagnostics = ()
+        if failure == NO_ALIGNMENT or exact_failure == NO_ALIGNMENT:
+            diagnostics = tuple(diagnose_no_alignment(net, execution))
         return OCAlignmentResult(
             status=exact_failure if fallback_used else failure,
+            diagnostics=diagnostics,
             execution=execution,
             projection=projection,
             exact=not search.restricted_transitions,

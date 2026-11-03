@@ -439,3 +439,72 @@ def load_area_execution(
             f"Process execution {execution_id!r} has no events of the selected activities."
         )
     return ProcessExecution(case_id, events)
+
+
+# ---------------------------------------------------------------------------
+# Bulk loading (all executions of a source in one pass)
+# ---------------------------------------------------------------------------
+
+
+def _executions_from_case_rows(rows) -> List[ProcessExecution]:
+    """Rows of ``(case_id, event_id, activity, timestamp_unix, obj_id, obj_type)``."""
+    grouped: Dict[str, list] = defaultdict(list)
+    for case_id, *rest in rows:
+        grouped[str(case_id)].append(tuple(rest))
+    executions = []
+    for case_id, case_rows in grouped.items():
+        events = _events_from_rows(case_rows)
+        if events:
+            executions.append(ProcessExecution(case_id, events))
+    executions.sort(key=lambda e: (e.events[0].timestamp_unix, e.execution_id))
+    return executions
+
+
+def load_stored_executions(conn, column: str) -> List[ProcessExecution]:
+    """Every execution stored in ``events.<column>`` (ordered by start time)."""
+    _require_column(conn, column)
+    col = f"CAST(e.{_quote(column)} AS VARCHAR)"
+    rows = conn.execute(
+        f"""
+        SELECT {col}, e.event_id, e.activity, e.timestamp_unix, eo.obj_id, o.obj_type
+        FROM events e
+        LEFT JOIN event_object eo ON eo.event_id = e.event_id
+        LEFT JOIN objects o ON o.obj_id = eo.obj_id
+        WHERE {col} IS NOT NULL AND {col} <> ''
+        ORDER BY 1, e.timestamp_unix, e.event_id
+        """
+    ).fetchall()
+    return _executions_from_case_rows(rows)
+
+
+def load_area_executions(
+    conn,
+    business_object_types: Iterable[str],
+    business_activities: Optional[Iterable[str]] = None,
+) -> List[ProcessExecution]:
+    """Every connected-component execution of a process area (ordered by start time)."""
+    types, activities = _normalise_area(business_object_types, business_activities)
+    cases = _area_cases(conn, types, activities)
+    if not cases:
+        return []
+    _with_case_table(conn, cases)
+    activity_clause, params = "", []
+    if activities is not None:
+        activity_clause = f"AND e.activity IN ({', '.join('?' for _ in activities)})"
+        params = list(activities)
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT co.case_id, e.event_id, e.activity, e.timestamp_unix, co.obj_id, o.obj_type
+            FROM {_AREA_CASES_TABLE} co
+            JOIN event_object eo ON eo.obj_id = co.obj_id
+            JOIN events e ON e.event_id = eo.event_id
+            JOIN objects o ON o.obj_id = co.obj_id
+            WHERE TRUE {activity_clause}
+            ORDER BY co.case_id, e.timestamp_unix, e.event_id
+            """,
+            params,
+        ).fetchall()
+    finally:
+        conn.execute(f"DROP TABLE IF EXISTS temp.main.{_AREA_CASES_TABLE}")
+    return _executions_from_case_rows(rows)

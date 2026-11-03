@@ -24,7 +24,9 @@ from totem_lib.oc_alignments import (
     list_area_executions,
     list_stored_executions,
     load_area_execution,
+    load_area_executions,
     load_stored_execution,
+    load_stored_executions,
     make_event,
     net_from_ocpn_dict,
     project_execution,
@@ -465,3 +467,75 @@ def test_many_objects_behind_a_variable_arc_stay_tractable():
     assert [(m.kind, m.model_activity, m.objects) for m in result.moves if m.kind != SYNC_MOVE] == [
         (MODEL_MOVE, "add sample", (("item", "i07"),))
     ]
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics, bulk loading and batches
+# ---------------------------------------------------------------------------
+
+
+def test_no_alignment_names_an_unreachable_final_place():
+    from totem_lib.oc_alignments import diagnose_no_alignment
+
+    model = running_example_net()
+    for place in model["places"]:
+        if place["id"] == "it_sample_done":
+            place["final"] = True  # an item would have to end in two places
+    result = compute_oc_alignment(model, running_example_execution())
+    assert result.status == NO_ALIGNMENT
+    assert any('"item" object can never get' in d and "it_sample_done" in d for d in result.diagnostics)
+    assert result.to_dict()["diagnostics"] == list(result.diagnostics)
+    assert diagnose_no_alignment(net_from_ocpn_dict(model), running_example_execution())
+
+
+def test_no_alignment_names_transitions_that_need_missing_object_types():
+    execution = ProcessExecution(
+        "i9",
+        (
+            make_event("1", "prepare sample", 1, {"item": ["i9"]}),
+            make_event("2", "add sample", 2, {"item": ["i9"]}),
+        ),
+    )
+    result = compute_oc_alignment(running_example_net(), execution)
+    assert result.status == NO_ALIGNMENT
+    assert any("receive sample order" in d and "'package'" in d for d in result.diagnostics)
+    assert any("without objects in this execution: package" in d for d in result.diagnostics)
+
+
+def test_bulk_loaders_match_single_loads(logs):
+    _clean, deviating, _model = logs
+    area = load_area_executions(deviating.conn, BUSINESS_TYPES, BUSINESS_ACTIVITIES)
+    assert [e.execution_id for e in area] == ["i1", "i3", "i5"]
+    for execution in area:
+        single = load_area_execution(deviating.conn, BUSINESS_TYPES, BUSINESS_ACTIVITIES, execution.execution_id)
+        assert single.events == execution.events
+    stored = load_stored_executions(deviating.conn, "execution")
+    assert {e.execution_id for e in stored} == {"i1", "i3", "i5"}
+    for execution in stored:
+        assert load_stored_execution(deviating.conn, "execution", execution.execution_id).events == execution.events
+
+
+def test_batch_aligns_every_execution_and_aggregates(logs):
+    from totem_lib.oc_alignments import SKIPPED, align_executions
+
+    _clean, deviating, model = logs
+    executions = load_stored_executions(deviating.conn, "execution")
+    result = align_executions(model, executions).to_dict()
+    assert result["total"] == 3
+    assert result["aligned"] == 3 and result["fitting"] == 2
+    assert result["status_counts"] == {OPTIMAL: 3}
+    assert result["average_cost"] == pytest.approx(1 / 3)
+    assert result["ignored_object_types"] == {"worker": 3}
+    pick = next(r for r in result["deviations_by_activity"] if r["activity"] == "pick item")
+    assert (pick["model"], pick["executions"]) == (1, 1)
+    costs = {row["id"]: row["cost"] for row in result["rows"]}
+    assert costs["i3"] == 1
+    assert all("_per_activity" not in row for row in result["rows"])
+
+    # A spent total budget skips the remaining executions instead of failing.
+    stopped = align_executions(model, executions, total_timeout_s=1e-9).to_dict()
+    assert stopped["stopped_early"]
+    assert stopped["status_counts"][SKIPPED] >= 2
+
+    with pytest.raises(AlignmentCancelled):
+        align_executions(model, executions, should_cancel=lambda: True)

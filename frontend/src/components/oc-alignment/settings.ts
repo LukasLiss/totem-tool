@@ -126,6 +126,12 @@ export function alignmentBlocker(settings: OCAlignmentSettings): string | null {
   return settings.executionId ? null : "Choose a process execution.";
 }
 
+/** Why all executions cannot be aligned yet (null when they can). */
+export function batchBlocker(settings: OCAlignmentSettings): string | null {
+  if (!settings.assetId) return "Choose an OCPN model.";
+  return sourceBlocker(settings);
+}
+
 /** A stable key of everything that determines the list of executions. */
 export function sourceKey(settings: OCAlignmentSettings): string {
   return JSON.stringify(

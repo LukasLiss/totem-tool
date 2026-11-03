@@ -11,6 +11,8 @@ API.
   process area / manual business object type + activity selection).
 * ``POST /api/files/<pk>/oc_alignment/`` -- an optimal object-centric
   alignment of one execution against a stored OCPN asset.
+* ``POST /api/files/<pk>/oc_alignment_batch/`` -- alignments of every
+  execution of a source: one compact row per execution plus aggregates.
 """
 
 from rest_framework import status
@@ -23,17 +25,21 @@ from totem_lib.oc_alignments import (
     AlignmentCancelled,
     AlignmentModelError,
     ExecutionNotFoundError,
+    align_executions,
     compute_oc_alignment,
     list_area_executions,
     list_stored_executions,
     load_area_execution,
+    load_area_executions,
     load_stored_execution,
+    load_stored_executions,
     net_from_ocpn_dict,
 )
 
 from ..jobs import JobCancelled, cancelled_response, job_scope
 from ..models import EventLog, ProjectAsset
 from ..serializers import (
+    OCAlignmentBatchRequestSerializer,
     OCAlignmentExecutionsRequestSerializer,
     OCAlignmentRequestSerializer,
 )
@@ -232,6 +238,85 @@ class OCAlignmentActionsMixin:
                 **_source_echo(validated),
                 "max_states": validated["max_states"],
                 "timeout_s": validated["timeout_s"],
+                "model_object_types": list(net.object_types),
+                **result.to_dict(),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"])
+    def oc_alignment_batch(self, request, pk=None):
+        """Object-centric alignments of every process execution of a source."""
+        serializer = OCAlignmentBatchRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        validated = serializer.validated_data
+        user_file, error = self._alignment_log(pk)
+        if error is not None:
+            return error
+        asset, net, error = self._resolve_ocpn_asset(request, user_file, validated["asset_id"])
+        if error is not None:
+            return error
+
+        try:
+            with job_scope(request, "Object-centric alignments") as job:
+                try:
+                    fp = _parse_filter_params(request)
+                    with _with_ocel_db(user_file, job) as db:
+                        job.report(None, "Loading process executions")
+                        with _filter_shadow(db, fp):
+                            if validated["source"] == AREA_EXECUTION_SOURCE:
+                                executions = load_area_executions(
+                                    db.conn,
+                                    validated["business_object_types"],
+                                    validated["business_activities"] or None,
+                                )
+                            else:
+                                executions = load_stored_executions(
+                                    db.conn, validated["execution_column"]
+                                )
+                except JobCancelled:
+                    raise
+                except EventColumnError as exc:
+                    return Response(
+                        {"execution_column": str(exc)}, status=status.HTTP_400_BAD_REQUEST
+                    )
+                except ValueError as exc:
+                    return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+                except Exception as exc:
+                    return Response(
+                        {"error": f"Failed to load the process executions: {exc}"},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
+
+                try:
+                    result = align_executions(
+                        net,
+                        executions,
+                        max_states=validated["max_states"],
+                        timeout_s=validated["timeout_s"],
+                        total_timeout_s=validated["total_timeout_s"],
+                        should_cancel=lambda: job.cancelled,
+                        progress=job.report,
+                    )
+                except (JobCancelled, AlignmentCancelled):
+                    raise JobCancelled("Object-centric alignments were cancelled")
+                except Exception as exc:
+                    return Response(
+                        {"error": f"Failed to compute the object-centric alignments: {exc}"},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
+        except JobCancelled:
+            return cancelled_response()
+
+        return Response(
+            {
+                "file_id": user_file.pk,
+                "asset_id": asset.pk,
+                **_source_echo(validated),
+                "max_states": validated["max_states"],
+                "timeout_s": validated["timeout_s"],
+                "total_timeout_s": validated["total_timeout_s"],
                 "model_object_types": list(net.object_types),
                 **result.to_dict(),
             },

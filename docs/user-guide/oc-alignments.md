@@ -33,7 +33,8 @@ package and the order it ships. The method follows L. Liß, *Object-Centric Alig
      with the same id belongs to the execution, with all of its objects.
 3. Pick the **execution** in the table. It shows the number of events and objects per type. A ⚠
    marks executions with object types that the model does not contain.
-4. Click **Compute alignment**.
+4. Click **Compute alignment**, or **Compute for all executions** to align every execution of the
+   source at once (see below).
 
 Object types of the execution that the model does not contain are **ignored automatically**. Their
 objects are removed before aligning, because a model move must use the same objects as the log. The
@@ -53,6 +54,28 @@ result names the ignored types and how many objects and events were left out.
     *Show silent moves* is on.
 - **Deviations by activity / by object** count the log and model moves per activity and per
   object.
+
+## All executions at once
+
+**Compute for all executions** aligns every execution of the selected source. Each execution gets
+at most 50,000 states and 5 seconds, and the whole run at most 4 minutes; executions not reached
+in that time are marked *skipped*. The result shows how many executions could be aligned and how
+many fit the model (cost 0), the average cost, the share of synchronous events, the deviations per
+activity over all executions, and a table of all executions with their status and cost. Click a row
+to compute and open the detailed alignment of that execution.
+
+## When no alignment exists
+
+The model must be able to bring every object of the execution from the initial to the final places
+of its type. If it cannot, the result lists the concrete reasons, for example:
+
+- an object type whose final places can never be reached from its initial places (often an extra
+  *final* or *initial* flag on a place, or a missing arc);
+- transitions that need exactly one object of a type the execution does not contain (add that type
+  to the business object types, or use a model without it).
+
+The business activities do not affect this: activities that are not selected are simply not part of
+the execution, and the model can still perform them as model moves.
 
 ## Limits
 

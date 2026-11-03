@@ -7,7 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listAssets, type ProjectAsset } from "@/api/assetsApi";
 import {
   computeOCAlignment,
+  computeOCAlignmentBatch,
   listOCAlignmentExecutions,
+  type OCAlignmentBatchResponse,
   type OCAlignmentResponse,
 } from "@/api/ocAlignmentApi";
 
@@ -20,7 +22,12 @@ vi.mock("@/api/assetsApi", async () => {
 });
 vi.mock("@/api/ocAlignmentApi", async () => {
   const actual = await vi.importActual<typeof import("@/api/ocAlignmentApi")>("@/api/ocAlignmentApi");
-  return { ...actual, listOCAlignmentExecutions: vi.fn(), computeOCAlignment: vi.fn() };
+  return {
+    ...actual,
+    listOCAlignmentExecutions: vi.fn(),
+    computeOCAlignment: vi.fn(),
+    computeOCAlignmentBatch: vi.fn(),
+  };
 });
 vi.mock("@/api/occnConformanceApi", async () => {
   const actual = await vi.importActual<typeof import("@/api/occnConformanceApi")>("@/api/occnConformanceApi");
@@ -167,6 +174,48 @@ describe("OCAlignmentExplorer", () => {
       "model",
     ]);
     expect(screen.getByText("Deviations by activity")).toBeTruthy();
+  });
+
+  it("aligns every execution and opens one from the batch table", async () => {
+    const batch: OCAlignmentBatchResponse = {
+      file_id: 1, asset_id: 5, source: "area", max_states: 50000, timeout_s: 5, total_timeout_s: 240,
+      model_object_types: ["item", "order"], total: 2, status_counts: { optimal: 1, no_alignment: 1 },
+      aligned: 1, fitting: 0, exact: 1, average_cost: 1, cost_per_event: 0.2, synchronous_event_ratio: 0.8,
+      deviations_by_activity: [{ activity: "pick item", sync: 0, log: 0, model: 1, executions: 1 }],
+      ignored_object_types: { worker: 1 }, stopped_early: false, elapsed_ms: 12,
+      rows: [
+        { id: "o1", event_count: 3, object_count: 3, object_type_counts: { item: 1, order: 1 }, start_unix: 1,
+          status: "optimal", cost: 1, exact: true, lower_bound: 1,
+          move_counts: { sync: 2, log: 0, model: 1, silent: 0 }, ignored_object_types: ["worker"],
+          message: "", diagnostics: [], elapsed_ms: 3 },
+        { id: "o2", event_count: 9, object_count: 4, object_type_counts: { item: 3, order: 1 }, start_unix: 3,
+          status: "no_alignment", cost: null, exact: false, lower_bound: null, move_counts: null,
+          ignored_object_types: [], message: "no", diagnostics: ['A "item" object can never get from p1 to p2.'],
+          elapsed_ms: 1 },
+      ],
+    };
+    vi.mocked(computeOCAlignmentBatch).mockResolvedValue(batch);
+    render(
+      <Harness
+        initial={{ ...DEFAULT_OC_ALIGNMENT_SETTINGS, assetId: 5, businessObjectTypes: ["item", "order", "worker"] }}
+      />,
+    );
+    const button = await screen.findByRole("button", { name: /Compute for all executions \(2\)/ });
+    fireEvent.click(button);
+
+    const view = await screen.findByTestId("oc-alignment-batch");
+    expect(computeOCAlignmentBatch).toHaveBeenCalledWith(
+      1, 5, { source: "area", businessObjectTypes: ["item", "order", "worker"], businessActivities: [] },
+      expect.anything(),
+    );
+    expect(view.textContent).toContain("No alignment exists for 1 of 2 executions");
+    expect(view.textContent).toContain('A "item" object can never get from p1 to p2.');
+    expect(view.textContent).toContain("worker (in 1 executions)");
+
+    const table = within(view).getByRole("listbox", { name: "Aligned executions" });
+    fireEvent.click(within(table).getByText("o1"));
+    await screen.findByTestId("oc-alignment-result");
+    expect(computeOCAlignment).toHaveBeenCalledWith(1, 5, expect.anything(), "o1", expect.anything());
   });
 
   it("asks for a model before anything else", async () => {

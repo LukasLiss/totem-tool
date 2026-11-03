@@ -107,6 +107,7 @@ Subclasses (each adds component-specific config fields):
 | `POST /api/files/<pk>/process_executions/` | `views_process_executions.process_executions` | `IsAuthenticated` |
 | `POST /api/files/<pk>/oc_alignment_executions/` | `EventLogViewSet` action (mixin in `views/oc_alignment.py`) | `IsAuthenticated` |
 | `POST /api/files/<pk>/oc_alignment/` | `EventLogViewSet` action (mixin in `views/oc_alignment.py`) | `IsAuthenticated` |
+| `POST /api/files/<pk>/oc_alignment_batch/` | `EventLogViewSet` action (mixin in `views/oc_alignment.py`) | `IsAuthenticated` |
 | `POST /api/playout/` | `playout` | `IsAuthenticated` |
 | `POST /api/playout/export-ocel/` | `playout_export_ocel` | `IsAuthenticated` |
 | `DELETE /api/delete-data/` | `delete_user_data` | `IsAuthenticated` |
