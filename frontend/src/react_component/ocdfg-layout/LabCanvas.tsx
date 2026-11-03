@@ -256,11 +256,10 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
 
         {o.showLanes &&
           result.lanes.map((l) => {
-            const horizontal = o.direction === 'LR' || o.direction === 'RL';
-            const tx = horizontal ? l.x + 8 : l.x + l.width / 2;
-            const ty = horizontal ? l.y + l.height / 2 : l.y + 14;
-            // Generous invisible hit area around the title (uppercase, letter-spaced).
-            const hitW = Math.min(horizontal ? 400 : l.width, l.type.length * 8.5 + 24);
+            const { x: tx, y: ty, anchor } = l.label;
+            // Generous invisible hit area around the title.
+            const hitW = l.label.width + 16;
+            const hitX = anchor === 'start' ? tx - 8 : anchor === 'end' ? tx - hitW + 8 : tx - hitW / 2;
             const active = laneHover === l.type;
             return (
               <g key={`lane-${l.type}`} opacity={activeType && activeType !== l.type ? 0.35 : 1}>
@@ -271,11 +270,11 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
                   onMouseEnter={() => setLaneHover(l.type)}
                   onMouseLeave={() => setLaneHover((t) => (t === l.type ? null : t))}
                 >
-                  <rect x={horizontal ? tx - 6 : tx - hitW / 2} y={ty - 11} width={hitW} height={22} rx={4} fill={color(l.type)} fillOpacity={active ? 0.12 : 0} />
+                  <rect x={hitX} y={ty - 11} width={hitW} height={22} rx={4} fill={color(l.type)} fillOpacity={active ? 0.12 : 0} />
                   <text
                     x={tx}
                     y={ty}
-                    textAnchor={horizontal ? 'start' : 'middle'}
+                    textAnchor={anchor}
                     dominantBaseline="middle"
                     fontSize={11}
                     fontWeight={active ? 700 : 600}

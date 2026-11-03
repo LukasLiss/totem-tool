@@ -225,6 +225,12 @@ export interface LaneBand {
   y: number;
   width: number;
   height: number;
+  /**
+   * The lane's title: anchor point (text-anchor `anchor`, vertically
+   * centred) and the size of its box. It sits in a header area at the start
+   * of the lane that no node reaches into.
+   */
+  label: { x: number; y: number; anchor: 'start' | 'middle' | 'end'; width: number; height: number };
 }
 
 export interface LayoutMetrics {

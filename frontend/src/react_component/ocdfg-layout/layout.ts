@@ -64,6 +64,10 @@ import type {
 } from './types';
 
 const CHAR_W = 6.4;
+/** Lane titles: 11px uppercase with letter spacing. */
+const LANE_LABEL_CHAR_W = 8.2;
+const LANE_LABEL_HEIGHT = 14;
+const LANE_LABEL_PAD = 8;
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
 interface Item {
@@ -1194,15 +1198,35 @@ export function computeLayout(graph: LabGraph, options: LayoutOptions, extras: L
   }
   for (const r of routed) r.labelPos = pointAt(r.points, 0.5).p;
 
-  const fMin = (bandTop[0] ?? 0) - opts.rankGap * 0.5;
+  // Lane titles get a header area at the start of the lanes, before the
+  // first layer: along the flow it must hold the title's height (top to
+  // bottom) or its full width (left to right), so no start node covers it.
+  const labelWidth = (t: string) => t.length * LANE_LABEL_CHAR_W + 4;
+  const labelRoom = !opts.showLanes
+    ? 0
+    : horizontal
+      ? Math.max(0, ...laneOrder.map(labelWidth)) + 2 * LANE_LABEL_PAD
+      : LANE_LABEL_HEIGHT + 2 * LANE_LABEL_PAD;
+  const fMin = (bandTop[0] ?? 0) - Math.max(opts.rankGap * 0.5, labelRoom);
   const fMax = (bandTop[nRanks - 1] ?? 0) + (bandH[nRanks - 1] ?? 0) + opts.rankGap * 0.5;
+  const labelAnchor: 'start' | 'middle' | 'end' =
+    opts.direction === 'LR' ? 'start' : opts.direction === 'RL' ? 'end' : 'middle';
+  const labelFlow = horizontal ? fMin + LANE_LABEL_PAD : fMin + LANE_LABEL_PAD + LANE_LABEL_HEIGHT / 2;
   const lanes = laneOrder.map((t) => {
     const ext = extents.get(t)!;
     const c0 = laneCenter.get(t)! - ext.left * U - opts.laneGap * 0.3;
     const c1 = laneCenter.get(t)! + ext.right * U + opts.laneGap * 0.3;
     const a = T({ x: c0, y: fMin });
     const b = T({ x: c1, y: fMax });
-    return { type: t, x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.abs(b.x - a.x), height: Math.abs(b.y - a.y) };
+    const at = T({ x: laneCenter.get(t)!, y: labelFlow });
+    return {
+      type: t,
+      x: Math.min(a.x, b.x),
+      y: Math.min(a.y, b.y),
+      width: Math.abs(b.x - a.x),
+      height: Math.abs(b.y - a.y),
+      label: { x: at.x, y: at.y, anchor: labelAnchor, width: labelWidth(t), height: LANE_LABEL_HEIGHT },
+    };
   });
   const allX = ranks.flat().map((i) => i.x);
   const cMin = Math.min(...allX) - U / 2;

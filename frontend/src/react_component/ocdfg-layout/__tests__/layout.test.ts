@@ -232,6 +232,29 @@ describe('computeLayout', () => {
     }
   });
 
+  it.each(['TB', 'LR', 'BT', 'RL'] as const)('keeps every lane title clear of the nodes (%s)', (direction) => {
+    for (const example of EXAMPLES) {
+      for (const rankGap of [24, DEFAULT_OPTIONS.rankGap]) {
+        const result = computeLayout(example.build(), { ...DEFAULT_OPTIONS, direction, rankGap });
+        for (const lane of result.lanes) {
+          const { x, y, anchor, width, height } = lane.label;
+          const left = anchor === 'start' ? x : anchor === 'end' ? x - width : x - width / 2;
+          const box = { left, right: left + width, top: y - height / 2, bottom: y + height / 2 };
+          for (const n of result.nodes) {
+            const hit =
+              box.left < n.x + n.width / 2 &&
+              box.right > n.x - n.width / 2 &&
+              box.top < n.y + n.height / 2 &&
+              box.bottom > n.y - n.height / 2;
+            expect(hit, `${example.id} ${direction} gap ${rankGap}: title ${lane.type} covers ${n.id}`).toBe(false);
+          }
+          // The title lies inside its lane band.
+          expect(box.left >= lane.x - 0.5 && box.right <= lane.x + lane.width + 0.5, `${lane.type} inside its band`).toBe(true);
+        }
+      }
+    }
+  });
+
   it('routes main flows downwards and loops back up', () => {
     const result = computeLayout(EXAMPLES[2].build(), DEFAULT_OPTIONS);
     const y = new Map(result.nodes.map((n) => [n.id, n.y]));
