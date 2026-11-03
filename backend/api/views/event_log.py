@@ -90,6 +90,7 @@ from ._process_view import (
     _parse_process_area_params,
     _process_area_cache_params,
     _serialize_mlpa,
+    _serialize_relation_stats,
     _serialize_process_layers,
 )
 from .occn import _get_or_discover_base_occn
@@ -1023,7 +1024,8 @@ class EventLogViewSet(viewsets.ModelViewSet):
             # or stores unfiltered results under that key.
             if not is_filtered and _should_use_cache(request):
                 cached = get_cached_result(user_file, "discover_mlpa")
-                if cached is not None:
+                # Older entries predate the per-arc hover statistics.
+                if cached is not None and "relation_stats" in cached:
                     return Response(cached, status=status.HTTP_200_OK)
 
             with job_scope(request, "Process areas (MLPA)") as job:
@@ -1088,7 +1090,8 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 cached = get_cached_result(
                     user_file, "discover_process_areas", cache_params
                 )
-                if cached is not None:
+                # Older entries predate the per-arc hover statistics.
+                if cached is not None and "relation_stats" in cached:
                     return Response(cached, status=status.HTTP_200_OK)
 
             # Two-tier cache. Preparation reads the log and depends only on it;
@@ -1103,6 +1106,10 @@ class EventLogViewSet(viewsets.ModelViewSet):
             totem_data = (
                 get_cached_result(user_file, "discover_totem_raw") if use_tier_cache else None
             )
+            # Entries cached before the hover statistics existed lack them;
+            # rediscover once rather than serve arcs without their numbers.
+            if totem_data is not None and "relation_stats" not in totem_data:
+                totem_data = None
 
             with job_scope(request, "Process areas") as job:
                 progress = Progress(job.report)
@@ -1115,9 +1122,15 @@ class EventLogViewSet(viewsets.ModelViewSet):
                                 if use_tier_cache:
                                     set_cached_result(user_file, "process_area_prep", aggregates)
                             if totem_data is None:
-                                totem_data = totem_to_dict(
-                                    totemDiscovery_db(db, progress=progress.sub(0.4, 0.8))
+                                discovered = totemDiscovery_db(
+                                    db, progress=progress.sub(0.4, 0.8)
                                 )
+                                totem_data = {
+                                    **totem_to_dict(discovered),
+                                    "relation_stats": _serialize_relation_stats(
+                                        discovered
+                                    ),
+                                }
                                 if use_tier_cache:
                                     set_cached_result(
                                         user_file, "discover_totem_raw", totem_data
@@ -1137,6 +1150,7 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 "type_relations": totem_data["type_relations"],
                 "all_event_types": totem_data["all_event_types"],
                 "object_type_to_event_types": totem_data["object_type_to_event_types"],
+                "relation_stats": totem_data.get("relation_stats", []),
             }
 
             set_cached_result(
