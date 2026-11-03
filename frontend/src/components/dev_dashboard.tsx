@@ -11,7 +11,7 @@ import { LocalFilterDropdown } from "@/components/ui/LocalFilterDropdown";
 import { ReactFlowProvider } from "@xyflow/react";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import ProcessArea from "@/react_component/ProcessArea";
-import NewOCDFGVisualizer from "@/react_component/NewOCDFGVisualizer";
+import NewOCDFGVariantsVisualizer from "@/react_component/NewOCDFGVariantsVisualizer";
 import LogStatistics from "@/components/LogStatistics";
 
 /**
@@ -51,13 +51,15 @@ export function DevDashboard() {
           </CardHeader>
           <CardContent className="h-[640px] p-0">
             <ReactFlowProvider>
-              <NewOCDFGVisualizer
+              <NewOCDFGVariantsVisualizer
                 height="100%"
                 fileId={selectedFile?.id}
                 showControls={true}
                 initialInteractionLocked={true}
                 layoutDirection="TB"
                 filterEnabled={dfgFilterEnabled}
+                onToggleFilter={() => setDfgFilterEnabled(p => !p)}
+                showTitle={false}
                 localFilterParams={dfgLocalFilter}
               />
             </ReactFlowProvider>
