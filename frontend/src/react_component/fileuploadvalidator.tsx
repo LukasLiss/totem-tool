@@ -204,7 +204,7 @@ export function FileUploadValidator() {
     <Card className="w-full max-w-sm m-6">
       <CardHeader>
         <CardTitle>
-          Upload new file
+          Upload a new file
         </CardTitle>
       </CardHeader>
         <CardContent>
