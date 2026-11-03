@@ -63,7 +63,7 @@ Users need:
 
 ## 🔧 Production Notes
 
-- The app will automatically start the Django backend on port 8000
+- The app starts the Django backend on a free loopback port chosen at launch; the frontend reaches it through the same local origin, so nothing else on the machine needs to keep port 8000 free
 - The frontend is served from local files (no internet required)
 - Backend process terminates when the app is closed
 - All data is stored in the included SQLite database

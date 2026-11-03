@@ -2,6 +2,7 @@ const { app, BrowserWindow, dialog, shell } = require('electron');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const http = require('http');
+const net = require('net');
 const express = require('express');
 const treeKill = require('tree-kill');
 
@@ -9,16 +10,24 @@ let mainWindow = null;
 let backendProcess = null;
 let frontendServer = null;
 let frontendPort = null;
+let backendPort = null;
 let quitting = false;
 
 const isDev = process.env.NODE_ENV === 'development';
 const isWin = process.platform === 'win32';
 
-// The frontend bundle is built with VITE_LOCAL_MODE=1 and talks to the backend
-// on this fixed port (see frontend/src/config/api.ts).
-const BACKEND_PORT = 8000;
+// Dev mode (npm run electron-dev) starts Django itself on :8000 and the Vite
+// dev server talks to it there. The packaged app picks a free port at launch
+// and reaches the backend through the frontend server's same-origin proxy, so
+// the port never has to be known by the frontend bundle.
+const DEV_BACKEND_PORT = 8000;
 const BACKEND_HOST = '127.0.0.1';
 const BACKEND_STARTUP_TIMEOUT_MS = 60_000;
+const BACKEND_START_ATTEMPTS = 3;
+
+// URL prefixes Django owns; everything else is the SPA. Keep in sync with the
+// frontend catch-all in backend/totem_backend/urls.py.
+const BACKEND_PATH = /^\/(?:api|token|auth|admin|static|files)(?:\/|$)/;
 
 // ---------------------------------------------------------------------------
 // Backend
@@ -67,9 +76,9 @@ function frontendOrigin() {
   return `http://127.0.0.1:${frontendPort}`;
 }
 
-function checkBackendHealth() {
+function checkBackendHealth(port) {
   return new Promise((resolve) => {
-    const req = http.get(`http://${BACKEND_HOST}:${BACKEND_PORT}/api/health-check/`, (res) => {
+    const req = http.get(`http://${BACKEND_HOST}:${port}/api/health-check/`, (res) => {
       res.resume();
       resolve(res.statusCode === 200);
     });
@@ -99,18 +108,25 @@ function runManagementCommand(args) {
   }
 }
 
-async function startBackend() {
-  if (await checkBackendHealth()) {
-    console.log('Backend already running on port 8000, reusing it.');
-    return;
-  }
+/** Ask the OS for a free loopback port. */
+function findFreePort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.unref();
+    srv.on('error', reject);
+    srv.listen(0, BACKEND_HOST, () => {
+      const { port } = srv.address();
+      srv.close(() => resolve(port));
+    });
+  });
+}
 
-  // Apply schema migrations against the per-user database. This also seeds
-  // the local Guest account (authentification/migrations/0001_seed_guest_user).
-  runManagementCommand(['migrate', '--noinput']);
+class PortInUseError extends Error {}
 
+/** Spawn `runserver` on `port` and resolve once it answers the health check. */
+function spawnBackend(port) {
   const { executable, prefixArgs, cwd } = backendLocation();
-  const args = [...prefixArgs, 'runserver', `${BACKEND_HOST}:${BACKEND_PORT}`, '--noreload'];
+  const args = [...prefixArgs, 'runserver', `${BACKEND_HOST}:${port}`, '--noreload'];
   console.log(`Spawning backend: ${executable} ${args.join(' ')}`);
 
   backendProcess = spawn(executable, args, {
@@ -128,7 +144,7 @@ async function startBackend() {
     console.error(`[Backend] ${data}`);
   });
 
-  await new Promise((resolve, reject) => {
+  return new Promise((resolve, reject) => {
     let settled = false;
     const finish = (fn, value) => {
       if (settled) return;
@@ -141,11 +157,14 @@ async function startBackend() {
     backendProcess.on('error', (err) => finish(reject, err));
     backendProcess.on('exit', (code, signal) => {
       backendProcess = null;
-      finish(reject, new Error(`Backend exited during startup (code ${code}, signal ${signal}).\n${stderrTail}`));
+      // Another program can grab the port between findFreePort() and the
+      // bind; Django reports that as "That port is already in use."
+      const Err = /already in use/i.test(stderrTail) ? PortInUseError : Error;
+      finish(reject, new Err(`Backend exited during startup (code ${code}, signal ${signal}).\n${stderrTail}`));
     });
 
     const poll = setInterval(async () => {
-      if (await checkBackendHealth()) finish(resolve);
+      if (await checkBackendHealth(port)) finish(resolve);
     }, 250);
     const timer = setTimeout(() => {
       finish(reject, new Error(`Backend did not become healthy within ${BACKEND_STARTUP_TIMEOUT_MS / 1000}s.\n${stderrTail}`));
@@ -153,9 +172,75 @@ async function startBackend() {
   });
 }
 
+async function startBackend() {
+  if (isDev) {
+    // `npm run electron-dev` already runs Django on the fixed dev port.
+    if (await checkBackendHealth(DEV_BACKEND_PORT)) {
+      console.log(`Dev backend already running on port ${DEV_BACKEND_PORT}, reusing it.`);
+      backendPort = DEV_BACKEND_PORT;
+      return;
+    }
+  }
+
+  // Apply schema migrations against the per-user database. This also seeds
+  // the local Guest account (authentification/migrations/0001_seed_guest_user).
+  runManagementCommand(['migrate', '--noinput']);
+
+  // The packaged app never reuses a backend it did not start: whatever answers
+  // on some port (a Docker TOTeM, a leftover instance with other CORS
+  // settings, another Django project) is not this installation's backend.
+  for (let attempt = 1; ; attempt++) {
+    const port = isDev ? DEV_BACKEND_PORT : await findFreePort();
+    try {
+      await spawnBackend(port);
+      backendPort = port;
+      console.log(`Backend running on http://${BACKEND_HOST}:${port}`);
+      return;
+    } catch (e) {
+      if (isDev || !(e instanceof PortInUseError) || attempt >= BACKEND_START_ATTEMPTS) throw e;
+      console.warn(`Port ${port} was taken before the backend could bind it, retrying.`);
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Frontend (static bundle served on a random free loopback port)
 // ---------------------------------------------------------------------------
+
+/**
+ * Forward a request to the backend unchanged. The Host header is kept, so
+ * Django builds absolute URLs (image assets, ...) against the frontend
+ * origin, which routes them back through this proxy.
+ */
+function proxyToBackend(req, res) {
+  const upstream = http.request(
+    {
+      host: BACKEND_HOST,
+      port: backendPort,
+      method: req.method,
+      path: req.originalUrl,
+      headers: req.headers,
+    },
+    (backendRes) => {
+      res.writeHead(backendRes.statusCode, backendRes.rawHeaders);
+      backendRes.pipe(res);
+    }
+  );
+  upstream.on('error', (err) => {
+    console.error(`[Proxy] ${req.method} ${req.originalUrl}: ${err.message}`);
+    if (!res.headersSent) {
+      res.writeHead(502, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'The local TOTeM backend is not reachable.' }));
+    } else {
+      res.destroy(err);
+    }
+  });
+  // Aborted uploads / cancelled requests must not leave the upstream open.
+  res.on('close', () => {
+    if (!res.writableFinished) upstream.destroy();
+  });
+  req.pipe(upstream);
+}
 
 function startFrontendServer() {
   if (isDev) return Promise.resolve();
@@ -166,6 +251,12 @@ function startFrontendServer() {
     // (Resources/app/resources/frontend-build), not in process.resourcesPath.
     const frontendPath = path.join(__dirname, 'resources', 'frontend-build');
 
+    // Frontend and API share this origin (like the Docker image), so the
+    // bundle is built with relative API URLs and needs no CORS.
+    expressApp.use((req, res, next) => {
+      if (BACKEND_PATH.test(req.path)) return proxyToBackend(req, res);
+      return next();
+    });
     expressApp.use(express.static(frontendPath));
     // SPA fallback for client-side routes
     expressApp.use((req, res) => res.sendFile(path.join(frontendPath, 'index.html')));
@@ -256,7 +347,9 @@ app.whenReady().then(async () => {
     console.error('Startup failed:', e);
     dialog.showErrorBox(
       'TOTeM-Tool failed to start',
-      `${e && e.message ? e.message : e}\n\nIf another program is using port ${BACKEND_PORT}, close it and try again.`
+      isDev
+        ? `${e && e.message ? e.message : e}\n\nIf another program is using port ${DEV_BACKEND_PORT}, close it and try again.`
+        : `${e && e.message ? e.message : e}`
     );
     app.exit(1);
   }

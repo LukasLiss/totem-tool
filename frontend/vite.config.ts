@@ -24,6 +24,9 @@ export default defineConfig(({ command }) => ({
   },
   server: {
     port: 3000,
+    // Fail instead of silently moving to 3001: electron-dev waits on :3000
+    // and the backend's CORS defaults only allow that origin.
+    strictPort: true,
     open: true,
     proxy: {
       // forward all /api/* and /token/* to Django on :8000
