@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { OCAlignmentMove } from "@/api/ocAlignmentApi";
 import { buildSourceBody } from "@/api/ocAlignmentApi";
 
-import { layoutAlignment, objectShades, visibleAlignment } from "./layout";
+import { MAX_CHIP_LINES, NODE_HALF_HEIGHT, halfHeightFor, layoutAlignment, objectShades, packChips, visibleAlignment } from "./layout";
 import {
   DEFAULT_OC_ALIGNMENT_SETTINGS,
   alignmentBlocker,
@@ -123,5 +123,27 @@ describe("oc alignment layout", () => {
 
   it("gives objects of one type distinct shades", () => {
     expect(objectShades({ item: ["i2", "i1"], order: ["o1"] })).toEqual({ i1: 0, i2: 1, o1: 0 });
+  });
+});
+
+describe("oc alignment object chips", () => {
+  const ids = (n: number) => Array.from({ length: n }, (_, i) => `i-8800${String(i).padStart(2, "0")}`);
+
+  it("shows every object of a typical move and grows the boxes to fit", () => {
+    // An order with three items: four chips, more than one line.
+    const four = ["o-990001", "i-880001", "i-880002", "i-880003"];
+    expect(packChips(four)).toEqual({ visible: 4, lines: 2 });
+    const big = move(0, "sync", four);
+    expect(halfHeightFor([big])).toBeGreaterThan(NODE_HALF_HEIGHT);
+    const layout = layoutAlignment([big, move(1, "sync", ["i-880001"])], [[0, 1]]);
+    expect(layout.halfHeight).toBe(halfHeightFor([big]));
+    expect(halfHeightFor([move(0, "sync", ["i1"])])).toBe(NODE_HALF_HEIGHT);
+  });
+
+  it("folds objects beyond the line cap into a '+N' chip", () => {
+    const { visible, lines } = packChips(ids(40));
+    expect(lines).toBe(MAX_CHIP_LINES);
+    expect(visible).toBeGreaterThan(0);
+    expect(visible).toBeLessThan(40);
   });
 });

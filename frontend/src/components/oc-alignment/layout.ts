@@ -11,8 +11,17 @@
 import type { OCAlignmentMove } from "@/api/ocAlignmentApi";
 
 export const NODE_WIDTH = 176;
+/** Minimum height of one half (log / model part) of a move box. */
 export const NODE_HALF_HEIGHT = 46;
 export const NODE_HEIGHT = NODE_HALF_HEIGHT * 2;
+/** Object chips: one line of chips, the label block above them, and a cap. */
+export const CHIP_LINE_HEIGHT = 18;
+const CHIP_LABEL_BLOCK = 24;
+export const MAX_CHIP_LINES = 4;
+const CHIP_AREA_WIDTH = NODE_WIDTH - 20; // box padding and border
+const CHIP_GAP = 2;
+const CHIP_MAX_WIDTH = 80;
+const OVERFLOW_CHIP_WIDTH = 52;
 export const COLUMN_GAP = 56;
 export const ROW_GAP = 22;
 export const PADDING = 16;
@@ -23,6 +32,50 @@ export const MOVE_STYLES = {
   log: { label: "Log move", border: "dashed", color: "#D97706", fill: "#FFFBEB" },
   model: { label: "Model move", border: "dotted", color: "#7C3AED", fill: "#F5F3FF" },
 } as const;
+
+/** Estimated rendered width of an object chip (10px font, 1px border, 4px padding). */
+export function chipWidth(id: string): number {
+  return Math.min(CHIP_MAX_WIDTH, Math.ceil(id.length * 6 + 12));
+}
+
+/**
+ * How many chips fit in ``maxLines`` lines (greedy, like flex-wrap) and how
+ * many lines they take. When not all fit, room is kept for a "+N" chip.
+ */
+export function packChips(ids: string[], maxLines = MAX_CHIP_LINES): { visible: number; lines: number } {
+  const place = (count: number, extra: number) => {
+    let lines = ids.length || extra ? 1 : 0;
+    let x = 0;
+    const widths = [...ids.slice(0, count).map(chipWidth), ...(extra ? [extra] : [])];
+    for (const w of widths) {
+      if (x > 0 && x + w > CHIP_AREA_WIDTH) {
+        lines += 1;
+        x = 0;
+      }
+      x += w + CHIP_GAP;
+    }
+    return lines;
+  };
+  if (place(ids.length, 0) <= maxLines) return { visible: ids.length, lines: place(ids.length, 0) };
+  let visible = ids.length - 1;
+  while (visible > 0 && place(visible, OVERFLOW_CHIP_WIDTH) > maxLines) visible -= 1;
+  return { visible, lines: place(visible, OVERFLOW_CHIP_WIDTH) };
+}
+
+function objectIds(objects: Record<string, string[]>): string[] {
+  return Object.values(objects ?? {}).flat();
+}
+
+/** Half-box height that fits the chips of every move (all boxes share it). */
+export function halfHeightFor(moves: OCAlignmentMove[]): number {
+  let lines = 1;
+  for (const move of moves) {
+    for (const objects of [move.log_objects, move.model_objects]) {
+      lines = Math.max(lines, packChips(objectIds(objects)).lines);
+    }
+  }
+  return Math.max(NODE_HALF_HEIGHT, CHIP_LABEL_BLOCK + lines * CHIP_LINE_HEIGHT + 4);
+}
 
 export function moveObjects(move: OCAlignmentMove): string[] {
   const seen = new Set<string>();
@@ -73,6 +126,8 @@ export interface LaidOutNode {
 }
 
 export interface AlignmentLayout {
+  /** Height of one half of every move box (fits the largest object set). */
+  halfHeight: number;
   nodes: LaidOutNode[];
   edges: { from: LaidOutNode; to: LaidOutNode }[];
   width: number;
@@ -86,6 +141,8 @@ export function layoutAlignment(
   moves: OCAlignmentMove[],
   edges: [number, number][],
 ): AlignmentLayout {
+  const halfHeight = halfHeightFor(moves);
+  const nodeHeight = halfHeight * 2;
   const predecessors: number[][] = moves.map(() => []);
   for (const [from, to] of edges) {
     if (from < moves.length && to < moves.length && from < to) predecessors[to].push(from);
@@ -126,17 +183,18 @@ export function layoutAlignment(
     column: column[i],
     row: row[i],
     x: PADDING + column[i] * (NODE_WIDTH + COLUMN_GAP),
-    y: PADDING + row[i] * (NODE_HEIGHT + ROW_GAP),
+    y: PADDING + row[i] * (nodeHeight + ROW_GAP),
   }));
   const maxColumn = nodes.reduce((m, n) => Math.max(m, n.column), 0);
   const maxRow = nodes.reduce((m, n) => Math.max(m, n.row), 0);
   return {
+    halfHeight,
     nodes,
     edges: edges
       .filter(([a, b]) => a < nodes.length && b < nodes.length)
       .map(([a, b]) => ({ from: nodes[a], to: nodes[b] })),
     width: nodes.length ? PADDING * 2 + (maxColumn + 1) * NODE_WIDTH + maxColumn * COLUMN_GAP : 0,
-    height: nodes.length ? PADDING * 2 + (maxRow + 1) * NODE_HEIGHT + maxRow * ROW_GAP : 0,
+    height: nodes.length ? PADDING * 2 + (maxRow + 1) * nodeHeight + maxRow * ROW_GAP : 0,
     columns: nodes.length ? maxColumn + 1 : 0,
     rows: nodes.length ? maxRow + 1 : 0,
   };

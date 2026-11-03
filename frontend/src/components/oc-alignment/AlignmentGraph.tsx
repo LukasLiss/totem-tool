@@ -7,8 +7,7 @@ import { mapTypesToColors } from "@/utils/objectColors";
 
 import {
   MOVE_STYLES,
-  NODE_HALF_HEIGHT,
-  NODE_HEIGHT,
+  packChips,
   NODE_WIDTH,
   layoutAlignment,
   objectShades,
@@ -55,9 +54,13 @@ function ObjectChips({
 }) {
   const entries = Object.entries(objects).flatMap(([type, ids]) => ids.map((id) => ({ type, id })));
   if (entries.length === 0) return null;
+  // Every object is shown; only beyond MAX_CHIP_LINES lines the rest folds
+  // into a "+N" chip whose tooltip lists them.
+  const { visible } = packChips(entries.map((e) => e.id));
+  const hidden = entries.slice(visible);
   return (
-    <div className="flex flex-wrap gap-0.5 overflow-hidden" style={{ maxHeight: 20 }}>
-      {entries.map(({ type, id }) => (
+    <div className="flex flex-wrap content-start gap-0.5" data-testid="oc-alignment-chips">
+      {entries.slice(0, visible).map(({ type, id }) => (
         <span
           key={`${type}:${id}`}
           title={`${id} (${type})`}
@@ -67,16 +70,26 @@ function ObjectChips({
           {id}
         </span>
       ))}
+      {hidden.length ? (
+        <span
+          title={hidden.map(({ type, id }) => `${id} (${type})`).join("\n")}
+          className="rounded-sm border border-slate-300 bg-white px-1 text-[10px] leading-4 text-slate-700"
+        >
+          +{hidden.length} more
+        </span>
+      ) : null}
     </div>
   );
 }
 
 function MoveBox({
   node,
+  halfHeight,
   colors,
   shades,
 }: {
   node: LaidOutNode;
+  halfHeight: number;
   colors: Record<string, string>;
   shades: Record<string, number>;
 }) {
@@ -101,21 +114,21 @@ function MoveBox({
         left: node.x,
         top: node.y,
         width: NODE_WIDTH,
-        height: NODE_HEIGHT,
+        height: halfHeight * 2,
         border: `2px ${style.border} ${style.color}`,
         backgroundColor: style.fill,
         opacity: move.silent ? 0.75 : 1,
       }}
     >
-      <div className="flex flex-1 flex-col justify-between px-2 py-1" style={{ height: NODE_HALF_HEIGHT }}>
+      <div className="flex flex-col gap-1 px-2 py-1" style={{ height: halfHeight }}>
         <span className={`truncate text-xs font-medium ${hasLog ? "text-slate-900" : "text-slate-400"}`}>
           {hasLog ? move.log_activity : "≫"}
         </span>
         {hasLog ? <ObjectChips objects={move.log_objects} colors={colors} shades={shades} /> : null}
       </div>
       <div
-        className="flex flex-1 flex-col justify-between px-2 py-1"
-        style={{ height: NODE_HALF_HEIGHT, borderTop: `1px ${style.border} ${style.color}` }}
+        className="flex flex-col gap-1 px-2 py-1"
+        style={{ height: halfHeight, borderTop: `1px ${style.border} ${style.color}` }}
       >
         <span
           className={`truncate text-xs font-medium ${
@@ -208,9 +221,9 @@ export function AlignmentGraph({ moves, objectsByType, showSilentMoves, height =
                 // The curve stops where the arrowhead starts and arrives
                 // horizontally, so line and head form one continuous stroke.
                 const x1 = from.x + NODE_WIDTH;
-                const y1 = from.y + NODE_HALF_HEIGHT;
+                const y1 = from.y + layout.halfHeight;
                 const xEnd = to.x - ARROW_LENGTH;
-                const y2 = to.y + NODE_HALF_HEIGHT;
+                const y2 = to.y + layout.halfHeight;
                 const dx = Math.max(16, (xEnd - x1) / 2);
                 return (
                   <path
@@ -226,7 +239,7 @@ export function AlignmentGraph({ moves, objectsByType, showSilentMoves, height =
               {/* One head per target: edges into the same move share it. */}
               {[...new Map(layout.edges.map(({ to }) => [to.position, to])).values()].map((to) => {
                 const tipX = to.x;
-                const y = to.y + NODE_HALF_HEIGHT;
+                const y = to.y + layout.halfHeight;
                 return (
                   <path
                     key={`head-${to.position}`}
@@ -238,7 +251,7 @@ export function AlignmentGraph({ moves, objectsByType, showSilentMoves, height =
               })}
             </svg>
             {layout.nodes.map((node) => (
-              <MoveBox key={node.position} node={node} colors={colors} shades={shades} />
+              <MoveBox key={node.position} node={node} halfHeight={layout.halfHeight} colors={colors} shades={shades} />
             ))}
           </div>
         </div>
