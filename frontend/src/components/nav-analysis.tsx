@@ -1,4 +1,4 @@
-import { ChevronRight, BarChart3, Network, TextAlignStart, ChartScatter, Workflow, CircleDot, CircleAlert, Database, Users } from "lucide-react"
+import { ChevronRight, BarChart3, Network, TextAlignStart, ChartScatter, Workflow, CircleDot, Database, Users } from "lucide-react"
 import { BoxesArrowRight, CausalNet } from "@/components/icons/totem-icons"
 import { useContext } from 'react'
 import {
@@ -22,7 +22,6 @@ const analysisItems: { id: AnalysisComponent; label: string; icon: typeof BarCha
   { id: 'totemMiner', label: 'TOTeM Miner', icon: Workflow },
   { id: 'occn', label: 'OCCN', icon: CausalNet },
   { id: 'ocPetriNet', label: 'OC Petri Net', icon: CircleDot },
-  { id: 'ocpnFlattenedReplay', label: 'OCPN Flattened Replay', icon: CircleAlert },
   { id: 'ocdfg', label: 'OC-DFG', icon: BoxesArrowRight },
   { id: 'variants', label: 'Variants', icon: TextAlignStart },
   { id: 'dottedChart', label: 'OC Dotted Chart', icon: ChartScatter },

@@ -275,21 +275,19 @@ def _project(model: Mapping, object_type: str) -> _TypeNet:
         initial = [p for p in places if p not in has_incoming]
         if initial:
             warnings.append(
-                "No place is marked as initial; places without incoming arcs "
-                "are used as start places."
+                "Start places: no incoming arc (none marked initial)."
             )
     final = [p for p in places if p not in has_outgoing]
     if not final:
         final = [p for p in places if place_flags[p].get("final")]
         if final:
             warnings.append(
-                "Every place has an outgoing arc; the places marked as final "
-                "are used as end places."
+                "End places: marked final (all have outgoing arcs)."
             )
     if places and not initial:
-        warnings.append("The net of this object type has no start place.")
+        warnings.append("No start place.")
     if places and not final:
-        warnings.append("The net of this object type has no end place.")
+        warnings.append("No end place.")
 
     return _TypeNet(
         object_type=object_type,
@@ -549,7 +547,7 @@ def flattened_token_based_replay(
         net = _project(model, object_type)
         type_result = ObjectTypeReplayResult(object_type=object_type, warnings=list(net.warnings))
         if not net.places:
-            type_result.warnings.append("The model has no places of this object type.")
+            type_result.warnings.append("No places of this type in the model.")
         search = _SilentSearch(net, max_silent_search_states)
         unmapped: Counter = Counter()
         variants = variants_by_type.get(object_type) or {}
@@ -579,9 +577,8 @@ def flattened_token_based_replay(
         type_result.silent_search_limit_hits = search.limit_hits
         if search.limit_hits:
             type_result.warnings.append(
-                f"The silent-transition search stopped at its bound of "
-                f"{max_silent_search_states} markings {search.limit_hits} time(s); "
-                "tokens in these situations were counted as missing."
+                f"Silent search hit its bound {search.limit_hits}x "
+                f"({max_silent_search_states} markings); counted as missing."
             )
         results.append(type_result)
 

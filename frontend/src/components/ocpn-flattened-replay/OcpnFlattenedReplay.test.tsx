@@ -127,6 +127,24 @@ describe("OcpnFlattenedReplay", () => {
     expect(p2).toBeGreaterThan(p3);
     expect(p3).toBeGreaterThan(0);
     expect(screen.getByTestId("replay-place-p2").textContent).toContain("−3");
+
+    // Hovering a place shows the shared white hover card with its token counts.
+    const nodeWrapper = screen.getByTestId("replay-place-p2").closest(".react-flow__node");
+    expect(nodeWrapper).toBeTruthy();
+    fireEvent.mouseEnter(nodeWrapper as Element, { clientX: 100, clientY: 100 });
+    const title = await screen.findByText("Place p2 (order)");
+    const card = title.parentElement as HTMLElement;
+    expect(card.style.backgroundColor).toBe("rgba(255, 255, 255, 0.95)");
+    expect(card.textContent).toContain("Produced:2");
+    expect(card.textContent).toContain("Consumed:4");
+    expect(card.textContent).toContain("Missing:3");
+    expect(card.textContent).toContain("Remaining:1");
+    fireEvent.mouseLeave(nodeWrapper as Element);
+    await waitFor(() => expect(screen.queryByText("Place p2 (order)")).toBeNull());
+
+    // The object type chip uses the same card.
+    fireEvent.mouseEnter(screen.getByTestId("replay-type-order"), { clientX: 50, clientY: 50 });
+    expect(screen.getByText("Fitting objects:")).toBeTruthy();
   });
 
   it("starts automatically and shows backend errors such as duplicate labels", async () => {

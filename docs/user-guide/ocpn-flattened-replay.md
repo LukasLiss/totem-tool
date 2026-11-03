@@ -5,8 +5,9 @@
 once per object type. The results of all object types are shown together on
 the combined object-centric net.
 
-Open it under **Analysis → OCPN Flattened Replay**, or add the
-**OCPN Flattened Replay** widget to a dashboard.
+Open it under **Conformance → OCPN Flattened Replay**, or add the
+**OCPN Flattened Replay** widget to a dashboard. In **Model Assets**, the
+conformance button of an OCPN asset opens the view with that model selected.
 
 ![OCPN flattened replay](images/ocpn-flattened-replay.png)
 
@@ -63,13 +64,13 @@ share a label, the replay stops with an error that asks you to rename them.
 ## Reading the result
 
 * The header shows the **average fitness**, plus one chip per object type with
-  its fitness. Hover a chip to see the number of objects and variants, the
+  its fitness. Hover over a chip to see the number of objects and variants, the
   number of fitting objects, the totals *p / c / m / r*, the skipped activities
   and any notes.
 * Places with missing or remaining tokens are drawn with a **red halo**. The
   stronger the halo, the higher the place's deviation, which is
   `(missing + remaining) / (produced + missing)`. Small badges under a place
   show `−missing` and `+remaining`.
-* **Hover a place** to see its produced, consumed, missing and remaining tokens.
+* **Hover over a place** to see its produced, consumed, missing and remaining tokens.
 * Object types that appear in the log but not in the model are listed and are
   not replayed.

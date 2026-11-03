@@ -1,4 +1,4 @@
-import { ChevronRight, GitCompareArrows, TriangleAlert } from "lucide-react"
+import { ChevronRight, CircleAlert, GitCompareArrows, TriangleAlert } from "lucide-react"
 import { useContext } from "react"
 
 import {
@@ -28,6 +28,7 @@ const conformanceItems: {
 }[] = [
   { id: "totem", label: "TOTeM Conformance", icon: WorkflowAlert },
   { id: "occn", label: "OCCN Conformance", icon: CausalNetAlert },
+  { id: "ocpnReplay", label: "OCPN Flattened Replay", icon: CircleAlert },
 ];
 
 export function NavConformance() {
