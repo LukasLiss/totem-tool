@@ -164,6 +164,7 @@ export function AnalysisView() {
                   colorBy={{ type: "activity" }}
                   shapeBy={{ type: "none" }}
                   rowOrder="first_occurrence"
+                  rowOrderDirection="asc"
                   maxPoints={10000}
                   showControls={true}
                   filterEnabled={filterEnabled}

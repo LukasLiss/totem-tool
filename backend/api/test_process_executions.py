@@ -390,3 +390,109 @@ class StoredColumnOccnConformanceTests(APITestCase):
         # executions (o3/o4 share a package) and the same deviation.
         self.assertEqual(response.json()["total_units"], 3)
         self.assertEqual(response.json()["non_fitting_units"], 1)
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT)
+class ProcessAreaVariantTests(APITestCase):
+    """``POST /api/files/<pk>/process_area_variants/`` on the orders log."""
+
+    AREAS = [
+        {"label": "order", "object_types": BUSINESS_TYPES, "activities": BUSINESS_ACTIVITIES},
+        {"label": "worker", "object_types": ["worker"], "activities": ["start shift", "end shift"]},
+    ]
+
+    def setUp(self):
+        cache.clear()
+        views._OCEL_DB_REGISTRY.clear()
+        views._OCEL_OBJECT_TYPES_REGISTRY.clear()
+        self.user = User.objects.create_user("tester", password="pw")
+        self.project = Project.objects.create(name="orders-project")
+        self.project.users.add(self.user)
+        self.filename = f"orders-pa-{self._testMethodName}.duckdb"
+        _import_example(CLEAN_LOG, f"{_MEDIA_ROOT}/{self.filename}")
+        self.log = EventLog.objects.create(project=self.project, file=self.filename)
+        self.client.force_authenticate(self.user)
+
+    def _post(self, query="", **overrides):
+        body = {"areas": self.AREAS}
+        body.update(overrides)
+        return self.client.post(
+            f"/api/files/{self.log.pk}/process_area_variants/{query}", body, format="json"
+        )
+
+    def _column_values(self, column: str) -> dict:
+        db = OcelDuckDB.load(f"{_MEDIA_ROOT}/{self.filename}", read_only=True)
+        try:
+            rows = db.conn.execute(
+                f'SELECT event_id, "{column}" FROM events ORDER BY event_id'
+            ).fetchall()
+        finally:
+            db.close()
+        return dict(rows)
+
+    def test_connected_components_per_area_are_stored_in_default_columns(self):
+        response = self._post()
+        self.assertEqual(response.status_code, 200, response.data)
+        payload = response.json()
+        self.assertEqual(payload["execution_column"], "process-executions-cc-process-areas")
+        self.assertEqual(payload["variant_column"], "variant-cc-process-areas")
+        order_area, worker_area = payload["areas"]
+        # The worker is not part of the order area, so it cannot merge executions.
+        self.assertEqual(order_area["execution_count"], 3)
+        self.assertEqual(sorted(v["support"] for v in order_area["variants"]), [1, 2])
+        self.assertTrue(all(v["id"].startswith("item+order+package/") for v in order_area["variants"]))
+        self.assertEqual(worker_area["execution_count"], 1)
+        self.assertEqual(payload["execution_count"], 4)
+        self.assertEqual(payload["assigned_event_count"], 22)
+        self.assertEqual(payload["ambiguous_event_count"], 0)
+        self.assertEqual(payload["unassigned_event_count"], 0)
+
+        executions = self._column_values("process-executions-cc-process-areas")
+        variants = self._column_values("variant-cc-process-areas")
+        self.assertTrue(all(value is not None for value in executions.values()))
+        self.assertEqual(
+            {v for v in variants.values() if v is not None},
+            {v["id"] for area in payload["areas"] for v in area["variants"]},
+        )
+
+    def test_area_without_activities_is_skipped(self):
+        response = self._post(
+            areas=[*self.AREAS[:1], {"label": "worker", "object_types": ["worker"], "activities": []}]
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        worker_area = response.json()["areas"][1]
+        self.assertEqual(worker_area["execution_count"], 0)
+        self.assertIn("no activities", worker_area["skipped_reason"])
+
+    def test_store_false_leaves_the_log_untouched(self):
+        response = self._post(store=False)
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertFalse(response.json()["stored"])
+        self.assertEqual(response.json()["areas"][0]["execution_count"], 3)
+        db = OcelDuckDB.load(f"{_MEDIA_ROOT}/{self.filename}", read_only=True)
+        try:
+            columns = [r[0] for r in db.conn.execute("DESCRIBE events").fetchall()]
+        finally:
+            db.close()
+        self.assertNotIn("process-executions-cc-process-areas", columns)
+
+    def test_existing_columns_are_overwritten(self):
+        self.assertEqual(self._post().status_code, 200)
+        response = self._post(areas=self.AREAS[1:])
+        self.assertEqual(response.status_code, 200, response.data)
+        executions = self._column_values("process-executions-cc-process-areas")
+        self.assertEqual({v for v in executions.values() if v is not None}, {"w1"})
+
+    def test_global_filter_narrows_every_area(self):
+        response = self._post(query="?activities=place order,start shift")
+        self.assertEqual(response.status_code, 200, response.data)
+        order_area, worker_area = response.json()["areas"]
+        # Without the pack/ship events o3 and o4 are no longer connected.
+        self.assertEqual(order_area["execution_count"], 4)
+        self.assertEqual(worker_area["execution_count"], 1)
+
+    def test_rejects_missing_areas_and_equal_columns(self):
+        self.assertEqual(self._post(areas=[]).status_code, 400)
+        response = self._post(execution_column="x", variant_column="x")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("must differ", response.json()["error"])

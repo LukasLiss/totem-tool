@@ -22,10 +22,13 @@ import {
 } from '@/api/imageAssetsApi';
 import VariantsExplorer from '@/react_component/VariantsExplorer';
 import {
+  DEFAULT_PROCESS_AREA_COLUMNS,
+  DEFAULT_VARIANTS_MODE,
   EXTRACTION_OPTIONS,
   ISO_OPTIONS,
   type Extraction,
   type IsoStrategy,
+  type VariantsMode,
 } from '@/react_component/variants/types';
 import { MultiSelectPopover } from '@/react_component/variants/MultiSelectPopover';
 import { fetchActivities, fetchObjectTypes } from '@/react_component/variants/variantsApi';
@@ -47,12 +50,15 @@ import {
 import {
   axisOptionToParam,
   type AxisOption,
+  type RowOrderDirection,
   type RowOrderOption,
 } from '@/react_component/dottedChart/dottedChartUtils';
 import TotemMiner from '@/react_component/TotemMiner';
 import NewOCDFGVisualizer from '@/react_component/NewOCDFGVisualizer';
 import NewOCDFGVariantsVisualizer from '@/react_component/NewOCDFGVariantsVisualizer';
 import OCPNVisualizer from '@/react_component/OCPNVisualizer';
+import OcpnFlattenedReplay from '@/components/ocpn-flattened-replay/OcpnFlattenedReplay';
+import { listAssets, type ProjectAsset } from '@/api/assetsApi';
 import { toast } from "sonner";
 import OCCNVisualizer from '@/react_component/OCCNVisualizer';
 import { Switch } from '@/components/ui/switch';
@@ -155,6 +161,9 @@ export interface ComponentProps {
     automatic_loading?: boolean;
     leading_object_type?: string;
     // Persisted advanced settings for the Variants Explorer
+    variants_mode?: VariantsMode;
+    area_execution_column?: string;
+    area_variant_column?: string;
     extraction?: Extraction;
     iso?: IsoStrategy;
     timeout_s?: number;
@@ -178,6 +187,7 @@ export interface ComponentProps {
     color_by?: string;
     shape_by?: string;
     row_order?: RowOrderOption;
+    row_order_direction?: RowOrderDirection;
     max_points?: number;
     show_minimap?: boolean;
     // NewOCDFGComponent / OCCNComponent properties
@@ -210,6 +220,8 @@ export interface ComponentProps {
     n_clusters?: number;
     min_cluster_size?: number;
     distance_metric?: 'euclidean' | 'hellinger';
+    // OCPNFlattenedReplayComponent properties
+    ocpn_asset_id?: number | null;
     // SqlQueryComponent properties
     name?: string;
     query?: string;
@@ -768,6 +780,16 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
   // Local state for form values
   const [automaticLoading, setAutomaticLoading] = useState(node.automatic_loading ?? false);
   const [leadingType, setLeadingType] = useState(node.leading_object_type ?? '');
+  const [variantsMode, setVariantsMode] = useState<VariantsMode>(
+    node.variants_mode ?? DEFAULT_VARIANTS_MODE
+  );
+  const [areaExecutionColumn, setAreaExecutionColumn] = useState(
+    node.area_execution_column ?? DEFAULT_PROCESS_AREA_COLUMNS.executionColumn
+  );
+  const [areaVariantColumn, setAreaVariantColumn] = useState(
+    node.area_variant_column ?? DEFAULT_PROCESS_AREA_COLUMNS.variantColumn
+  );
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [extraction, setExtraction] = useState<Extraction>(
     (node.extraction as Extraction) ?? 'leading_1hop'
   );
@@ -791,6 +813,9 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
   useEffect(() => {
     setAutomaticLoading(node.automatic_loading ?? false);
     setLeadingType(node.leading_object_type ?? '');
+    setVariantsMode(node.variants_mode ?? DEFAULT_VARIANTS_MODE);
+    setAreaExecutionColumn(node.area_execution_column ?? DEFAULT_PROCESS_AREA_COLUMNS.executionColumn);
+    setAreaVariantColumn(node.area_variant_column ?? DEFAULT_PROCESS_AREA_COLUMNS.variantColumn);
     setExtraction((node.extraction as Extraction) ?? 'leading_1hop');
     setIso((node.iso as IsoStrategy) ?? 'wl+vf2');
     setTimeoutS(node.timeout_s ?? 10);
@@ -799,6 +824,9 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
   }, [
     node.automatic_loading,
     node.leading_object_type,
+    node.variants_mode,
+    node.area_execution_column,
+    node.area_variant_column,
     node.extraction,
     node.iso,
     node.timeout_s,
@@ -837,6 +865,12 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
   const handleLeadingTypeChange = (value: string) => {
     setLeadingType(value);
     onUpdate?.({ leading_object_type: value });
+  };
+
+  const handleVariantsModeChange = (value: string) => {
+    const v = value as VariantsMode;
+    setVariantsMode(v);
+    onUpdate?.({ variants_mode: v });
   };
 
   const handleExtractionChange = (value: string) => {
@@ -891,6 +925,78 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
             />
           </div>
 
+          {variantsMode === 'process_areas' && (
+            <p className="text-sm text-muted-foreground">
+              Computes the connected components of every process area and shows one
+              variant list per area. Results are stored in the event log columns
+              "{areaExecutionColumn}" and "{areaVariantColumn}".
+            </p>
+          )}
+
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setShowAdvanced((open) => !open)}
+            aria-expanded={showAdvanced}
+          >
+            {showAdvanced ? 'Hide advanced options' : 'Advanced options'}
+          </Button>
+
+          {showAdvanced && (
+          <>
+          <div className="space-y-2">
+            <Label>Method</Label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="w-full justify-between font-normal">
+                  <span className="truncate">
+                    {variantsMode === 'process_areas'
+                      ? 'Connected components per process area'
+                      : 'Custom extraction'}
+                  </span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-[320px]">
+                <DropdownMenuRadioGroup value={variantsMode} onValueChange={handleVariantsModeChange}>
+                  <DropdownMenuRadioItem value="process_areas">
+                    Connected components per process area
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="custom">Custom extraction</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+
+          {variantsMode === 'process_areas' && (
+            <>
+              <div className="space-y-2">
+                <Label htmlFor="variants-area-execution-column">Execution column</Label>
+                <Input
+                  id="variants-area-execution-column"
+                  value={areaExecutionColumn}
+                  onChange={(e) => {
+                    setAreaExecutionColumn(e.target.value);
+                    onUpdate?.({ area_execution_column: e.target.value });
+                  }}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="variants-area-variant-column">Variant column</Label>
+                <Input
+                  id="variants-area-variant-column"
+                  value={areaVariantColumn}
+                  onChange={(e) => {
+                    setAreaVariantColumn(e.target.value);
+                    onUpdate?.({ area_variant_column: e.target.value });
+                  }}
+                />
+              </div>
+            </>
+          )}
+
+          {variantsMode === 'custom' && (
+          <>
           {/* Leading Object Type Dropdown */}
           <div className="space-y-2">
             <Label>Leading object type</Label>
@@ -996,6 +1102,9 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
             </>
           )}
 
+          </>
+          )}
+
           {/* Isomorphism strategy */}
           <div className="space-y-2">
             <Label>Isomorphism strategy</Label>
@@ -1047,12 +1156,15 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
               against runaway runs on hard combinations.
             </p>
           </div>
+          </>
+          )}
         </CardContent>
       </Card>
     );
   }
 
   // VIEW MODE: Render VariantsExplorer with stored settings
+  const areaColumns = { executionColumn: areaExecutionColumn, variantColumn: areaVariantColumn };
   return (
     <Card className="w-full h-full rounded-none overflow-auto">
       <CardContent className="p-0 h-full">
@@ -1061,6 +1173,8 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
           embedded={true}
           automaticLoading={automaticLoading}
           defaultLeadingType={leadingType || undefined}
+          defaultMode={variantsMode}
+          defaultProcessAreaColumns={areaColumns}
           defaultExtraction={extraction}
           defaultIso={iso}
           defaultTimeoutS={timeoutS}
@@ -1075,7 +1189,13 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
             setLeadingType(s.leading_type);
             setBusinessObjectTypes(s.business_object_types);
             setBusinessActivities(s.business_activities);
+            setVariantsMode(s.mode);
+            setAreaExecutionColumn(s.area_execution_column);
+            setAreaVariantColumn(s.area_variant_column);
             onUpdate?.({
+              variants_mode: s.mode,
+              area_execution_column: s.area_execution_column,
+              area_variant_column: s.area_variant_column,
               extraction: s.extraction,
               iso: s.iso,
               timeout_s: s.timeout_s,
@@ -1406,6 +1526,7 @@ const DOTTED_CHART_DEFAULT_CONFIG: DottedChartConfig = {
   colorBy: { type: "activity" },
   shapeBy: { type: "none" },
   rowOrder: "first_occurrence",
+  rowOrderDirection: "asc",
   maxPoints: 10000,
 };
 
@@ -1428,6 +1549,7 @@ export const OCDottedChartComponent: React.FC<ComponentProps> = ({
       color_by: axisOptionToPersistedValue(nextConfig.colorBy),
       shape_by: axisOptionToPersistedValue(nextConfig.shapeBy),
       row_order: nextConfig.rowOrder,
+      row_order_direction: nextConfig.rowOrderDirection,
       max_points: nextConfig.maxPoints,
     });
   };
@@ -1466,6 +1588,7 @@ export const OCDottedChartComponent: React.FC<ComponentProps> = ({
           colorBy={config.colorBy}
           shapeBy={config.shapeBy}
           rowOrder={config.rowOrder}
+          rowOrderDirection={config.rowOrderDirection}
           maxPoints={config.maxPoints}
           showControls={false}
           showMinimap={true}
@@ -1485,6 +1608,7 @@ function nodeToDottedChartConfig(node: ComponentProps["node"]): DottedChartConfi
     colorBy: persistedValueToAxisOption(node.color_by, DOTTED_CHART_DEFAULT_CONFIG.colorBy),
     shapeBy: persistedValueToAxisOption(node.shape_by, DOTTED_CHART_DEFAULT_CONFIG.shapeBy),
     rowOrder: node.row_order ?? DOTTED_CHART_DEFAULT_CONFIG.rowOrder,
+    rowOrderDirection: node.row_order_direction ?? DOTTED_CHART_DEFAULT_CONFIG.rowOrderDirection,
     maxPoints: node.max_points ?? DOTTED_CHART_DEFAULT_CONFIG.maxPoints,
   };
 }
@@ -1969,6 +2093,126 @@ export const OCPNComponent: React.FC<ComponentProps> = ({
   );
 };
 
+
+
+// OCPNFlattenedReplayComponent: Dashboard wrapper for the OCPN flattened
+// replay. Settings: the stored OCPN model and automatic loading.
+export const OCPNFlattenedReplayComponent: React.FC<ComponentProps> = ({
+  node,
+  onUpdate,
+  isEditMode = false,
+  selectedFile,
+}) => {
+  const [assetId, setAssetId] = useState<number | null>(node.ocpn_asset_id ?? null);
+  const [automaticLoading, setAutomaticLoading] = useState(node.automatic_loading ?? false);
+  const [filterEnabled, setFilterEnabled] = useState(true);
+  const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>({});
+  const [assets, setAssets] = useState<ProjectAsset[]>([]);
+  const projectId = selectedFile?.project;
+
+  useEffect(() => {
+    setAssetId(node.ocpn_asset_id ?? null);
+    setAutomaticLoading(node.automatic_loading ?? false);
+  }, [node.ocpn_asset_id, node.automatic_loading]);
+
+  // The settings form lists the project's OCPN models.
+  useEffect(() => {
+    if (!isEditMode || !projectId) return;
+    let cancelled = false;
+    listAssets({ projectId, assetType: 'OCPN' })
+      .then((list) => {
+        if (!cancelled) setAssets(Array.isArray(list) ? list : []);
+      })
+      .catch(() => {
+        if (!cancelled) setAssets([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isEditMode, projectId]);
+
+  const changeAsset = (id: number | null) => {
+    setAssetId(id);
+    onUpdate?.({ ocpn_asset_id: id } as Partial<typeof node>);
+  };
+
+  if (isEditMode) {
+    return (
+      <Card className="w-full h-full rounded-none overflow-auto">
+        <CardHeader>
+          <CardTitle>OCPN Flattened Replay Settings</CardTitle>
+          <CardDescription>
+            Replays every object type of a stored OC Petri net on the selected event log.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label>OCPN model</Label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="w-full justify-between">
+                  <span className="truncate">
+                    {assets.find((a) => a.id === assetId)?.name ??
+                      (assets.length === 0 ? 'No OCPN models in this project' : 'Select a stored OCPN model')}
+                  </span>
+                  <ChevronDown className="h-4 w-4 opacity-60" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-64">
+                <DropdownMenuLabel>OCPN models</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuRadioGroup
+                  value={assetId === null ? '' : String(assetId)}
+                  onValueChange={(value) => changeAsset(value ? Number(value) : null)}
+                >
+                  {assets.map((asset) => (
+                    <DropdownMenuRadioItem key={asset.id} value={String(asset.id)}>
+                      {asset.name}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label htmlFor={`ocpn-replay-auto-${node.id}`}>Run replay automatically</Label>
+              <p className="text-xs text-muted-foreground">
+                Start the replay as soon as the dashboard loads.
+              </p>
+            </div>
+            <Switch
+              id={`ocpn-replay-auto-${node.id}`}
+              checked={automaticLoading}
+              onCheckedChange={(checked) => {
+                setAutomaticLoading(checked);
+                onUpdate?.({ automatic_loading: checked });
+              }}
+            />
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="w-full h-full flex flex-col bg-white">
+      <WidgetFilterHeader title="OCPN Flattened Replay" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={setLocalFilterParams} />
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <OcpnFlattenedReplay
+          height="100%"
+          fileId={selectedFile?.id}
+          projectId={projectId}
+          initialAssetId={assetId}
+          onAssetChange={changeAsset}
+          autoStart={automaticLoading}
+          filterEnabled={filterEnabled}
+          localFilterParams={localFilterParams}
+        />
+      </div>
+    </div>
+  );
+};
 
 
 // SqlQueryComponent: dashboard-grid adapter around the standalone

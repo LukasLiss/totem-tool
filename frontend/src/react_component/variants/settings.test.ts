@@ -121,7 +121,10 @@ describe("summaries and persistence", () => {
   });
 
   it("converts to the dashboard-persisted shape", () => {
-    expect(toAdvancedSettings(resourceAware, "wl", 30)).toEqual({
+    expect(toAdvancedSettings(resourceAware, "wl", 30, "custom")).toEqual({
+      mode: "custom",
+      area_execution_column: "process-executions-cc-process-areas",
+      area_variant_column: "variant-cc-process-areas",
       extraction: "resource_aware",
       iso: "wl",
       timeout_s: 30,

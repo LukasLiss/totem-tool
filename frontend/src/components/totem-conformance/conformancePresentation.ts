@@ -59,19 +59,43 @@ export function getDimensionMetrics(
   return overallMetrics[dimension];
 }
 
-/** Use the weaker available direction so pair-level deviations remain visible. */
-export function getPairFitness(
+/**
+ * The value a single notation element is coloured by: the lower of its
+ * fitness and precision, so an element is flagged when either is weak.
+ */
+export function getConformanceScore(
+  metrics: { fitness: number | null; precision: number | null } | null | undefined
+): number | null {
+  const values = [metrics?.fitness, metrics?.precision].filter(
+    (value): value is number => typeof value === "number" && Number.isFinite(value)
+  );
+  return values.length > 0 ? Math.min(...values) : null;
+}
+
+export interface DirectionalElementColors {
+  temporal: string;
+  log: string;
+  event: string;
+}
+
+/**
+ * Colours of every element of one relation, per reading direction.
+ *
+ * `target` describes source → target and `source` target → source, matching
+ * the end of the line at which TotemRelationEdge draws those elements.
+ */
+export function getRelationElementColors(
   lookup: TotemConformanceLookup,
   source: string,
-  target: string,
-  dimension: ConformanceDimension
-): number | null {
+  target: string
+): { source: DirectionalElementColors; target: DirectionalElementColors } {
   const metrics = getDirectionalTypePairMetrics(lookup, source, target);
-  const values = [
-    metrics.forward?.[dimension].fitness,
-    metrics.reverse?.[dimension].fitness,
-  ].filter((value): value is number => typeof value === "number");
-  return values.length > 0 ? Math.min(...values) : null;
+  const colorsOf = (pair: typeof metrics.forward): DirectionalElementColors => ({
+    temporal: getFitnessColor(getConformanceScore(pair?.temporal)),
+    log: getFitnessColor(getConformanceScore(pair?.log_cardinality)),
+    event: getFitnessColor(getConformanceScore(pair?.event_cardinality)),
+  });
+  return { source: colorsOf(metrics.reverse), target: colorsOf(metrics.forward) };
 }
 
 export function getFitnessBand(value: number | null | undefined): FitnessBand {

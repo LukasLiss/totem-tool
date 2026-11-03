@@ -304,6 +304,15 @@ class VariantsComponent(DashboardComponent):
     # lists mean "not chosen yet".
     business_object_types = models.JSONField(default=list, blank=True)
     business_activities = models.JSONField(default=list, blank=True)
+    # "process_areas" (default: connected components per process area,
+    # stored in the two columns below) or "custom" (the settings above).
+    variants_mode = models.CharField(max_length=32, default="process_areas", blank=True)
+    area_execution_column = models.CharField(
+        max_length=64, default="process-executions-cc-process-areas", blank=True
+    )
+    area_variant_column = models.CharField(
+        max_length=64, default="variant-cc-process-areas", blank=True
+    )
 
 
 class ProcessAreaComponent(DashboardComponent):
@@ -383,6 +392,7 @@ class OCDottedChartComponent(DashboardComponent):
     color_by = models.CharField(max_length=255, default="activity")
     shape_by = models.CharField(max_length=255, default="none")
     row_order = models.CharField(max_length=32, default="first_occurrence")
+    row_order_direction = models.CharField(max_length=4, default="asc")
     max_points = models.PositiveIntegerField(default=10000)
     show_minimap = models.BooleanField(default=True)
     show_controls = models.BooleanField(default=True)
@@ -457,6 +467,17 @@ class OCPNComponent(DashboardComponent):
     automatic_loading = models.BooleanField(default=False, null=True, blank=True)
     # Discovery budget in seconds (<= 0 disables the timeout).
     timeout_s = models.FloatField(default=30.0, null=True, blank=True)
+
+
+class OCPNFlattenedReplayComponent(DashboardComponent):
+    """Dashboard widget for the OCPN flattened (per object type) token-based replay."""
+
+    # Stored OCPN asset (ProjectAsset of type OCPN) the log is replayed on;
+    # null = none selected yet. Kept as a plain id like OCDottedChart's
+    # file_id: a deleted asset simply shows the selector again.
+    ocpn_asset_id = models.PositiveIntegerField(null=True, blank=True)
+    # Run the replay as soon as the dashboard opens.
+    automatic_loading = models.BooleanField(default=False)
 
 
 class OCCNComponent(DashboardComponent):

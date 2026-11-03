@@ -22,10 +22,7 @@ import {
   createTotemConformanceLookup,
   type ConformanceDimension,
 } from "./conformanceLookup";
-import {
-  FITNESS_BANDS,
-  getDimensionDefinition,
-} from "./conformancePresentation";
+import { FITNESS_BANDS } from "./conformancePresentation";
 import {
   TotemConformanceDetails,
   type TotemConformanceSelection,
@@ -90,7 +87,6 @@ function TotemConformanceContent(props: TotemConformanceVisualizationProps) {
           <TotemConformanceCanvas
             {...props}
             lookup={lookup}
-            activeDimension={activeDimension}
             selection={selection}
             onSelect={setSelection}
           />
@@ -109,7 +105,6 @@ function TotemConformanceContent(props: TotemConformanceVisualizationProps) {
 
 interface TotemConformanceCanvasProps
   extends TotemConformanceVisualizationProps {
-  activeDimension: ConformanceDimension;
   lookup: ReturnType<typeof createTotemConformanceLookup>;
   selection: TotemConformanceSelection | null;
   onSelect: (selection: TotemConformanceSelection | null) => void;
@@ -120,15 +115,14 @@ function TotemConformanceCanvas({
   result,
   className,
   height,
-  activeDimension,
   lookup,
   selection,
   onSelect,
 }: TotemConformanceCanvasProps) {
   const { fitView } = useReactFlow();
   // React Flow owns the node positions from here on, so a box the user drags
-  // stays where they put it. Only the edges are rebuilt per dimension and
-  // selection — they carry the fitness colour and no position.
+  // stays where they put it. Only the edges are rebuilt per selection — they
+  // carry the conformance colours and no position.
   const [nodes, setNodes] = useState<TotemConformanceNodeType[]>(() =>
     createTotemFlowNodes(model)
   );
@@ -178,14 +172,12 @@ function TotemConformanceCanvas({
     () =>
       createTotemFlowEdges(model, {
         conformance: lookup,
-        dimension: activeDimension,
         selectedRelationId:
           selection?.kind === "relation" ? selection.relationId : null,
       }),
-    [activeDimension, lookup, model, selection]
+    [lookup, model, selection]
   );
   const styleHeight = typeof height === "number" ? `${height}px` : height;
-  const activeDefinition = getDimensionDefinition(activeDimension);
 
   return (
     <div
@@ -199,8 +191,11 @@ function TotemConformanceCanvas({
     >
       <div className="flex min-h-11 shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b bg-background px-3 py-2">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="text-xs font-medium text-foreground">
-            {activeDefinition.label} fitness
+          <span
+            className="text-xs font-medium text-foreground"
+            title="Each temporal marker, log cardinality and event cardinality is coloured separately for both directions, by the lower of its fitness and precision."
+          >
+            Conformance per element
           </span>
           <Button
             variant="outline"

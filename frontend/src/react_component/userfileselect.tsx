@@ -75,7 +75,7 @@ function UserFileSelect() {
     <Card className="flex-col w-full max-w-sm m-6">
       <CardHeader>
         <CardTitle>
-          Select File to work on
+          Select a file to work on
         </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col justify-end">

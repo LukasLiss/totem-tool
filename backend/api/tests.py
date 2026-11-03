@@ -3190,6 +3190,7 @@ class ProcessAreaDiscoveryApiTests(TestCase):
                 "type_relations",
                 "all_event_types",
                 "object_type_to_event_types",
+                "relation_stats",
             },
         )
         layers = response.data["layers"]
@@ -3199,6 +3200,49 @@ class ProcessAreaDiscoveryApiTests(TestCase):
             for area in layer["areas"]:
                 self.assertIn("objectTypes", area)
                 self.assertIn("eventTypes", area)
+
+    def test_relation_stats_cover_both_directions_of_every_pair(self):
+        totem = self._totem()
+        totem.h_temporal_relations = {
+            ("Item", "Order"): {"total": 4, "D": 4, "P": 4},
+            ("Order", "Item"): {"total": 4, "Di": 4, "P": 4},
+        }
+        totem.h_event_cardinalities = {
+            ("Item", "Order"): {"total": 5, "1": 5, "0...1": 5, "0...*": 5},
+        }
+        totem.h_log_cardinalities = {
+            ("Order", "Item"): {"total": 2, "1": 1, "1..*": 2, "0...*": 2},
+        }
+        url = f"/api/files/{self.event_log.pk}/discover_process_areas/"
+        with (
+            patch("api.views.event_log._with_ocel_db", return_value=nullcontext(object())),
+            patch("api.views.event_log.totemDiscovery_db", return_value=totem),
+            patch("api.views.event_log.prepare_db", return_value=self._aggregates()),
+        ):
+            response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        stats = {
+            (entry["from"], entry["to"]): entry
+            for entry in response.data["relation_stats"]
+        }
+        self.assertEqual(
+            set(stats),
+            {
+                ("Item", "Order"),
+                ("Order", "Item"),
+                ("Order", "Worker"),
+                ("Worker", "Order"),
+            },
+        )
+        item_order = stats[("Item", "Order")]
+        self.assertEqual(item_order["counts"]["temporal"], {"total": 4, "D": 4, "P": 4})
+        self.assertEqual(item_order["strict"]["temporal"], "D")
+        self.assertEqual(item_order["strict"]["event_cardinality"], "1")
+        self.assertEqual(stats[("Order", "Item")]["strict"]["temporal"], "Di")
+        # Only half of the orders have exactly one item, so tau = 1 needs 1..*.
+        self.assertEqual(stats[("Order", "Item")]["strict"]["log_cardinality"], "1..*")
+        self.assertEqual(stats[("Order", "Worker")]["counts"]["temporal"], {})
 
     def test_resources_land_on_the_higher_layers(self):
         # alpha weights the resource force. Turning it up is exactly how a user
@@ -6201,6 +6245,7 @@ class HostingLimitsTests(TestCase):
         response = self._upload(1024 * 1024 + 1)
         self.assertEqual(response.status_code, 413)
         self.assertIn("1 MB", response.data["detail"])
+        self.assertIn("totem-tool.com", response.data["detail"])
         self.assertFalse(Project.objects.filter(users=self.user).exists())
 
     @override_settings(MAX_UPLOAD_BYTES=1024 * 1024)
@@ -6213,6 +6258,7 @@ class HostingLimitsTests(TestCase):
         response = self._upload()
         self.assertEqual(response.status_code, 403)
         self.assertIn("limit of 1 project.", response.data["detail"])
+        self.assertIn("totem-tool.com", response.data["detail"])
         self.assertEqual(Project.objects.filter(users=self.user).count(), 1)
 
     @override_settings(MAX_PROJECTS_PER_USER=1)
