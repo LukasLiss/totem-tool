@@ -6141,6 +6141,7 @@ class HostingLimitsTests(TestCase):
         response = self._upload(1024 * 1024 + 1)
         self.assertEqual(response.status_code, 413)
         self.assertIn("1 MB", response.data["detail"])
+        self.assertIn("totem-tool.com", response.data["detail"])
         self.assertFalse(Project.objects.filter(users=self.user).exists())
 
     @override_settings(MAX_UPLOAD_BYTES=1024 * 1024)
@@ -6153,6 +6154,7 @@ class HostingLimitsTests(TestCase):
         response = self._upload()
         self.assertEqual(response.status_code, 403)
         self.assertIn("limit of 1 project.", response.data["detail"])
+        self.assertIn("totem-tool.com", response.data["detail"])
         self.assertEqual(Project.objects.filter(users=self.user).count(), 1)
 
     @override_settings(MAX_PROJECTS_PER_USER=1)

@@ -27,6 +27,8 @@ import { isCancelledError, useComputationStore } from "@/store/computationStore"
 import { prepareLargeLogFilter } from "@/store/applyGlobalFilter";
 import { ProgressBar } from "@/components/ComputationPanel";
 
+const UNLIMITED_VERSION_HINT =
+  "At totem-tool.com, you can download the local or self-hosted version that has no limitations.";
 
 export function FileUploadValidator() {
     const { setSelectedFile } = useContext(SelectedFileContext);
@@ -98,13 +100,13 @@ export function FileUploadValidator() {
       const { max_upload_bytes: maxBytes, max_projects_per_user: maxProjects } = limits;
       if (maxProjects !== null && limits.project_count >= maxProjects) {
         toast.error("Project limit reached", {
-          description: `You can have at most ${maxProjects} project${maxProjects === 1 ? "" : "s"}. Delete a project to add a new one.`,
+          description: `You can have at most ${maxProjects} project${maxProjects === 1 ? "" : "s"}. Delete a project to add a new one. ${UNLIMITED_VERSION_HINT}`,
         });
         return false;
       }
       if (maxBytes !== null && file.size > maxBytes) {
         toast.error("File too large", {
-          description: `Files can be at most ${Math.floor(maxBytes / (1024 * 1024))} MB.`,
+          description: `Files can be at most ${Math.floor(maxBytes / (1024 * 1024))} MB. ${UNLIMITED_VERSION_HINT}`,
         });
         return false;
       }

@@ -17,6 +17,11 @@ from .models import Project
 # the limit. Requests share one process (GUNICORN_WORKERS stays 1).
 _PROJECT_CREATE_LOCK = threading.Lock()
 
+UNLIMITED_VERSION_HINT = (
+    "At totem-tool.com, you can download the local or self-hosted version "
+    "that has no limitations."
+)
+
 
 class UploadTooLarge(APIException):
     status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
@@ -32,7 +37,8 @@ def _project_limit_message() -> str:
     limit = settings.MAX_PROJECTS_PER_USER
     return (
         f"You have reached the limit of {limit} "
-        f"project{'' if limit == 1 else 's'}. Delete a project to add a new one."
+        f"project{'' if limit == 1 else 's'}. Delete a project to add a new one. "
+        f"{UNLIMITED_VERSION_HINT}"
     )
 
 
@@ -72,7 +78,7 @@ class MaxSizeUploadHandler(FileUploadHandler):
         if limit is not None and self._received > limit:
             raise UploadTooLarge(
                 f"This file is larger than the upload limit of "
-                f"{limit // (1024 * 1024)} MB."
+                f"{limit // (1024 * 1024)} MB. {UNLIMITED_VERSION_HINT}"
             )
         return raw_data
 
