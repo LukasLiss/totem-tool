@@ -44,6 +44,25 @@ export type TotemRelationEdgeData = {
   targetToSource: TotemDirectionCardinalities;
   /** Overrides the line colour, e.g. for conformance fitness bands. */
   strokeColor?: string;
+  /**
+   * Overrides the colour of single notation elements, per end of the line.
+   * `target` holds the elements drawn at the target box, which describe the
+   * source → target direction (log and event cardinality of that direction,
+   * and the target half of the line with its temporal marker); `source`
+   * holds the mirror image. Conformance checking uses it to point at exactly
+   * the element that deviates.
+   */
+  elementColors?: {
+    source: TotemEdgeEndColors;
+    target: TotemEdgeEndColors;
+  };
+};
+
+/** Colours of the notation elements drawn at one end of a relation. */
+export type TotemEdgeEndColors = {
+  temporal?: string;
+  log?: string;
+  event?: string;
 };
 
 export type TotemRelationEdgeType = Edge<TotemRelationEdgeData>;
@@ -162,9 +181,23 @@ const TotemRelationEdge = memo(function TotemRelationEdge({
 
   const { temporal, sourceToTarget, targetToSource } = data;
   const isParallel = temporal === 'P';
-  const color = selected
-    ? TOTEM_EDGE_SELECTED_COLOR
-    : data.strokeColor ?? (temporal ? TOTEM_EDGE_COLOR : TOTEM_EDGE_MUTED_COLOR);
+  const baseColor = data.strokeColor ?? (temporal ? TOTEM_EDGE_COLOR : TOTEM_EDGE_MUTED_COLOR);
+  const elementColors = data.elementColors;
+  // With per-element colours a selection must not paint over the very
+  // deviations it was clicked for, so it is shown as a halo instead.
+  const pick = (override: string | undefined) =>
+    elementColors
+      ? override ?? baseColor
+      : selected
+        ? TOTEM_EDGE_SELECTED_COLOR
+        : baseColor;
+  const sourceTemporalColor = pick(elementColors?.source.temporal);
+  const targetTemporalColor = pick(elementColors?.target.temporal);
+  const sourceLogColor = pick(elementColors?.source.log);
+  const targetLogColor = pick(elementColors?.target.log);
+  const sourceEventColor = pick(elementColors?.source.event);
+  const targetEventColor = pick(elementColors?.target.event);
+  const ovalColor = pick(undefined);
 
   // Parallel relations leave room for a second bar at each end.
   const barGap = Math.min(TOTEM_BAR_GAP, length * 0.25);
@@ -173,6 +206,9 @@ const TotemRelationEdge = memo(function TotemRelationEdge({
   const lineStart = isParallel ? innerStart : start;
   const lineEnd = isParallel ? innerEnd : end;
   const path = `M ${lineStart.x},${lineStart.y} L ${lineEnd.x},${lineEnd.y}`;
+  const midpoint = lerp(start, end, 0.5);
+  const targetHalfPath = `M ${midpoint.x},${midpoint.y} L ${lineEnd.x},${lineEnd.y}`;
+  const lineWidth = isParallel ? TOTEM_PARALLEL_STROKE_WIDTH : TOTEM_EDGE_STROKE_WIDTH;
 
   const sourceLabel = formatTotemCardinality(targetToSource.log);
   const targetLabel = formatTotemCardinality(sourceToTarget.log);
@@ -187,12 +223,21 @@ const TotemRelationEdge = memo(function TotemRelationEdge({
   const bubbleAngle = flipped ? angle + 180 : angle;
   // Each event cardinality stays on the side of the type it counts, so the two
   // swap places when the text is flipped to stay readable.
-  const bubbleLabel = flipped
-    ? `${bubblePart(sourceToTarget.event)}|${bubblePart(targetToSource.event)}`
-    : `${bubblePart(targetToSource.event)}|${bubblePart(sourceToTarget.event)}`;
+  const sourceEventText = bubblePart(targetToSource.event);
+  const targetEventText = bubblePart(sourceToTarget.event);
+  const [leftText, rightText] = flipped
+    ? [targetEventText, sourceEventText]
+    : [sourceEventText, targetEventText];
+  const [leftColor, rightColor] = flipped
+    ? [targetEventColor, sourceEventColor]
+    : [sourceEventColor, targetEventColor];
+  const bubbleLabel = `${leftText}|${rightText}`;
   const bubbleWidth = totemBubbleWidth(bubbleLabel);
+  const bubbleRx = bubbleWidth / 2;
+  const ovalTop = `${bubblePoint.x},${bubblePoint.y - TOTEM_BUBBLE_RY}`;
+  const ovalBottom = `${bubblePoint.x},${bubblePoint.y + TOTEM_BUBBLE_RY}`;
 
-  const bar = (point: Point, key: string) => (
+  const bar = (point: Point, key: string, color: string) => (
     <line
       key={key}
       x1={point.x + normalX * TOTEM_BAR_HALF_LENGTH}
@@ -205,7 +250,7 @@ const TotemRelationEdge = memo(function TotemRelationEdge({
     />
   );
 
-  const square = (point: Point) => (
+  const square = (point: Point, color: string) => (
     <rect
       x={point.x - TOTEM_SQUARE_SIZE / 2}
       y={point.y - TOTEM_SQUARE_SIZE / 2}
@@ -215,7 +260,7 @@ const TotemRelationEdge = memo(function TotemRelationEdge({
     />
   );
 
-  const label = (point: Point, text: string, key: string) => (
+  const label = (point: Point, text: string, key: string, color: string) => (
     <text
       key={key}
       x={point.x + normalX * TOTEM_LABEL_OFFSET}
@@ -234,40 +279,76 @@ const TotemRelationEdge = memo(function TotemRelationEdge({
 
   return (
     <>
+      {elementColors && selected && (
+        <path
+          d={path}
+          fill="none"
+          stroke={TOTEM_EDGE_SELECTED_COLOR}
+          strokeOpacity={0.3}
+          strokeWidth={lineWidth + 8}
+          strokeLinecap="round"
+          style={{ pointerEvents: 'none' }}
+        />
+      )}
       <BaseEdge
         id={id}
         path={path}
         interactionWidth={16}
-        style={{
-          stroke: color,
-          strokeWidth: isParallel
-            ? TOTEM_PARALLEL_STROKE_WIDTH
-            : TOTEM_EDGE_STROKE_WIDTH,
-        }}
+        style={{ stroke: sourceTemporalColor, strokeWidth: lineWidth }}
       />
       <g style={{ pointerEvents: 'none' }}>
-        {temporal === 'D' && square(end)}
-        {temporal === 'Di' && square(start)}
-        {temporal === 'I' && <path d={arrowPath(start, end, TOTEM_ARROW_SIZE)} fill={color} />}
-        {temporal === 'Ii' && <path d={arrowPath(end, start, TOTEM_ARROW_SIZE)} fill={color} />}
+        {targetTemporalColor !== sourceTemporalColor && (
+          <path
+            data-testid="totem-edge-target-half"
+            d={targetHalfPath}
+            fill="none"
+            stroke={targetTemporalColor}
+            strokeWidth={lineWidth}
+          />
+        )}
+        {temporal === 'D' && square(end, targetTemporalColor)}
+        {temporal === 'Di' && square(start, sourceTemporalColor)}
+        {temporal === 'I' && (
+          <path d={arrowPath(start, end, TOTEM_ARROW_SIZE)} fill={targetTemporalColor} />
+        )}
+        {temporal === 'Ii' && (
+          <path d={arrowPath(end, start, TOTEM_ARROW_SIZE)} fill={sourceTemporalColor} />
+        )}
         {isParallel && [
-          bar(start, 'bar-start-outer'),
-          bar(innerStart, 'bar-start-inner'),
-          bar(innerEnd, 'bar-end-inner'),
-          bar(end, 'bar-end-outer'),
+          bar(start, 'bar-start-outer', sourceTemporalColor),
+          bar(innerStart, 'bar-start-inner', sourceTemporalColor),
+          bar(innerEnd, 'bar-end-inner', targetTemporalColor),
+          bar(end, 'bar-end-outer', targetTemporalColor),
         ]}
-        {sourceLabel && label(sourceLabelPoint, sourceLabel, 'log-source')}
-        {targetLabel && label(targetLabelPoint, targetLabel, 'log-target')}
+        {sourceLabel && label(sourceLabelPoint, sourceLabel, 'log-source', sourceLogColor)}
+        {targetLabel && label(targetLabelPoint, targetLabel, 'log-target', targetLogColor)}
         <g transform={`rotate(${bubbleAngle}, ${bubblePoint.x}, ${bubblePoint.y})`}>
           <ellipse
             cx={bubblePoint.x}
             cy={bubblePoint.y}
-            rx={bubbleWidth / 2}
+            rx={bubbleRx}
             ry={TOTEM_BUBBLE_RY}
             fill="#FFFFFF"
-            stroke={color}
+            stroke={leftColor === rightColor ? leftColor : 'none'}
             strokeWidth={1.2}
           />
+          {leftColor !== rightColor && (
+            // Each half of the oval takes the colour of the cardinality inside it.
+            <>
+              <path
+                d={`M ${ovalTop} A ${bubbleRx},${TOTEM_BUBBLE_RY} 0 0 0 ${ovalBottom}`}
+                fill="none"
+                stroke={leftColor}
+                strokeWidth={1.2}
+              />
+              <path
+                d={`M ${ovalTop} A ${bubbleRx},${TOTEM_BUBBLE_RY} 0 0 1 ${ovalBottom}`}
+                fill="none"
+                stroke={rightColor}
+                strokeWidth={1.2}
+              />
+            </>
+          )}
           <text
             x={bubblePoint.x}
             y={bubblePoint.y}
@@ -276,10 +357,12 @@ const TotemRelationEdge = memo(function TotemRelationEdge({
             fontSize={TOTEM_BUBBLE_FONT_SIZE}
             fontFamily={TOTEM_FONT_FAMILY}
             fontWeight="600"
-            fill={color}
+            fill={ovalColor}
             style={{ userSelect: 'none' }}
           >
-            {bubbleLabel}
+            <tspan fill={leftColor}>{leftText}</tspan>
+            <tspan fill={ovalColor}>|</tspan>
+            <tspan fill={rightColor}>{rightText}</tspan>
           </text>
         </g>
       </g>
