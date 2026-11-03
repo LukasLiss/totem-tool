@@ -22,6 +22,7 @@ import type { OcdfgGraph, TraceVariantsMap } from './NewOCDFGVisualizer';
 import { HoverTooltip, type TooltipRow } from './MetricTooltip';
 import { useProcessAreaStore } from '../store/processAreaStore';
 import { ProcessAreaFilterAction } from './process-area/ProcessAreaFilterAction';
+import { RelationLegend } from './process-area/RelationLegend';
 
 type MlpaLayerArea = {
   objectTypes: string[];
@@ -5383,6 +5384,9 @@ function TotemVisualizer({
           userSelect: 'none',
         }}
       >
+        {/* Bottom-left legend of the relation arcs */}
+        {eventLogId && <RelationLegend />}
+
         {/* Floating HUD Controls */}
         <div
           data-totem-control
