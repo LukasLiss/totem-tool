@@ -308,6 +308,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           timeout_s: node.timeout_s ?? 10.0,
           business_object_types: node.business_object_types ?? [],
           business_activities: node.business_activities ?? [],
+          variants_mode: node.variants_mode ?? 'process_areas',
+          area_execution_column: node.area_execution_column ?? 'process-executions-cc-process-areas',
+          area_variant_column: node.area_variant_column ?? 'variant-cc-process-areas',
         };
       } else if (component_name === "LogStatisticsComponent") {
         props = {
@@ -580,6 +583,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             timeout_s: item.timeout_s,
             business_object_types: item.business_object_types,
             business_activities: item.business_activities,
+            variants_mode: item.variants_mode,
+            area_execution_column: item.area_execution_column,
+            area_variant_column: item.area_variant_column,
             // LogStatisticsComponent properties
             show_num_events: item.show_num_events,
             show_num_activities: item.show_num_activities,
@@ -690,6 +696,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node.timeout_s = item.timeout_s;     // For VariantsComponent advanced settings
               node.business_object_types = item.business_object_types; // VariantsComponent resource-aware
               node.business_activities = item.business_activities;     // VariantsComponent resource-aware
+              node.variants_mode = item.variants_mode;                 // VariantsComponent method
+              node.area_execution_column = item.area_execution_column; // VariantsComponent process-area mode
+              node.area_variant_column = item.area_variant_column;     // VariantsComponent process-area mode
               // LogStatisticsComponent properties
               node.show_num_events = item.show_num_events;
               node.show_num_activities = item.show_num_activities;

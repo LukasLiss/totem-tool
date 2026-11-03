@@ -35,6 +35,9 @@ declare module 'gridstack' {
     timeout_s?: number;
     business_object_types?: string[];
     business_activities?: string[];
+    variants_mode?: 'process_areas' | 'custom';
+    area_execution_column?: string;
+    area_variant_column?: string;
     show_num_events?: boolean;
     show_num_activities?: boolean;
     show_num_objects?: boolean;

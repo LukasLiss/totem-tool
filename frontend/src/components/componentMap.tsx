@@ -22,10 +22,13 @@ import {
 } from '@/api/imageAssetsApi';
 import VariantsExplorer from '@/react_component/VariantsExplorer';
 import {
+  DEFAULT_PROCESS_AREA_COLUMNS,
+  DEFAULT_VARIANTS_MODE,
   EXTRACTION_OPTIONS,
   ISO_OPTIONS,
   type Extraction,
   type IsoStrategy,
+  type VariantsMode,
 } from '@/react_component/variants/types';
 import { MultiSelectPopover } from '@/react_component/variants/MultiSelectPopover';
 import { fetchActivities, fetchObjectTypes } from '@/react_component/variants/variantsApi';
@@ -158,6 +161,9 @@ export interface ComponentProps {
     automatic_loading?: boolean;
     leading_object_type?: string;
     // Persisted advanced settings for the Variants Explorer
+    variants_mode?: VariantsMode;
+    area_execution_column?: string;
+    area_variant_column?: string;
     extraction?: Extraction;
     iso?: IsoStrategy;
     timeout_s?: number;
@@ -774,6 +780,16 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
   // Local state for form values
   const [automaticLoading, setAutomaticLoading] = useState(node.automatic_loading ?? false);
   const [leadingType, setLeadingType] = useState(node.leading_object_type ?? '');
+  const [variantsMode, setVariantsMode] = useState<VariantsMode>(
+    node.variants_mode ?? DEFAULT_VARIANTS_MODE
+  );
+  const [areaExecutionColumn, setAreaExecutionColumn] = useState(
+    node.area_execution_column ?? DEFAULT_PROCESS_AREA_COLUMNS.executionColumn
+  );
+  const [areaVariantColumn, setAreaVariantColumn] = useState(
+    node.area_variant_column ?? DEFAULT_PROCESS_AREA_COLUMNS.variantColumn
+  );
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [extraction, setExtraction] = useState<Extraction>(
     (node.extraction as Extraction) ?? 'leading_1hop'
   );
@@ -797,6 +813,9 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
   useEffect(() => {
     setAutomaticLoading(node.automatic_loading ?? false);
     setLeadingType(node.leading_object_type ?? '');
+    setVariantsMode(node.variants_mode ?? DEFAULT_VARIANTS_MODE);
+    setAreaExecutionColumn(node.area_execution_column ?? DEFAULT_PROCESS_AREA_COLUMNS.executionColumn);
+    setAreaVariantColumn(node.area_variant_column ?? DEFAULT_PROCESS_AREA_COLUMNS.variantColumn);
     setExtraction((node.extraction as Extraction) ?? 'leading_1hop');
     setIso((node.iso as IsoStrategy) ?? 'wl+vf2');
     setTimeoutS(node.timeout_s ?? 10);
@@ -805,6 +824,9 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
   }, [
     node.automatic_loading,
     node.leading_object_type,
+    node.variants_mode,
+    node.area_execution_column,
+    node.area_variant_column,
     node.extraction,
     node.iso,
     node.timeout_s,
@@ -843,6 +865,12 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
   const handleLeadingTypeChange = (value: string) => {
     setLeadingType(value);
     onUpdate?.({ leading_object_type: value });
+  };
+
+  const handleVariantsModeChange = (value: string) => {
+    const v = value as VariantsMode;
+    setVariantsMode(v);
+    onUpdate?.({ variants_mode: v });
   };
 
   const handleExtractionChange = (value: string) => {
@@ -897,6 +925,78 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
             />
           </div>
 
+          {variantsMode === 'process_areas' && (
+            <p className="text-sm text-muted-foreground">
+              Computes the connected components of every process area and shows one
+              variant list per area. Results are stored in the event log columns
+              "{areaExecutionColumn}" and "{areaVariantColumn}".
+            </p>
+          )}
+
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setShowAdvanced((open) => !open)}
+            aria-expanded={showAdvanced}
+          >
+            {showAdvanced ? 'Hide advanced options' : 'Advanced options'}
+          </Button>
+
+          {showAdvanced && (
+          <>
+          <div className="space-y-2">
+            <Label>Method</Label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="w-full justify-between font-normal">
+                  <span className="truncate">
+                    {variantsMode === 'process_areas'
+                      ? 'Connected components per process area'
+                      : 'Custom extraction'}
+                  </span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-[320px]">
+                <DropdownMenuRadioGroup value={variantsMode} onValueChange={handleVariantsModeChange}>
+                  <DropdownMenuRadioItem value="process_areas">
+                    Connected components per process area
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="custom">Custom extraction</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+
+          {variantsMode === 'process_areas' && (
+            <>
+              <div className="space-y-2">
+                <Label htmlFor="variants-area-execution-column">Execution column</Label>
+                <Input
+                  id="variants-area-execution-column"
+                  value={areaExecutionColumn}
+                  onChange={(e) => {
+                    setAreaExecutionColumn(e.target.value);
+                    onUpdate?.({ area_execution_column: e.target.value });
+                  }}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="variants-area-variant-column">Variant column</Label>
+                <Input
+                  id="variants-area-variant-column"
+                  value={areaVariantColumn}
+                  onChange={(e) => {
+                    setAreaVariantColumn(e.target.value);
+                    onUpdate?.({ area_variant_column: e.target.value });
+                  }}
+                />
+              </div>
+            </>
+          )}
+
+          {variantsMode === 'custom' && (
+          <>
           {/* Leading Object Type Dropdown */}
           <div className="space-y-2">
             <Label>Leading object type</Label>
@@ -1002,6 +1102,9 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
             </>
           )}
 
+          </>
+          )}
+
           {/* Isomorphism strategy */}
           <div className="space-y-2">
             <Label>Isomorphism strategy</Label>
@@ -1053,12 +1156,15 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
               against runaway runs on hard combinations.
             </p>
           </div>
+          </>
+          )}
         </CardContent>
       </Card>
     );
   }
 
   // VIEW MODE: Render VariantsExplorer with stored settings
+  const areaColumns = { executionColumn: areaExecutionColumn, variantColumn: areaVariantColumn };
   return (
     <Card className="w-full h-full rounded-none overflow-auto">
       <CardContent className="p-0 h-full">
@@ -1067,6 +1173,8 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
           embedded={true}
           automaticLoading={automaticLoading}
           defaultLeadingType={leadingType || undefined}
+          defaultMode={variantsMode}
+          defaultProcessAreaColumns={areaColumns}
           defaultExtraction={extraction}
           defaultIso={iso}
           defaultTimeoutS={timeoutS}
@@ -1081,7 +1189,13 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
             setLeadingType(s.leading_type);
             setBusinessObjectTypes(s.business_object_types);
             setBusinessActivities(s.business_activities);
+            setVariantsMode(s.mode);
+            setAreaExecutionColumn(s.area_execution_column);
+            setAreaVariantColumn(s.area_variant_column);
             onUpdate?.({
+              variants_mode: s.mode,
+              area_execution_column: s.area_execution_column,
+              area_variant_column: s.area_variant_column,
               extraction: s.extraction,
               iso: s.iso,
               timeout_s: s.timeout_s,

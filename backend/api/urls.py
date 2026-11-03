@@ -21,6 +21,7 @@ urlpatterns = [
     # Registered before the router so the explicit paths win over `files/<pk>/`.
     path("files/<int:pk>/event_columns/", views_process_executions.event_columns, name="event-columns"),
     path("files/<int:pk>/process_executions/", views_process_executions.process_executions, name="process-executions"),
+    path("files/<int:pk>/process_area_variants/", views_process_executions.process_area_variants, name="process-area-variants"),
     path("", include(router.urls)),
     path("variants/", variants, name="variants"),
     path("handover/", ochandover, name="handover"),

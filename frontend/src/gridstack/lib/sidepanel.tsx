@@ -57,7 +57,7 @@ const SidePanel: React.FC = () => {
         helper: "clone",
         appendTo: "body",
       },
-      [{ h: 4, w: 6, content: "Variants Explorer", component_name: "VariantsComponent", automatic_loading: false, leading_object_type: '', business_object_types: [], business_activities: [], order: 0 }]
+      [{ h: 4, w: 6, content: "Variants Explorer", component_name: "VariantsComponent", automatic_loading: false, leading_object_type: '', business_object_types: [], business_activities: [], variants_mode: 'process_areas', order: 0 }]
     );
 
     GridStack.setupDragIn(
