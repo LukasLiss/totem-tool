@@ -26,7 +26,7 @@ export const Logout = () => {
         localStorage.clear();
         delete axios.defaults.headers.common["Authorization"];
         toast.success("Logged out");
-        navigate("/title", { replace: true });
+        navigate("/login", { replace: true });
       }
     };
 
