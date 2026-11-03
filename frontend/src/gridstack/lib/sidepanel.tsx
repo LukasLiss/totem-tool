@@ -115,6 +115,7 @@ const SidePanel: React.FC = () => {
         color_by: "activity",
         shape_by: "none",
         row_order: "first_occurrence",
+        row_order_direction: "asc",
         max_points: 10000,
         order: 0
       }]

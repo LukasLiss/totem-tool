@@ -383,6 +383,7 @@ class OCDottedChartComponent(DashboardComponent):
     color_by = models.CharField(max_length=255, default="activity")
     shape_by = models.CharField(max_length=255, default="none")
     row_order = models.CharField(max_length=32, default="first_occurrence")
+    row_order_direction = models.CharField(max_length=4, default="asc")
     max_points = models.PositiveIntegerField(default=10000)
     show_minimap = models.BooleanField(default=True)
     show_controls = models.BooleanField(default=True)
