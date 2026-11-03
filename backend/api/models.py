@@ -460,6 +460,17 @@ class OCPNComponent(DashboardComponent):
     timeout_s = models.FloatField(default=30.0, null=True, blank=True)
 
 
+class OCPNFlattenedReplayComponent(DashboardComponent):
+    """Dashboard widget for the OCPN flattened (per object type) token-based replay."""
+
+    # Stored OCPN asset (ProjectAsset of type OCPN) the log is replayed on;
+    # null = none selected yet. Kept as a plain id like OCDottedChart's
+    # file_id: a deleted asset simply shows the selector again.
+    ocpn_asset_id = models.PositiveIntegerField(null=True, blank=True)
+    # Run the replay as soon as the dashboard opens.
+    automatic_loading = models.BooleanField(default=False)
+
+
 class OCCNComponent(DashboardComponent):
     relative_occurrence_threshold = models.FloatField(
         default=0.0,

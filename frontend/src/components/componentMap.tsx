@@ -54,6 +54,8 @@ import TotemMiner from '@/react_component/TotemMiner';
 import NewOCDFGVisualizer from '@/react_component/NewOCDFGVisualizer';
 import NewOCDFGVariantsVisualizer from '@/react_component/NewOCDFGVariantsVisualizer';
 import OCPNVisualizer from '@/react_component/OCPNVisualizer';
+import OcpnFlattenedReplay from '@/components/ocpn-flattened-replay/OcpnFlattenedReplay';
+import { listAssets, type ProjectAsset } from '@/api/assetsApi';
 import { toast } from "sonner";
 import OCCNVisualizer from '@/react_component/OCCNVisualizer';
 import { Switch } from '@/components/ui/switch';
@@ -212,6 +214,8 @@ export interface ComponentProps {
     n_clusters?: number;
     min_cluster_size?: number;
     distance_metric?: 'euclidean' | 'hellinger';
+    // OCPNFlattenedReplayComponent properties
+    ocpn_asset_id?: number | null;
     // SqlQueryComponent properties
     name?: string;
     query?: string;
@@ -1975,6 +1979,126 @@ export const OCPNComponent: React.FC<ComponentProps> = ({
   );
 };
 
+
+
+// OCPNFlattenedReplayComponent: Dashboard wrapper for the OCPN flattened
+// replay. Settings: the stored OCPN model and automatic loading.
+export const OCPNFlattenedReplayComponent: React.FC<ComponentProps> = ({
+  node,
+  onUpdate,
+  isEditMode = false,
+  selectedFile,
+}) => {
+  const [assetId, setAssetId] = useState<number | null>(node.ocpn_asset_id ?? null);
+  const [automaticLoading, setAutomaticLoading] = useState(node.automatic_loading ?? false);
+  const [filterEnabled, setFilterEnabled] = useState(true);
+  const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>({});
+  const [assets, setAssets] = useState<ProjectAsset[]>([]);
+  const projectId = selectedFile?.project;
+
+  useEffect(() => {
+    setAssetId(node.ocpn_asset_id ?? null);
+    setAutomaticLoading(node.automatic_loading ?? false);
+  }, [node.ocpn_asset_id, node.automatic_loading]);
+
+  // The settings form lists the project's OCPN models.
+  useEffect(() => {
+    if (!isEditMode || !projectId) return;
+    let cancelled = false;
+    listAssets({ projectId, assetType: 'OCPN' })
+      .then((list) => {
+        if (!cancelled) setAssets(Array.isArray(list) ? list : []);
+      })
+      .catch(() => {
+        if (!cancelled) setAssets([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isEditMode, projectId]);
+
+  const changeAsset = (id: number | null) => {
+    setAssetId(id);
+    onUpdate?.({ ocpn_asset_id: id } as Partial<typeof node>);
+  };
+
+  if (isEditMode) {
+    return (
+      <Card className="w-full h-full rounded-none overflow-auto">
+        <CardHeader>
+          <CardTitle>OCPN Flattened Replay Settings</CardTitle>
+          <CardDescription>
+            Replays every object type of a stored OC Petri net on the selected event log.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label>OCPN model</Label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="w-full justify-between">
+                  <span className="truncate">
+                    {assets.find((a) => a.id === assetId)?.name ??
+                      (assets.length === 0 ? 'No OCPN models in this project' : 'Select a stored OCPN model')}
+                  </span>
+                  <ChevronDown className="h-4 w-4 opacity-60" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-64">
+                <DropdownMenuLabel>OCPN models</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuRadioGroup
+                  value={assetId === null ? '' : String(assetId)}
+                  onValueChange={(value) => changeAsset(value ? Number(value) : null)}
+                >
+                  {assets.map((asset) => (
+                    <DropdownMenuRadioItem key={asset.id} value={String(asset.id)}>
+                      {asset.name}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label htmlFor={`ocpn-replay-auto-${node.id}`}>Run replay automatically</Label>
+              <p className="text-xs text-muted-foreground">
+                Start the replay as soon as the dashboard loads.
+              </p>
+            </div>
+            <Switch
+              id={`ocpn-replay-auto-${node.id}`}
+              checked={automaticLoading}
+              onCheckedChange={(checked) => {
+                setAutomaticLoading(checked);
+                onUpdate?.({ automatic_loading: checked });
+              }}
+            />
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="w-full h-full flex flex-col bg-white">
+      <WidgetFilterHeader title="OCPN Flattened Replay" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={setLocalFilterParams} />
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <OcpnFlattenedReplay
+          height="100%"
+          fileId={selectedFile?.id}
+          projectId={projectId}
+          initialAssetId={assetId}
+          onAssetChange={changeAsset}
+          autoStart={automaticLoading}
+          filterEnabled={filterEnabled}
+          localFilterParams={localFilterParams}
+        />
+      </div>
+    </div>
+  );
+};
 
 
 // SqlQueryComponent: dashboard-grid adapter around the standalone

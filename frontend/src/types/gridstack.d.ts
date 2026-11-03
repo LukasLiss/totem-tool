@@ -59,6 +59,8 @@ declare module 'gridstack' {
     image_asset_url?: string | null;
     image_fit?: string;
     image_alignment?: string;
+    // OCPNFlattenedReplayComponent
+    ocpn_asset_id?: number | null;
     // OCCNComponent
     relative_occurrence_threshold?: number;
     object_types?: string;

@@ -12,6 +12,7 @@ import {
   OcdfgArcWeightTile,
   OcdfgVariantsTile,
   OcpnTile,
+  OcpnReplayTile,
   PieChartTile,
   ProcessAreaTile,
   ResourceProfilingTile,
@@ -188,6 +189,23 @@ const SidePanel: React.FC = () => {
         component_name: "OCPNComponent",
         automatic_loading: false,
         timeout_s: 30,
+        order: 0
+      }]
+    );
+
+    GridStack.setupDragIn(
+      ".sidepanel .ocpn-replay-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 7,
+        w: 8,
+        content: "OCPN Flattened Replay",
+        component_name: "OCPNFlattenedReplayComponent",
+        ocpn_asset_id: null,
+        automatic_loading: false,
         order: 0
       }]
     );
@@ -428,6 +446,11 @@ const SidePanel: React.FC = () => {
       <div className={`${TILE_CLASS} ocpn-component`}>
         <OcpnTile />
         <div>OC Petri Net</div>
+      </div>
+
+      <div className={`${TILE_CLASS} ocpn-replay-component`}>
+        <OcpnReplayTile />
+        <div>OCPN Flattened Replay</div>
       </div>
 
       <div className={`${TILE_CLASS} sql-query-component`}>

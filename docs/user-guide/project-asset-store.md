@@ -16,7 +16,7 @@ playout. Each of these components reads from and writes to the same store.
 |---|---|---|---|
 | **TOTeM model** | Model Assets | [TOTeM Miner](totem-discovery.md), [TOTeM editor](editors.md), upload | [TOTeM conformance](totem-conformance.md), TOTeM editor |
 | **Object-Centric Causal Net (OCCN)** | Model Assets | [OCCN discovery](occn-discovery.md), [OCCN editor](editors.md), upload | [OCCN conformance](occn-conformance.md), OCCN editor, [Playout](playout.md) |
-| **Object-Centric Petri Net (OCPN)** | Model Assets | [OC Petri Net discovery](oc-petri-net-discovery.md), [OCPN editor](editors.md), upload | OCPN editor, [Playout](playout.md) |
+| **Object-Centric Petri Net (OCPN)** | Model Assets | [OC Petri Net discovery](oc-petri-net-discovery.md), [OCPN editor](editors.md), upload | OCPN editor, [OCPN flattened replay](ocpn-flattened-replay.md), [Playout](playout.md) |
 | **Object-Centric DFG (OC-DFG)** | Model Assets | [OC-DFG discovery](oc-dfg-discovery.md), [OC-DFG editor](editors.md), upload | OC-DFG editor |
 | **SQL query** | SQL Queries | [SQL editor](sql-queries.md), example library, *New query* | SQL editor, other queries, [dashboard](dashboards.md) widgets |
 | **Image** | Images | upload (PNG, JPEG, SVG) | the *Image* widget in [dashboards](dashboards.md) |

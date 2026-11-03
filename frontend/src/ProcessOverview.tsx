@@ -10,6 +10,7 @@ import { DevDashboard } from "./components/dev_dashboard";
 import { AnalysisView } from "./components/AnalysisView";
 import { OccnConformanceView } from "./components/occn-conformance/OccnConformanceView";
 import { TotemConformanceView } from "./components/totem-conformance/TotemConformanceView";
+import { OcpnFlattenedReplayView } from "./components/ocpn-flattened-replay/OcpnFlattenedReplayView";
 import { ModelAssetsView } from "./components/ModelAssetsView";
 import { ImageAssetsView } from "./components/ImageAssetsView";
 import { QueryAssetsView } from "./components/QueryAssetsView";
@@ -36,9 +37,13 @@ export function ProcessOverview() {
       case 'queryAssets':
         return <QueryAssetsView initialAssetId={viewMode.openAssetId} />;
       case 'conformance':
-        return viewMode.component === 'totem'
-          ? <TotemConformanceView initialAssetId={viewMode.assetId} />
-          : <OccnConformanceView initialAssetId={viewMode.assetId} />;
+        if (viewMode.component === 'totem') {
+          return <TotemConformanceView initialAssetId={viewMode.assetId} />;
+        }
+        if (viewMode.component === 'ocpnReplay') {
+          return <OcpnFlattenedReplayView initialAssetId={viewMode.assetId} />;
+        }
+        return <OccnConformanceView initialAssetId={viewMode.assetId} />;
       case 'editor':
         return <EditorView />;
       case 'playout':

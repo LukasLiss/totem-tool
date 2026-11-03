@@ -19,7 +19,7 @@ import {
   ConformanceComponent,
   DashboardContext,
 } from "@/contexts/DashboardContext"
-import { CausalNetAlert, WorkflowAlert } from "./icons/totem-icons"
+import { CausalNetAlert, CircleDotAlert, WorkflowAlert } from "./icons/totem-icons"
 
 const conformanceItems: {
   id: ConformanceComponent;
@@ -28,6 +28,7 @@ const conformanceItems: {
 }[] = [
   { id: "totem", label: "TOTeM Conformance", icon: WorkflowAlert },
   { id: "occn", label: "OCCN Conformance", icon: CausalNetAlert },
+  { id: "ocpnReplay", label: "OCPN Flattened Replay", icon: CircleDotAlert },
 ];
 
 export function NavConformance() {

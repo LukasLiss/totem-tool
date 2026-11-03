@@ -19,7 +19,7 @@ import {
   listAssets,
   uploadAsset,
 } from "@/api/assetsApi";
-import { DashboardContext, EditorComponent } from "@/contexts/DashboardContext";
+import { ConformanceComponent, DashboardContext, EditorComponent } from "@/contexts/DashboardContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -75,8 +75,13 @@ const EDITOR_COMPONENT_BY_TYPE: Partial<Record<AssetType, EditorComponent>> = {
   OCDFG: "ocdfg",
 };
 
-// Only these types can run conformance checking.
-const CONFORMANCE_TYPES: AssetType[] = ["TOTEM", "OCCN"];
+// Only these types can run conformance checking, each in its own view.
+const CONFORMANCE_COMPONENT_BY_TYPE: Partial<Record<AssetType, ConformanceComponent>> = {
+  TOTEM: "totem",
+  OCCN: "occn",
+  OCPN: "ocpnReplay",
+};
+const CONFORMANCE_TYPES = Object.keys(CONFORMANCE_COMPONENT_BY_TYPE) as AssetType[];
 
 interface AssetTableFilters {
   type: AssetFilter;
@@ -198,7 +203,7 @@ export function ModelAssetsView() {
               onConformanceClick={(asset) =>
                 setViewMode({
                   type: "conformance",
-                  component: asset.asset_type === "TOTEM" ? "totem" : "occn",
+                  component: CONFORMANCE_COMPONENT_BY_TYPE[asset.asset_type] ?? "occn",
                   assetId: asset.id,
                 })
               }
