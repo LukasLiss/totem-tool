@@ -110,6 +110,14 @@ declare module 'gridstack' {
     min_parallel_observations?: number;
     cluster_by_ot?: boolean;
     view_mode?: 'graph' | 'table' | 'log';
+    // OCAlignmentComponent (show_controls, automatic_loading, business_object_types,
+    // business_activities and timeout_s are shared above)
+    model_asset?: number | null;
+    execution_source?: 'area' | 'stored';
+    execution_column?: string;
+    execution_id?: string;
+    max_states?: number;
+    show_silent_moves?: boolean;
     // ResourceProfilingComponent (business_object_types / resource_types shared)
     feature_groups?: string[];
     tooltip_feature_groups?: string[];

@@ -604,3 +604,38 @@ class SeedState(models.Model):
 
     def __str__(self):
         return self.key
+
+
+class OCAlignmentComponent(DashboardComponent):
+    """Dashboard widget for object-centric alignments (Liss, 2023).
+
+    Aligns one process execution against a stored OCPN asset. The execution
+    comes either from execution ids stored in an events column
+    (``execution_source="stored"``) or from the connected components of a set
+    of business object types and activities (``"area"``, e.g. a process
+    area). All fields preselect what the view mode opens with.
+    """
+
+    # Show the source / execution picker in the dashboard's view mode.
+    show_controls = models.BooleanField(default=True)
+    # Compute the alignment as soon as the dashboard opens.
+    automatic_loading = models.BooleanField(default=False)
+    model_asset = models.ForeignKey(
+        ProjectAsset,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    execution_source = models.CharField(
+        max_length=8,
+        choices=[("area", "Process area / manual"), ("stored", "Stored executions")],
+        default="area",
+    )
+    execution_column = models.CharField(max_length=200, blank=True, default="")
+    business_object_types = models.JSONField(default=list, blank=True)
+    business_activities = models.JSONField(default=list, blank=True)
+    execution_id = models.CharField(max_length=500, blank=True, default="")
+    max_states = models.PositiveIntegerField(default=200_000)
+    timeout_s = models.FloatField(default=60.0)
+    show_silent_moves = models.BooleanField(default=False)

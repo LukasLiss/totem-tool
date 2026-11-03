@@ -34,6 +34,7 @@ from ..models import (
     FilterStackComponent,
     OCHandoverComponent,
     ResourceProfilingComponent,
+    OCAlignmentComponent,
 )
 from ..view_preferences import clean_preferences, preferences_error
 from ..serializers import (
@@ -176,6 +177,23 @@ def _query_asset_for(item, dashboard, request):
     ).first()
 
 
+def _ocpn_asset_for(item, dashboard, request):
+    """The OCPN model asset an alignment widget links (own project only)."""
+    asset_id = item.get("model_asset")
+    if not asset_id:
+        return None
+    try:
+        asset_id = int(asset_id)
+    except (TypeError, ValueError):
+        return None
+    return ProjectAsset.objects.filter(
+        pk=asset_id,
+        project=dashboard.project,
+        project__users=request.user,
+        asset_type=ProjectAsset.AssetType.OCPN,
+    ).first()
+
+
 def _bounded_int(item, key: str, default: int, lo: int, hi: int) -> int:
     try:
         value = int(item.get(key, default))
@@ -286,6 +304,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
         "FilterStackComponent": FilterStackComponent,
         "OCHandoverComponent": OCHandoverComponent,
         "ResourceProfilingComponent": ResourceProfilingComponent,
+        "OCAlignmentComponent": OCAlignmentComponent,
     }
 
     _REQUIRED_LAYOUT_KEYS = ("component_name", "x", "y", "w", "h")
@@ -797,6 +816,27 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     min_cluster_size=_bounded_int(item, 'min_cluster_size', 2, 2, 100000),
                     distance_metric=_choice_field(item, 'distance_metric', _PROFILE_DISTANCE_METRICS, 'euclidean'),
                     view_mode=_choice_field(item, 'view_mode', _PROFILE_VIEW_MODES, 'graph'),
+                )
+
+            elif component_name == 'OCAlignmentComponent':
+                OCAlignmentComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    show_controls=bool(item.get('show_controls', True)),
+                    automatic_loading=bool(item.get('automatic_loading', False)),
+                    model_asset=_ocpn_asset_for(item, dashboard, request),
+                    execution_source=_choice_field(item, 'execution_source', ('area', 'stored'), 'area'),
+                    execution_column=str(item.get('execution_column') or '')[:200],
+                    business_object_types=_string_list_field(item, 'business_object_types'),
+                    business_activities=_string_list_field(item, 'business_activities'),
+                    execution_id=str(item.get('execution_id') or '')[:500],
+                    max_states=_bounded_int(item, 'max_states', 200_000, 1_000, 2_000_000),
+                    timeout_s=_bounded_float(item, 'timeout_s', 60.0, 1.0, 600.0),
+                    show_silent_moves=bool(item.get('show_silent_moves', False)),
                 )
 
         return Response({"status": "saved"})

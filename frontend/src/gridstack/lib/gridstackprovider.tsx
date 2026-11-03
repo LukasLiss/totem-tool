@@ -41,6 +41,7 @@ const MIN_SIZES: Record<string, { minW: number; minH: number }> = {
   ScatterPlotComponent: { minW: 3, minH: 3 },
   OCHandoverComponent: { minW: 6, minH: 6 },
   ResourceProfilingComponent: { minW: 6, minH: 6 },
+  OCAlignmentComponent: { minW: 6, minH: 6 },
 };
 const DEFAULT_MIN_SIZE = { minW: 2, minH: 2 };
 
@@ -447,6 +448,20 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           distance_metric: node.distance_metric ?? 'euclidean',
           view_mode: node.view_mode ?? 'graph',
         };
+      } else if (component_name === "OCAlignmentComponent") {
+        props = {
+          show_controls: node.show_controls ?? true,
+          automatic_loading: node.automatic_loading ?? false,
+          model_asset: node.model_asset ?? null,
+          execution_source: node.execution_source ?? 'area',
+          execution_column: node.execution_column ?? '',
+          business_object_types: node.business_object_types ?? [],
+          business_activities: node.business_activities ?? [],
+          execution_id: node.execution_id ?? '',
+          max_states: node.max_states ?? 200000,
+          timeout_s: node.timeout_s ?? 60,
+          show_silent_moves: node.show_silent_moves ?? false,
+        };
       } else {
         props = {
           text: node.el ? node.el.innerHTML.trim() : "",
@@ -538,6 +553,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "Handover of Work";
         } else if (item.component_name === "ResourceProfilingComponent") {
           content = "Resource Profiling";
+        } else if (item.component_name === "OCAlignmentComponent") {
+          content = "Object-Centric Alignment";
         } else {
           content = "Unknown";
         }
@@ -664,6 +681,13 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             n_clusters: item.n_clusters,
             min_cluster_size: item.min_cluster_size,
             distance_metric: item.distance_metric,
+            // OCAlignmentComponent
+            model_asset: item.model_asset,
+            execution_source: item.execution_source,
+            execution_column: item.execution_column,
+            execution_id: item.execution_id,
+            max_states: item.max_states,
+            show_silent_moves: item.show_silent_moves,
           });
           // After adding, ensure custom properties are on the node
           if (widgetEl) {
@@ -778,6 +802,13 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node.n_clusters = item.n_clusters;
               node.min_cluster_size = item.min_cluster_size;
               node.distance_metric = item.distance_metric;
+              // OCAlignmentComponent
+              node.model_asset = item.model_asset;
+              node.execution_source = item.execution_source;
+              node.execution_column = item.execution_column;
+              node.execution_id = item.execution_id;
+              node.max_states = item.max_states;
+              node.show_silent_moves = item.show_silent_moves;
             }
           }
           // Set data attribute for persistence
