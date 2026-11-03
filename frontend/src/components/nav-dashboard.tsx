@@ -159,8 +159,14 @@ export function NavDashboard({
     try {
       const bundle = await exportDashboard(dashboard.id);
       const filename = toFilename(dashboard.name, "dashboard");
-      downloadJson(filename, bundle);
-      toast.success(`Saved ${filename}.json`);
+      const outcome = await downloadJson(filename, bundle);
+      // The save dialog was dismissed: nothing was written, so say nothing.
+      if (outcome === "cancelled") return;
+      toast.success(
+        outcome === "saved"
+          ? `Saved ${filename}.json`
+          : `Downloading ${filename}.json`
+      );
     } catch {
       toast.error("Dashboard could not be exported");
     }

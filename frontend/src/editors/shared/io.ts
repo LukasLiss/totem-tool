@@ -3,19 +3,83 @@
  * Models are saved as plain JSON files and can be re-imported later.
  */
 
-/** Trigger a browser download of `data` serialized as pretty-printed JSON. */
-export function downloadJson(filename: string, data: unknown) {
-  const blob = new Blob([JSON.stringify(data, null, 2)], {
-    type: 'application/json',
-  });
+/**
+ * What a save attempt actually did:
+ *
+ * - `saved`      the user chose a location and the bytes reached the disk.
+ * - `cancelled`  the user dismissed the save dialog; nothing was written.
+ * - `downloaded` there is no save picker here, so the browser took the file
+ *                from us. We cannot know where it went, or whether it was
+ *                kept at all.
+ *
+ * Callers need the distinction to say something true: "Saved x.json" is a
+ * claim about the filesystem, and only `saved` supports it.
+ */
+export type JsonSaveOutcome = 'saved' | 'cancelled' | 'downloaded';
+
+/** The pre-File-System-Access path: hand the blob over and hope for the best. */
+function anchorDownload(name: string, text: string) {
+  const blob = new Blob([text], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = filename.endsWith('.json') ? filename : `${filename}.json`;
+  anchor.download = name;
   document.body.appendChild(anchor);
   anchor.click();
   document.body.removeChild(anchor);
   URL.revokeObjectURL(url);
+}
+
+/** The user dismissed the picker: not a failure, and nothing to report. */
+function isAbort(error: unknown) {
+  // Not `instanceof DOMException`: the picker is stubbed in tests, and not
+  // every environment exposes that constructor.
+  return (error as Error | undefined)?.name === 'AbortError';
+}
+
+/**
+ * Write `data` to a file of the user's choosing as pretty-printed JSON, and
+ * report what happened — see `JsonSaveOutcome`.
+ *
+ * Prefers `showSaveFilePicker`, which resolves only once the file has been
+ * written, so a caller can confirm a save instead of guessing at one. Where it
+ * does not exist (Firefox, Safari) the old anchor download still runs.
+ */
+export async function downloadJson(
+  filename: string,
+  data: unknown,
+): Promise<JsonSaveOutcome> {
+  const name = filename.endsWith('.json') ? filename : `${filename}.json`;
+  const text = JSON.stringify(data, null, 2);
+
+  let handle: FileSystemFileHandle | null = null;
+  if (typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function') {
+    try {
+      handle = await window.showSaveFilePicker({
+        suggestedName: name,
+        types: [{ description: 'JSON file', accept: { 'application/json': ['.json'] } }],
+      });
+    } catch (error) {
+      if (isAbort(error)) return 'cancelled';
+      // The picker needs *recent* user activation. Callers that fetch their
+      // data first can outlive it (SecurityError), and some embeddings refuse
+      // the picker outright — neither should cost the user the export.
+      handle = null;
+    }
+  }
+
+  if (handle) {
+    // Deliberately outside the catch above: once a location has been chosen, a
+    // failure here is a real write failure and belongs to the caller. It is not
+    // a reason to also download the file somewhere else.
+    const writable = await handle.createWritable();
+    await writable.write(text);
+    await writable.close();
+    return 'saved';
+  }
+
+  anchorDownload(name, text);
+  return 'downloaded';
 }
 
 /**

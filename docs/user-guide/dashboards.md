@@ -24,8 +24,9 @@ looking at is highlighted in the list.
 A dashboard's **structure** can be moved to another project, including one built on a different
 event log.
 
-1. In the sidebar, open the **⚙** menu next to a dashboard and choose **Export**. A `.json` file is
-   saved.
+1. In the sidebar, open the **⚙** menu next to a dashboard and choose **Export**, then choose where
+   to put the `.json` file. In browsers without a save dialog (Firefox, Safari) it goes to your
+   downloads folder instead.
 2. Open the project you want it in, then click **Import Dashboard** under the dashboard list and
    pick the file.
 

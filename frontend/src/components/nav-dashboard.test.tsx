@@ -127,26 +127,77 @@ describe("the open dashboard is highlighted", () => {
 });
 
 describe("export", () => {
-  it("writes the fetched bundle to a file named after the dashboard", async () => {
-    exportDashboard.mockResolvedValue(BUNDLE);
-    renderNav();
-
+  const clickExport = async () => {
     await openRowMenu("beta");
     fireEvent.click(screen.getByText("Export"));
+  };
+
+  it("writes the fetched bundle to a file named after the dashboard", async () => {
+    exportDashboard.mockResolvedValue(BUNDLE);
+    downloadJson.mockResolvedValue("saved");
+    renderNav();
+
+    await clickExport();
 
     await waitFor(() => expect(downloadJson).toHaveBeenCalledWith("beta", BUNDLE));
     expect(exportDashboard).toHaveBeenCalledWith(2);
+  });
+
+  it("confirms the save only once the file has been written", async () => {
+    exportDashboard.mockResolvedValue(BUNDLE);
+    downloadJson.mockResolvedValue("saved");
+    renderNav();
+
+    await clickExport();
+
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("Saved beta.json"));
+  });
+
+  it("says nothing at all when the save dialog is dismissed", async () => {
+    exportDashboard.mockResolvedValue(BUNDLE);
+    downloadJson.mockResolvedValue("cancelled");
+    renderNav();
+
+    await clickExport();
+
+    await waitFor(() => expect(downloadJson).toHaveBeenCalled());
+    // Claiming a save here was the bug: nothing was written, and a cancelled
+    // dialog is not an error either.
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("does not claim a save when it only handed off a download", async () => {
+    exportDashboard.mockResolvedValue(BUNDLE);
+    downloadJson.mockResolvedValue("downloaded");
+    renderNav();
+
+    await clickExport();
+
+    await waitFor(() =>
+      expect(toastSuccess).toHaveBeenCalledWith("Downloading beta.json")
+    );
   });
 
   it("reports a failure instead of writing an empty file", async () => {
     exportDashboard.mockRejectedValue(new Error("boom"));
     renderNav();
 
-    await openRowMenu("beta");
-    fireEvent.click(screen.getByText("Export"));
+    await clickExport();
 
     await waitFor(() => expect(toastError).toHaveBeenCalled());
     expect(downloadJson).not.toHaveBeenCalled();
+  });
+
+  it("reports a write that failed after a location was chosen", async () => {
+    exportDashboard.mockResolvedValue(BUNDLE);
+    downloadJson.mockRejectedValue(new Error("disk full"));
+    renderNav();
+
+    await clickExport();
+
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    expect(toastSuccess).not.toHaveBeenCalled();
   });
 });
 
