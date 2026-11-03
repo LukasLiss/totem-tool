@@ -73,7 +73,7 @@ provider can register this way.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PUBLIC_URL` | `http://localhost:8000` | Address users open. Builds the OAuth callback URL and the allowed host name. |
+| `PUBLIC_URL` | `http://localhost:<TOTEM_PORT>` | Address users open. Builds the OAuth callback URL and the allowed host name. |
 | `TOTEM_PORT` | `8000` | Host port (docker compose only). |
 
 Put the container behind a reverse proxy that terminates HTTPS and set

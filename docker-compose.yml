@@ -1,4 +1,5 @@
 # One-command TOTeM server:  docker compose up -d   →  http://localhost:8000
+# (or http://localhost:$TOTEM_PORT when TOTEM_PORT is set)
 # Put settings in a .env file next to this one (see docker/.env.example);
 # docs/DOCKER.md explains each variable.
 services:
@@ -9,7 +10,7 @@ services:
     environment:
       # Public address of the app, e.g. https://totem.example.org. Used for
       # the OAuth callback and the allowed host name.
-      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8000}
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:${TOTEM_PORT:-8000}}
       # Optional email/password account, created or updated on every start.
       TOTEM_USER_EMAIL: ${TOTEM_USER_EMAIL:-}
       TOTEM_USER_PASSWORD: ${TOTEM_USER_PASSWORD:-}
