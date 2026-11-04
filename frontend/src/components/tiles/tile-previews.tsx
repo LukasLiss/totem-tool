@@ -167,6 +167,22 @@ export const OcpnTile = () => (
   </TilePreview>
 );
 
+/** The Petri net with a deviation halo around its middle place. */
+export const OcpnReplayTile = () => (
+  <TilePreview label="OCPN Flattened Replay">
+    <line x1="16" y1="25" x2="27" y2="25" stroke={SLATE} strokeWidth="2" strokeLinecap="round" />
+    <line x1="35" y1="25" x2="41" y2="25" stroke={SLATE} strokeWidth="2" strokeLinecap="round" />
+    <line x1="59" y1="25" x2="65" y2="25" stroke={SLATE} strokeWidth="2" strokeLinecap="round" />
+    <line x1="73" y1="25" x2="83" y2="25" stroke={SLATE} strokeWidth="2" strokeLinecap="round" />
+    <circle cx="10" cy="25" r="6" fill="#FFFFFF" stroke={BLUE} strokeWidth="2" />
+    <rect x="27" y="16" width="8" height="18" rx="2" fill={INK} />
+    <circle cx="50" cy="25" r="12" fill={ROSE} fillOpacity="0.3" />
+    <circle cx="50" cy="25" r="7" fill="#FFFFFF" stroke={GREEN} strokeWidth="2" />
+    <rect x="65" y="16" width="8" height="18" rx="2" fill={INK} />
+    <circle cx="89" cy="25" r="6" fill="#FFFFFF" stroke={VIOLET} strokeWidth="2" />
+  </TilePreview>
+);
+
 /** A stack of traces, one chevron row per variant. */
 export const VariantsTile = () => (
   <TilePreview label="Variants Explorer">
@@ -272,6 +288,23 @@ export const ScatterPlotTile = () => (
     <circle cx="70" cy="25" r="3.5" fill={BLUE} />
     <circle cx="83" cy="17" r="3.5" fill={BLUE} />
     {sqlMark(94, 13)}
+  </TilePreview>
+);
+
+/**
+ * Two stacked move boxes (log over model) per column: a solid synchronous
+ * move, a dashed log move and a dotted model move -- the alignment notation.
+ */
+export const AlignmentTile = () => (
+  <TilePreview label="Object-Centric Alignment">
+    <rect x="6" y="12" width="22" height="26" rx="2" fill="#ECFDF5" stroke={GREEN} strokeWidth="2" />
+    <line x1="6" y1="25" x2="28" y2="25" stroke={GREEN} strokeWidth="1.5" />
+    <rect x="39" y="5" width="22" height="20" rx="2" fill="#FFFBEB" stroke={AMBER} strokeWidth="2" strokeDasharray="4 2" />
+    <line x1="39" y1="15" x2="61" y2="15" stroke={AMBER} strokeWidth="1.5" strokeDasharray="4 2" />
+    <rect x="39" y="28" width="22" height="18" rx="2" fill="#F5F3FF" stroke={VIOLET} strokeWidth="2" strokeDasharray="1.5 2" />
+    <rect x="72" y="12" width="22" height="26" rx="2" fill="#ECFDF5" stroke={GREEN} strokeWidth="2" />
+    <line x1="72" y1="25" x2="94" y2="25" stroke={GREEN} strokeWidth="1.5" />
+    <path d="M28 22 L39 15 M28 28 L39 37 M61 15 L72 22 M61 37 L72 28" stroke={SLATE} strokeWidth="1.5" strokeLinecap="round" />
   </TilePreview>
 );
 

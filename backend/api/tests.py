@@ -15,7 +15,7 @@ from django.contrib.auth.models import User
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 from rest_framework import status
 from rest_framework.test import APIClient, APIRequestFactory, force_authenticate
 
@@ -55,6 +55,7 @@ from totem_lib.process_areas import (
 )
 
 from .cache_utils import RESULTS_CACHE, get_cached_result, make_cache_key
+from .limits import ProjectLimitReached, create_project
 from .lru_filecache import LRUFileBasedCache
 from .models import (
     Dashboard,
@@ -62,7 +63,9 @@ from .models import (
     ImageAsset,
     ImageComponent,
     KpiComponent,
+    OCAlignmentComponent,
     OCDottedChartComponent,
+    OCPNFlattenedReplayComponent,
     ProcessAreaComponent,
     Project,
     ProjectAsset,
@@ -3207,6 +3210,7 @@ class ProcessAreaDiscoveryApiTests(TestCase):
                 "type_relations",
                 "all_event_types",
                 "object_type_to_event_types",
+                "relation_stats",
             },
         )
         layers = response.data["layers"]
@@ -3216,6 +3220,49 @@ class ProcessAreaDiscoveryApiTests(TestCase):
             for area in layer["areas"]:
                 self.assertIn("objectTypes", area)
                 self.assertIn("eventTypes", area)
+
+    def test_relation_stats_cover_both_directions_of_every_pair(self):
+        totem = self._totem()
+        totem.h_temporal_relations = {
+            ("Item", "Order"): {"total": 4, "D": 4, "P": 4},
+            ("Order", "Item"): {"total": 4, "Di": 4, "P": 4},
+        }
+        totem.h_event_cardinalities = {
+            ("Item", "Order"): {"total": 5, "1": 5, "0...1": 5, "0...*": 5},
+        }
+        totem.h_log_cardinalities = {
+            ("Order", "Item"): {"total": 2, "1": 1, "1..*": 2, "0...*": 2},
+        }
+        url = f"/api/files/{self.event_log.pk}/discover_process_areas/"
+        with (
+            patch("api.views.event_log._with_ocel_db", return_value=nullcontext(object())),
+            patch("api.views.event_log.totemDiscovery_db", return_value=totem),
+            patch("api.views.event_log.prepare_db", return_value=self._aggregates()),
+        ):
+            response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        stats = {
+            (entry["from"], entry["to"]): entry
+            for entry in response.data["relation_stats"]
+        }
+        self.assertEqual(
+            set(stats),
+            {
+                ("Item", "Order"),
+                ("Order", "Item"),
+                ("Order", "Worker"),
+                ("Worker", "Order"),
+            },
+        )
+        item_order = stats[("Item", "Order")]
+        self.assertEqual(item_order["counts"]["temporal"], {"total": 4, "D": 4, "P": 4})
+        self.assertEqual(item_order["strict"]["temporal"], "D")
+        self.assertEqual(item_order["strict"]["event_cardinality"], "1")
+        self.assertEqual(stats[("Order", "Item")]["strict"]["temporal"], "Di")
+        # Only half of the orders have exactly one item, so tau = 1 needs 1..*.
+        self.assertEqual(stats[("Order", "Item")]["strict"]["log_cardinality"], "1..*")
+        self.assertEqual(stats[("Order", "Worker")]["counts"]["temporal"], {})
 
     def test_resources_land_on_the_higher_layers(self):
         # alpha weights the resource force. Turning it up is exactly how a user
@@ -6363,6 +6410,15 @@ class DashboardExportImportApiTests(TestCase):
             created_by=self.user,
         )
 
+    def _ocpn_asset(self, project, name):
+        return ProjectAsset.objects.create(
+            project=project,
+            name=name,
+            asset_type=ProjectAsset.AssetType.OCPN,
+            content_json={"schema": "ocpn", "version": 1},
+            created_by=self.user,
+        )
+
     # -- export ----------------------------------------------------------
 
     def test_export_is_a_stamped_attachment(self):
@@ -6525,6 +6581,83 @@ class DashboardExportImportApiTests(TestCase):
         self.assertEqual(result["dashboard"]["order_in_project"], 8)
 
     # -- import: the degradation paths ------------------------------------
+
+    def test_an_ocpn_backed_widget_relinks_by_name(self):
+        """The replay and alignment widgets point at an OCPN *asset*.
+
+        Both store it as a bare id (`ocpn_asset_id`, `model_asset`), so the
+        same rule as the dashboard links applies: carried as an id, a file
+        imported elsewhere would silently re-point at whatever asset happens to
+        hold that id in the target project.
+        """
+        source_asset = self._ocpn_asset(self.source, "Order net")
+        self._save(
+            [
+                {
+                    "component_name": "OCPNFlattenedReplayComponent",
+                    "x": 0,
+                    "y": 0,
+                    "w": 6,
+                    "h": 6,
+                    "ocpn_asset_id": source_asset.pk,
+                },
+                {
+                    "component_name": "OCAlignmentComponent",
+                    "x": 0,
+                    "y": 6,
+                    "w": 6,
+                    "h": 6,
+                    "model_asset": source_asset.pk,
+                },
+            ]
+        )
+
+        bundle = self._export()
+        replay, alignment = bundle["components"]
+        self.assertEqual(replay["ocpn_asset_name"], "Order net")
+        self.assertEqual(alignment["model_asset_name"], "Order net")
+        # The ids themselves must not be in the file at all.
+        self.assertNotIn("ocpn_asset_id", replay)
+        self.assertNotIn("model_asset", alignment)
+
+        # A different asset id in the target, so a carried id could not pass
+        # for the right one by luck.
+        self._ocpn_asset(self.target, "Decoy")
+        target_asset = self._ocpn_asset(self.target, "Order net")
+        imported = self._import(bundle)
+        self.assertEqual(imported["warnings"], [])
+
+        created = Dashboard.objects.get(pk=imported["dashboard"]["id"])
+        new_replay = OCPNFlattenedReplayComponent.objects.get(dashboard=created)
+        new_alignment = OCAlignmentComponent.objects.get(dashboard=created)
+        self.assertEqual(new_replay.ocpn_asset_id, target_asset.pk)
+        self.assertEqual(new_alignment.model_asset_id, target_asset.pk)
+
+    def test_a_missing_ocpn_model_imports_unselected_and_warns(self):
+        source_asset = self._ocpn_asset(self.source, "Order net")
+        self._save(
+            [
+                {
+                    "component_name": "OCAlignmentComponent",
+                    "x": 0,
+                    "y": 0,
+                    "w": 6,
+                    "h": 6,
+                    "model_asset": source_asset.pk,
+                }
+            ]
+        )
+
+        imported = self._import(self._export())
+
+        self.assertEqual(
+            [w["code"] for w in imported["warnings"]], ["model_asset_missing"]
+        )
+        created = Dashboard.objects.get(pk=imported["dashboard"]["id"])
+        # No model rather than a wrong one, and the import still succeeded.
+        self.assertIsNone(
+            OCAlignmentComponent.objects.get(dashboard=created).model_asset_id
+        )
 
     def test_a_missing_stored_query_keeps_the_sql_and_warns(self):
         asset = self._query_asset(self.source, "Volumes", "SELECT c1, c2 FROM abc")
@@ -6810,3 +6943,72 @@ class DashboardExportImportApiTests(TestCase):
             response = self._import(bundle, expect=400)
             self.assertIn("error", response)
         self.assertEqual(Dashboard.objects.count(), before)
+class HostingLimitsTests(TestCase):
+    """TOTEM_MAX_UPLOAD_MB and TOTEM_MAX_PROJECTS_PER_USER."""
+
+    def setUp(self):
+        self.user = User.objects.create_user("limited", password="pw")
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+        self.media = tempfile.TemporaryDirectory()
+        self.addCleanup(self.media.cleanup)
+        override = override_settings(MEDIA_ROOT=self.media.name)
+        override.enable()
+        self.addCleanup(override.disable)
+
+    def _own_project(self):
+        project = Project.objects.create(name="existing")
+        project.users.add(self.user)
+        return project
+
+    def _upload(self, size=10):
+        upload = SimpleUploadedFile("log.duckdb", b"x" * size)
+        with patch("api.views.event_log._build_ocel_db_from_path"), patch(
+            "api.views.event_log._object_types_with_counts", return_value=[]
+        ), patch("api.views.event_log._log_time_window", return_value=None):
+            return self.client.post("/api/files/", {"file": upload}, format="multipart")
+
+    def test_no_limits_by_default(self):
+        self._own_project()
+        self.assertEqual(self._upload(2 * 1024 * 1024).status_code, 201)
+
+    @override_settings(MAX_UPLOAD_BYTES=1024 * 1024)
+    def test_file_over_the_size_limit_is_rejected(self):
+        response = self._upload(1024 * 1024 + 1)
+        self.assertEqual(response.status_code, 413)
+        self.assertIn("1 MB", response.data["detail"])
+        self.assertIn("totem-tool.com", response.data["detail"])
+        self.assertFalse(Project.objects.filter(users=self.user).exists())
+
+    @override_settings(MAX_UPLOAD_BYTES=1024 * 1024)
+    def test_file_at_the_size_limit_is_accepted(self):
+        self.assertEqual(self._upload(1024 * 1024).status_code, 201)
+
+    @override_settings(MAX_PROJECTS_PER_USER=1)
+    def test_upload_at_the_project_limit_is_rejected(self):
+        self._own_project()
+        response = self._upload()
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("limit of 1 project.", response.data["detail"])
+        self.assertIn("totem-tool.com", response.data["detail"])
+        self.assertEqual(Project.objects.filter(users=self.user).count(), 1)
+
+    @override_settings(MAX_PROJECTS_PER_USER=1)
+    def test_project_limit_counts_per_user(self):
+        other = User.objects.create_user("other", password="pw")
+        Project.objects.create(name="theirs").users.add(other)
+        self.assertEqual(self._upload().status_code, 201)
+
+    @override_settings(MAX_PROJECTS_PER_USER=1)
+    def test_create_project_enforces_the_limit(self):
+        self._own_project()
+        with self.assertRaises(ProjectLimitReached):
+            create_project("another", self.user)
+
+    @override_settings(MAX_UPLOAD_BYTES=2097152, MAX_PROJECTS_PER_USER=3)
+    def test_upload_limits_endpoint(self):
+        self._own_project()
+        self.assertEqual(
+            self.client.get("/api/upload-limits/").data,
+            {"max_upload_bytes": 2097152, "max_projects_per_user": 3, "project_count": 1},
+        )

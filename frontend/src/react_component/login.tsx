@@ -182,6 +182,11 @@ export const Login = () => {
 
   const renderOAuthButtons = (providers: OAuthProvider[]) => (
     <div className="grid gap-3">
+      {/* Accounts can only be created through a provider, never with a
+          password — say so, or new users go looking for a sign-up form. */}
+      <p className="text-muted-foreground text-center text-sm">
+        Register and log in with:
+      </p>
       {providers.map((provider) => {
         const Icon = PROVIDER_ICONS[provider];
         return (

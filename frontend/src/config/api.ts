@@ -5,6 +5,8 @@
  * deployed Railway backend URL (e.g. https://your-railway-app.up.railway.app).
  *
  * In local development, if neither is set, it defaults to http://localhost:8000.
+ * The Docker image and the packaged desktop app build with VITE_API_URL=/,
+ * which makes every request relative to the page's own origin.
  */
 export const API_BASE_URL: string = (
   (import.meta.env.VITE_API_URL as string | undefined) ||

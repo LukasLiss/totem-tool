@@ -1,3 +1,4 @@
+import { computeTotemHubLayout } from "@/components/totem/totemLayout";
 import {
   TOTEM_NODE_HEIGHT,
   totemNodeWidth,
@@ -8,85 +9,44 @@ import type {
   TotemVisualizationPosition,
 } from "./visualizationModel";
 
-// A relation needs room along its line for a log cardinality near each end
-// and the event cardinality oval in the middle, so the gaps are driven by the
-// annotations rather than by the boxes.
-const HORIZONTAL_GAP = 180;
-const VERTICAL_GAP = 180;
+// The TOTeM Miner lays its model out on the canvas it is shown in. The
+// conformance canvas fits its view to the boxes afterwards, so a fixed
+// reference canvas of a typical size is enough to get the same arrangement.
+const REFERENCE_CANVAS_WIDTH = 1000;
+const REFERENCE_CANVAS_HEIGHT = 600;
 
 /**
- * Lay out TOTeM object types by containment depth. In D(a,b), a is placed
- * below b; Di(a,b) expresses the inverse and places b below a. Other temporal
- * relations stay within their current containment layer.
+ * Lay out TOTeM object types with the same hub-centred layout the TOTeM Miner
+ * uses, so a model looks the same in both views. Positions stored with the
+ * model take precedence over the generated ones.
+ *
+ * React Flow positions a node by its top-left corner, while the shared layout
+ * returns box centres, hence the shift by half a box.
  */
 export function computeTotemNodePositions(
   model: TotemVisualizationModel
 ): ReadonlyMap<string, TotemVisualizationPosition> {
-  const parentsByChild = new Map<string, Set<string>>(
-    model.nodes.map((node) => [node.id, new Set<string>()])
+  const labels = new Map(model.nodes.map((node) => [node.id, node.label]));
+  const widthOf = (id: string) => totemNodeWidth(labels.get(id) ?? id);
+  // Sorted like the miner's object types, so ties resolve the same way.
+  const nodeIds = model.nodes.map((node) => node.id).sort();
+  const centers = computeTotemHubLayout(
+    nodeIds,
+    model.relations.map((relation) => ({
+      from: relation.source,
+      to: relation.target,
+    })),
+    REFERENCE_CANVAS_WIDTH,
+    REFERENCE_CANVAS_HEIGHT,
+    widthOf
   );
 
-  for (const relation of model.relations) {
-    if (relation.temporal === "D") {
-      parentsByChild.get(relation.source)?.add(relation.target);
-    } else if (relation.temporal === "Di") {
-      parentsByChild.get(relation.target)?.add(relation.source);
-    }
-  }
-
-  const depthByNode = new Map<string, number>();
-  const visiting = new Set<string>();
-  const cycleNodes = new Set<string>();
-
-  const resolveDepth = (nodeId: string): number => {
-    const cached = depthByNode.get(nodeId);
-    if (cached !== undefined) return cached;
-    if (visiting.has(nodeId)) {
-      cycleNodes.add(nodeId);
-      return 0;
-    }
-
-    visiting.add(nodeId);
-    let depth = 0;
-    for (const parent of parentsByChild.get(nodeId) ?? []) {
-      if (visiting.has(parent)) {
-        cycleNodes.add(parent);
-        cycleNodes.add(nodeId);
-        continue;
-      }
-      depth = Math.max(depth, resolveDepth(parent) + 1);
-    }
-    visiting.delete(nodeId);
-    depthByNode.set(nodeId, cycleNodes.has(nodeId) ? 0 : depth);
-    return depthByNode.get(nodeId) ?? 0;
-  };
-
-  for (const node of model.nodes) resolveDepth(node.id);
-
-  const rows = new Map<number, string[]>();
-  for (const node of model.nodes) {
-    const depth = depthByNode.get(node.id) ?? 0;
-    const row = rows.get(depth);
-    if (row) row.push(node.id);
-    else rows.set(depth, [node.id]);
-  }
-
-  // Object type boxes size themselves to their name, so a row is laid out by
-  // walking along it rather than by multiplying a fixed column width.
-  const labels = new Map(model.nodes.map((node) => [node.id, node.label]));
   const positions = new Map<string, TotemVisualizationPosition>();
-  for (const [depth, nodeIds] of Array.from(rows.entries()).sort(
-    ([left], [right]) => left - right
-  )) {
-    nodeIds.sort((left, right) => left.localeCompare(right));
-    let x = 0;
-    for (const nodeId of nodeIds) {
-      positions.set(nodeId, {
-        x,
-        y: depth * (TOTEM_NODE_HEIGHT + VERTICAL_GAP),
-      });
-      x += totemNodeWidth(labels.get(nodeId) ?? nodeId) + HORIZONTAL_GAP;
-    }
+  for (const [id, center] of centers) {
+    positions.set(id, {
+      x: Math.round(center.x - widthOf(id) / 2),
+      y: Math.round(center.y - TOTEM_NODE_HEIGHT / 2),
+    });
   }
 
   for (const node of model.nodes) {

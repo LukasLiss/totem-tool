@@ -1,6 +1,6 @@
 {
   "name": "totem-tool",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "description": "TOTeM Tool: object-centric process mining desktop and web application (React/Vite frontend, Django backend, totem_lib analysis core, Electron packaging)",
   "author": {
     "name": "Lukas Liss",
@@ -18,7 +18,7 @@
     "start-frontend": "cd frontend && npm start",
     "start-electron": "cd electron && cross-env NODE_ENV=development npm start",
     "test-backend": "node scripts/run-python.js -m pytest totem_lib/tests",
-    "build-frontend": "cd frontend && cross-env VITE_LOCAL_MODE=1 npm run build-no-typecheck",
+    "build-frontend": "cd frontend && cross-env VITE_LOCAL_MODE=1 VITE_API_URL=/ npm run build-no-typecheck",
     "build-frontend-server": "cd frontend && npm run build-no-typecheck",
     "build-electron": "cd electron && npm run build",
     "build-electron-win": "cd electron && npm run build-win",

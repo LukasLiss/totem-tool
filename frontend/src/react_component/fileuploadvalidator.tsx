@@ -1,7 +1,7 @@
 import { useState, useRef, useContext } from "react";
 import axios from "axios";
 import { fileTypeFromBlob } from "file-type";
-import { uploadFile } from "../api/fileApi";
+import { getUploadLimits, uploadFile } from "../api/fileApi";
 import { Loader2, CheckCircle2, XCircle } from "lucide-react";
 import {useDropzone} from 'react-dropzone';
 import { Button } from "@/components/ui/button";
@@ -27,6 +27,8 @@ import { isCancelledError, useComputationStore } from "@/store/computationStore"
 import { prepareLargeLogFilter } from "@/store/applyGlobalFilter";
 import { ProgressBar } from "@/components/ComputationPanel";
 
+const UNLIMITED_VERSION_HINT =
+  "At totem-tool.com, you can download the local or self-hosted version that has no limitations.";
 
 export function FileUploadValidator() {
     const { setSelectedFile } = useContext(SelectedFileContext);
@@ -89,6 +91,27 @@ export function FileUploadValidator() {
     if (!(isJson || isXml || isSqlite || isCsv || isDuckDB)){
         toast.error("Invalid file type", {description:"Please enter 'json', 'xml', 'sqlite', 'csv', or 'duckdb'."});
         return false;
+    }
+
+    // Checked here because a rejected upload can surface as a bare network
+    // error: the server stops reading the file. It still enforces both limits.
+    try {
+      const limits = await getUploadLimits();
+      const { max_upload_bytes: maxBytes, max_projects_per_user: maxProjects } = limits;
+      if (maxProjects !== null && limits.project_count >= maxProjects) {
+        toast.error("Project limit reached", {
+          description: `You can have at most ${maxProjects} project${maxProjects === 1 ? "" : "s"}. Delete a project to add a new one. ${UNLIMITED_VERSION_HINT}`,
+        });
+        return false;
+      }
+      if (maxBytes !== null && file.size > maxBytes) {
+        toast.error("File too large", {
+          description: `Files can be at most ${Math.floor(maxBytes / (1024 * 1024))} MB. ${UNLIMITED_VERSION_HINT}`,
+        });
+        return false;
+      }
+    } catch {
+      // Not knowing the limits must not block an upload.
     }
 
     return true;
@@ -183,7 +206,7 @@ export function FileUploadValidator() {
     <Card className="w-full max-w-sm m-6">
       <CardHeader>
         <CardTitle>
-          Upload new file
+          Upload a new file
         </CardTitle>
       </CardHeader>
         <CardContent>

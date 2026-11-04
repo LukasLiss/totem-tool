@@ -72,6 +72,8 @@ KNOWN_COMPONENT_NAMES = frozenset(
         "FilterStackComponent",
         "OCHandoverComponent",
         "ResourceProfilingComponent",
+        "OCPNFlattenedReplayComponent",
+        "OCAlignmentComponent",
     }
 )
 
@@ -79,6 +81,7 @@ KNOWN_COMPONENT_NAMES = frozenset(
 # them, so renaming one is a breaking change.
 WARN_QUERY_ASSET_MISSING = "query_asset_missing"
 WARN_IMAGE_ASSET_MISSING = "image_asset_missing"
+WARN_MODEL_ASSET_MISSING = "model_asset_missing"
 WARN_DASHBOARD_LINK_DROPPED = "dashboard_link_dropped"
 WARN_COMPONENT_UNKNOWN = "component_unknown"
 WARN_EVENT_LOG_REBOUND = "event_log_rebound"
@@ -206,12 +209,20 @@ def _serialized_components(dashboard):
 
 
 def _referenced_assets(rows):
-    """Name and SQL of the query assets, and names of the image assets, in use.
+    """Names of every project-bound asset in use, plus the query assets' SQL.
 
-    Two queries rather than one per component.
+    Three queries rather than one per component. ``ocpn_asset_id`` (the
+    flattened-replay widget) and ``model_asset`` (the alignment widget) are
+    both OCPN `ProjectAsset`s, so one lookup covers them.
     """
     query_ids = {row["query_asset"] for row in rows if row.get("query_asset")}
     image_ids = {row["image_asset"] for row in rows if row.get("image_asset")}
+    model_ids = {
+        row[key]
+        for row in rows
+        for key in ("ocpn_asset_id", "model_asset")
+        if row.get(key)
+    }
     queries = {
         pk: (name, (content or {}).get("query") or "")
         for pk, name, content in ProjectAsset.objects.filter(
@@ -221,10 +232,15 @@ def _referenced_assets(rows):
     image_names = dict(
         ImageAsset.objects.filter(pk__in=image_ids).values_list("pk", "name")
     )
-    return queries, image_names
+    model_names = dict(
+        ProjectAsset.objects.filter(
+            pk__in=model_ids, asset_type=ProjectAsset.AssetType.OCPN
+        ).values_list("pk", "name")
+    )
+    return queries, image_names, model_names
 
 
-def _portable_component(row, queries, image_names, dashboard_names):
+def _portable_component(row, queries, image_names, model_names, dashboard_names):
     """One serialized component, stripped of everything project-bound."""
     item = dict(row)
 
@@ -254,6 +270,19 @@ def _portable_component(row, queries, image_names, dashboard_names):
         if name:
             item["image_asset_name"] = name
 
+    # The OCPN model the flattened replay and the alignment widget run against.
+    # Two different column names for the same kind of reference, kept apart so
+    # each lands back on the key `_replace_components` reads.
+    for id_key, name_key in (
+        ("ocpn_asset_id", "ocpn_asset_name"),
+        ("model_asset", "model_asset_name"),
+    ):
+        asset_id = item.pop(id_key, None)
+        if asset_id:
+            name = model_names.get(asset_id)
+            if name:
+                item[name_key] = name
+
     if "rich_text" in item:
         item["rich_text"] = links_to_names(item["rich_text"], dashboard_names)
 
@@ -266,7 +295,7 @@ def _portable_component(row, queries, image_names, dashboard_names):
 def build_dashboard_bundle(dashboard):
     """A portable document describing ``dashboard``'s structure."""
     rows = _serialized_components(dashboard)
-    queries, image_names = _referenced_assets(rows)
+    queries, image_names, model_names = _referenced_assets(rows)
     # Link targets travel as names; see the module docstring for why ids are
     # not safe to put in a file.
     dashboard_names = dict(
@@ -287,7 +316,9 @@ def build_dashboard_bundle(dashboard):
         },
         "dashboard": {"name": dashboard.name},
         "components": [
-            _portable_component(row, queries, image_names, dashboard_names)
+            _portable_component(
+                row, queries, image_names, model_names, dashboard_names
+            )
             for row in rows
         ],
     }
@@ -429,6 +460,17 @@ def resolve_bundle_components(
             project=project, project__users=user
         ).values_list("pk", "name")
     }
+    # Scoped like `_ocpn_asset_for`: an OCPN asset of this project the user can
+    # see. `_ocpn_asset_id_for` does not check membership, but importing is done
+    # as a user, so the stricter scope is the right one here.
+    model_assets = {
+        name: pk
+        for pk, name in ProjectAsset.objects.filter(
+            project=project,
+            project__users=user,
+            asset_type=ProjectAsset.AssetType.OCPN,
+        ).values_list("pk", "name")
+    }
     dashboard_ids = {
         name: pk
         for pk, name in Dashboard.objects.filter(project=project).values_list(
@@ -491,6 +533,30 @@ def resolve_bundle_components(
                             f'No image called "{image_name}" in this project, so the '
                             f"widget imported empty. Upload the image under Project "
                             f"Assets with that name, or pick another one."
+                        ),
+                    }
+                )
+
+        for name_key, id_key, label in (
+            ("ocpn_asset_name", "ocpn_asset_id", "replay"),
+            ("model_asset_name", "model_asset", "alignment"),
+        ):
+            model_name = resolved.pop(name_key, None)
+            if not model_name:
+                continue
+            asset_id = model_assets.get(model_name)
+            if asset_id:
+                resolved[id_key] = asset_id
+            else:
+                warnings.append(
+                    {
+                        "code": WARN_MODEL_ASSET_MISSING,
+                        "component_name": name,
+                        "detail": (
+                            f'No OC Petri Net called "{model_name}" in this '
+                            f"project, so the {label} widget imported with no model "
+                            f"selected. Save that net under Project Assets with "
+                            f"this name, or open the widget and pick another."
                         ),
                     }
                 )

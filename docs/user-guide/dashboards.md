@@ -45,6 +45,9 @@ what to fix:
   the new log does not have — the widget then shows the error and you can edit the query.
 - **Images** are matched by name too. Without a matching image in the target project's assets, the
   image component imports empty.
+- **OC Petri Net models** are matched by name as well, for the widgets that run against a saved
+  net — flattened replay and object-centric alignments. Without a net of that name in the target
+  project, the widget imports with no model selected and you pick one.
 - **Links to other dashboards** in a Text Box only work inside one project. The words stay, the
   link is removed.
 - A **dotted chart** is re-pointed at the event log you imported into, so check its axis settings.
@@ -66,6 +69,7 @@ Available components include:
 - **Log Statistics** (number of events, objects, activities, time span, …),
 - analysis components: **Process Area**, **TOTeM Miner**, **OCCN**, **OC Petri Net**, **OC-DFG**,
   **Variants Explorer**, **OC Dotted Chart**, **Handover of Work**, and **Resource Profiling**,
+- conformance components: **Object-Centric Alignment** (see [Object-Centric Alignments](oc-alignments.md)),
 - SQL-based components: **SQL Editor**, **Pie Chart**, **Bar Chart**, **Scatter Plot**, and **KPI**.
 
 SQL-based components can **link** a stored query from the [Project Asset Store](project-asset-store.md).

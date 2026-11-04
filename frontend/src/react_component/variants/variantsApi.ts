@@ -7,6 +7,9 @@ import { isLeadingExtraction, isResourceAware } from "./settings";
 import type {
   ExecutionSettings,
   GroupingSettings,
+  ProcessAreaColumns,
+  ProcessAreaRequest,
+  ProcessAreaVariantsResponse,
   StoredExecutionsResponse,
   StoreSettings,
   VariantsResponse,
@@ -116,6 +119,94 @@ export async function storeProcessExecutions(
     `/api/files/${fileId}/process_executions/`,
     body,
     { _skipGlobalFilter: filterConfig._skipGlobalFilter },
+  );
+  return data;
+}
+
+/** Names of the attribute / derived columns of the events table. */
+export async function fetchEventColumnNames(fileId: number): Promise<string[]> {
+  const { data } = await axios.get<Array<{ name: string }>>(`/api/files/${fileId}/event_columns/`, {
+    _skipGlobalFilter: true,
+  });
+  return data.map((column) => column.name);
+}
+
+/** The request payload for one process area; object types double as its name. */
+export function toProcessAreaRequest(
+  area: Pick<ProcessAreaSnapshot, "objectTypes" | "activities">,
+): ProcessAreaRequest {
+  const objectTypes = [...area.objectTypes].sort((a, b) => a.localeCompare(b));
+  return {
+    label: objectTypes.join(", "),
+    object_types: objectTypes,
+    activities: [...area.activities].sort((a, b) => a.localeCompare(b)),
+  };
+}
+
+/**
+ * Process areas in tab order: the bottom layer (the core business objects)
+ * first, resources last; ties by name.
+ */
+export function orderProcessAreas<T extends Pick<ProcessAreaSnapshot, "level" | "objectTypes">>(
+  areas: T[],
+): T[] {
+  return [...areas].sort(
+    (a, b) =>
+      a.level - b.level ||
+      a.objectTypes.join(", ").localeCompare(b.objectTypes.join(", ")),
+  );
+}
+
+/**
+ * Connected components per process area: one variant list per area, and
+ * (when ``store``) the execution / variant ids written into two columns.
+ */
+export async function computeProcessAreaVariants(
+  fileId: number,
+  areas: ProcessAreaRequest[],
+  grouping: GroupingSettings,
+  options: { store: boolean; columns: ProcessAreaColumns },
+  filterEnabled: boolean,
+  localFilterParams?: Record<string, string>,
+): Promise<ProcessAreaVariantsResponse> {
+  const filterConfig = getEffectiveFilterConfig(localFilterParams, filterEnabled);
+  if (filterConfig._noResults) {
+    return {
+      file_id: fileId,
+      stored: false,
+      execution_column: null,
+      variant_column: null,
+      execution_count: 0,
+      variant_count: 0,
+      total_event_count: 0,
+      assigned_event_count: 0,
+      ambiguous_event_count: 0,
+      unassigned_event_count: 0,
+      areas: areas.map((area) => ({
+        ...area,
+        execution_count: 0,
+        variant_count: 0,
+        variants: [],
+        skipped_reason: "The filter leaves no events.",
+      })),
+      object_types: [],
+    };
+  }
+  const body: Record<string, unknown> = {
+    areas,
+    iso: grouping.iso,
+    timeout_s: grouping.timeoutS,
+    store: options.store,
+  };
+  if (options.store) {
+    body.execution_column = options.columns.executionColumn.trim();
+    body.variant_column = options.columns.variantColumn.trim();
+  }
+  const { data } = await axios.post<ProcessAreaVariantsResponse>(
+    `/api/files/${fileId}/process_area_variants/`,
+    body,
+    // Filters go in the query string, where the backend reads them.
+    { params: filterConfig.params, _skipGlobalFilter: filterConfig._skipGlobalFilter },
   );
   return data;
 }

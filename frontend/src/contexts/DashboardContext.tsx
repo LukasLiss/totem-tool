@@ -20,7 +20,7 @@ export type AnalysisComponent =
   | "totemMiner"
   | "sqlQuery"
   | "orgaMining";
-export type ConformanceComponent = "totem" | "occn";
+export type ConformanceComponent = "totem" | "occn" | "ocpnReplay" | "ocAlignment";
 
 export type EditorComponent = "totem" | "occn" | "ocpn" | "ocdfg" | "ocel";
 
