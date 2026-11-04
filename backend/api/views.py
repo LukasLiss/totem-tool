@@ -27,12 +27,17 @@ from totem_lib.ocel.importer import (
 from totem_lib.oc_dotted_chart import get_oc_dotted_chart_columns, get_oc_dotted_chart_data
 from types import SimpleNamespace
 from totem_lib.ocel.exporter import build_ocel2_json
-from totem_lib.simulation.simulation import OCProcessAreaSimulationModel, OCProcessAreaSimulationConfiguration
+from totem_lib.simulation.simulation import OCProcessAreaSimulationModel, OCProcessAreaSimulationConfiguration, validate_resource_pool
 from totem_lib.simulation.evaluation.runtime import Timer as EvalTimer
 from .simulation_evaluation import build_evaluation_payload, compute_graph_edit_distance
-from .simulation_cooldowns import apply_cooldown_selection, serialize_cooldowns
+from .simulation_cooldowns import (
+    apply_activity_delay_selection,
+    apply_cooldown_selection,
+    serialize_activity_delays,
+    serialize_cooldowns,
+)
 from totem_lib.simulation.utils.process_area import ProcessArea
-from totem_lib.simulation.utils.basic_simulation_statistics import variant_arrival_distribution as compute_variant_arrival_distribution, resource_distribution_of_variants
+from totem_lib.simulation.utils.basic_simulation_statistics import variant_arrival_distribution as compute_variant_arrival_distribution, resource_distribution_of_variants, activity_delay_distribution
 from totem_lib.simulation.utils.resource_constraints import generate_resource_constraints
 from totem_lib.simulation.utils.resource_calendar import (
     discover_shift_patterns,
@@ -2489,10 +2494,10 @@ def _apply_simulation_overrides(simulation_model, overrides):
     """Apply the user's details-phase edits onto a freshly built model.
 
     The frontend lets the user review and adjust the discovered constraints,
-    resource calendars, cooldowns, allocation strategy, external load and
-    per-variant arrival distributions before running. Those edits are sent as
-    ``overrides`` so the simulation uses them instead of the values re-discovered
-    from the log.
+    resource calendars, cooldowns, activity delays, allocation strategy,
+    external load and the per-variant arrival distributions and resource demand
+    before running. Those edits are sent as ``overrides`` so the simulation uses
+    them instead of the values re-discovered from the log.
 
     Args:
         simulation_model: The freshly built OCProcessAreaSimulationModel.
@@ -2507,6 +2512,12 @@ def _apply_simulation_overrides(simulation_model, overrides):
     if cooldowns is not None:
         apply_cooldown_selection(
             simulation_model.resource_cooldown_distribution, cooldowns
+        )
+
+    activity_delays = overrides.get("activity_delays")
+    if activity_delays is not None:
+        apply_activity_delay_selection(
+            simulation_model.activity_delays, activity_delays
         )
 
     allocation = overrides.get("allocation_strategy")
@@ -2587,6 +2598,52 @@ def _apply_simulation_overrides(simulation_model, overrides):
             dist = arrival_dist.setdefault(variant, {})
             dist["avg_arrivals_per_hour"] = converted
 
+    # A variant sent here gets exactly the demand the user left: an activity or
+    # resource type missing from the edit needs no resource of that type.
+    demand_overrides = overrides.get("resource_demand") or {}
+    if demand_overrides:
+        demand = simulation_model.needed_resources_per_activity
+        for idx, variant in enumerate(variants):
+            per_variant = demand_overrides.get(str(idx))
+            if per_variant is None:
+                continue
+            demand[variant] = _parse_resource_demand(per_variant)
+
+
+def _parse_resource_demand(variant_demand):
+    """Convert one variant's edited resource demand into the model format.
+
+    JSON turns the resource counts into strings, while the playout draws them as
+    ints, so the keys are converted back. The probabilities are normalised to
+    sum to one; a resource type without positive weight is dropped (no demand).
+
+    Args:
+        variant_demand: ``{activity: {resource_type: {"count_distribution":
+            {count: weight}}}}`` as sent by the frontend.
+
+    Returns:
+        ``{activity: {resource_type: {"count_distribution": {int: float}}}}``,
+        the shape of ``resource_distribution_of_variants`` for one variant.
+    """
+    parsed = {}
+    for activity, type_stats in variant_demand.items():
+        activity_demand = {}
+        for res_type, stats in (type_stats or {}).items():
+            weights = {}
+            for count, weight in (stats or {}).get("count_distribution", {}).items():
+                count, weight = int(count), float(weight)
+                if count >= 0 and weight > 0:
+                    weights[count] = weights.get(count, 0.0) + weight
+            total = sum(weights.values())
+            if total > 0:
+                activity_demand[res_type] = {
+                    "count_distribution": {
+                        count: weight / total for count, weight in weights.items()
+                    },
+                }
+        parsed[activity] = activity_demand
+    return parsed
+
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -2613,8 +2670,7 @@ def run_simulation(request):
     sim_start_unix = request.data.get("sim_start_unix", None)
     violation_degree = request.data.get("resource_constraint_violation_degree", 0.0)
     lookback_length = request.data.get("constraint_lookback_length", None)
-    model_activity_durations = request.data.get("model_activity_durations", True)
-    mode = request.data.get("mode", "simple")  # "simple" or "advanced"
+    mode =request.data.get("mode", "simple")  # "simple" or "advanced"
     overrides = request.data.get("overrides")  # user edits from the details phase
     progress_id = request.data.get("progress_id")
 
@@ -2626,6 +2682,10 @@ def run_simulation(request):
         return Response({"error": "Missing activities"}, status=status.HTTP_400_BAD_REQUEST)
     
     resource_pool = resource_pool or {}
+    try:
+        validate_resource_pool(resource_pool)
+    except ValueError as e:
+        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
     # Verify user access
     try:
@@ -2653,7 +2713,7 @@ def run_simulation(request):
         process_area = ProcessArea(
             object_types=object_types,
             activities=activities,
-            resource_types=[rt for rt, count in resource_pool.items() if count > 0],
+            resource_types=list(resource_pool),
         )
 
         # Build simulation model based on mode
@@ -2670,12 +2730,12 @@ def run_simulation(request):
         simulation_model.simulation_config = OCProcessAreaSimulationConfiguration(
             resource_constraint_violation_degree=violation_degree,
             constraint_lookback_length=lookback_length,
-            model_activity_durations=bool(model_activity_durations),
         )
 
         # Apply the user's details-phase edits (constraints, calendars, cooldowns,
-        # allocation, arrival distributions) so the simulation uses them instead
-        # of the values just re-discovered from the log.
+        # activity delays, allocation, arrival distributions, resource demand) so
+        # the simulation uses them instead of the values just re-discovered from
+        # the log.
         _apply_simulation_overrides(simulation_model, overrides)
 
         # Convert sim_start_unix to datetime
@@ -3079,7 +3139,7 @@ def get_process_areas(request):
 def get_simulation_details(request):
     """
     Pre-compute all simulation details: variants, arrival distribution, resource distribution,
-    constraints, cooldowns, allocation strategy, resource calendars, the
+    constraints, cooldowns, activity delays, allocation strategy, resource calendars, the
     shift patterns mined per resource type and the process area's capacity
     share per resource type (external load).
 
@@ -3153,6 +3213,11 @@ def get_simulation_details(request):
 
         # Compute resource distribution
         res_dist = resource_distribution_of_variants(filtered_ocel, variants, ocel.obj_type_map)
+
+        # Inter-activity delays of the duration model (same for both modes)
+        serialized_delays = serialize_activity_delays(
+            activity_delay_distribution(filtered_ocel)
+        )
 
         # Compute constraints
         _report_progress(progress_id, _SIM_DETAILS_STEPS, 3)
@@ -3265,6 +3330,7 @@ def get_simulation_details(request):
             "num_variants": len(variants),
             "fallback_constraints": fallback_constraints,
             "cooldown_distribution": serialized_cooldowns,
+            "activity_delays": serialized_delays,
             "allocation_strategy": allocation_strategy,
             "type_calendars": serialized_type_calendars,
             "shift_patterns": shift_patterns,

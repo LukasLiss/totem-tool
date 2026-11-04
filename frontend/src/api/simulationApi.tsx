@@ -34,7 +34,10 @@ export type SimulationOverrides = {
   constraints?: Record<number, VariantConstraints>;
   global_constraints?: VariantConstraints;
   arrival_distributions?: Record<number, Record<string, Record<string, number>>>;
+  // The full resource demand of each variant; replaces the discovered one.
+  resource_demand?: Record<number, ResourceDemand>;
   cooldowns?: CooldownDistribution;
+  activity_delays?: ActivityDelayDistribution;
   allocation_strategy?: AllocationStrategy;
   // Only the type calendars the user edited: an edited type calendar replaces
   // the mined shift patterns for that type (every instance follows it).
@@ -54,8 +57,6 @@ export type SimulationConfig = {
   sim_start_unix: number | null;
   resource_constraint_violation_degree: number;
   constraint_lookback_length: number | null;
-  // When true, successor activities are delayed by inter-activity durations
-  model_activity_durations: boolean;
   mode: SimulationMode;
   // Present once the details phase has been loaded; carries the reviewed/edited
   // constraints, calendars, cooldowns, allocation and arrival distributions.
@@ -158,6 +159,9 @@ export type ResourceDistEntry = {
   count_distribution: Record<string, number>;
 };
 
+// Resource demand of one variant: activity -> resource type -> count distribution
+export type ResourceDemand = Record<string, Record<string, ResourceDistEntry>>;
+
 export type VariantConstraints = Record<string, Record<string, Record<string, string>>>;
 
 export type CooldownEntry = {
@@ -172,6 +176,9 @@ export type CooldownEntry = {
 
 export type CooldownDistribution = Record<string, Record<string, CooldownEntry>>;
 
+// Activity delays per activity, as the same histogram + selected band as a cooldown
+export type ActivityDelayDistribution = Record<string, CooldownEntry>;
+
 export type AllocationStrategy = Record<string, string>;
 
 export type VariantDetail = {
@@ -179,7 +186,7 @@ export type VariantDetail = {
   support: number;
   activity_sequence: string[];
   arrival_distribution: VariantArrivalDistribution;
-  resource_distribution: Record<string, Record<string, ResourceDistEntry>>;
+  resource_distribution: ResourceDemand;
   constraints: VariantConstraints;
   uses_fallback: boolean;
 };
@@ -202,6 +209,7 @@ export type SimulationDetailsResponse = {
   num_variants: number;
   fallback_constraints: VariantConstraints;
   cooldown_distribution: CooldownDistribution;
+  activity_delays?: ActivityDelayDistribution;
   allocation_strategy: AllocationStrategy;
   type_calendars: Record<string, CalendarProbability>;
   shift_patterns?: Record<string, ShiftPattern[]>;

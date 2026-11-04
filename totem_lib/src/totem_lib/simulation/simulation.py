@@ -49,10 +49,6 @@ VIOLATION_COST_WEIGHTS = {
     "disjoint": 1.0,
     "superset": 1.0,
 }
-# Whether to space successor activities additionally by sampled inter-event times
-# Needed when the only resource based steering of activity enablement is not enough
-# This might occur, when the log is sparse, or many resources are available
-MODEL_ACTIVITY_DURATIONS = True
 # Time resolution of the playout in seconds (timestamps are Unix seconds). A causal
 # successor fires at least this long after its predecessor, so the order of the
 # output log never depends on the tie-break by event id.
@@ -740,11 +736,7 @@ class OCProcessAreaSimulationConfiguration:
     - Constraint_Lookback_Length: Number of prior events to look back for when checking constraints. Higher values may lead to more realistic simulations but also increased computational complexity. If value is None, then all prior events will be considered
     - Violation_Cost_Weights: Relative cost (in budget units) of violating each
       constraint type. A higher cost makes that violation type rarer for a given
-      violation degree;
-    - Model_Activity_Durations: When True, successor activities are delayed by
-      inter-activity durations sampled from the log so simulated cycle times are
-      realistic. When False, enabled activities fire as soon as their resources
-      are available, ``MIN_EVENT_SPACING_S`` after their predecessor at the earliest
+      violation degree
     """
 
     def __init__(
@@ -752,12 +744,10 @@ class OCProcessAreaSimulationConfiguration:
         resource_constraint_violation_degree=RESOURCE_CONSTRAINT_VIOLATION_DEGREE,
         constraint_lookback_length=CONSTRAINT_LOOKBACK_LENGTH,
         violation_cost_weights=VIOLATION_COST_WEIGHTS,
-        model_activity_durations=MODEL_ACTIVITY_DURATIONS,
     ):
         self.resource_constraint_violation_degree = resource_constraint_violation_degree
         self.constraint_lookback_length = constraint_lookback_length
         self.violation_cost_weights = violation_cost_weights.copy()
-        self.model_activity_durations = model_activity_durations
 
 
 class OCProcessAreaSimulationModel:
@@ -815,6 +805,7 @@ class OCProcessAreaSimulationModel:
         start_datetime: dt.datetime = None,
         progress_callback=None,
     ):
+        validate_resource_pool(resource_pool)
         return self.playout_strategy.run(
             self,
             sim_duration_s,
@@ -1106,6 +1097,22 @@ def _hour_aligned_start(start_datetime, simulation_model):
     else:
         start_unix = int(start_datetime.timestamp())
     return dt.datetime.fromtimestamp(start_unix - start_unix % 3600, tz=dt.timezone.utc)
+
+
+def validate_resource_pool(resource_pool):
+    """Check that the resource pool is strictly positive.
+
+    Args:
+        resource_pool: ``{res_type: count}``.
+
+    Raises:
+        ValueError: If a resource type has a count below one.
+    """
+    invalid = sorted(t for t, count in resource_pool.items() if count < 1)
+    if invalid:
+        raise ValueError(
+            f"Every resource type needs at least one resource: {', '.join(invalid)}"
+        )
 
 
 def _expand_resource_pool(resource_pool):
@@ -1510,9 +1517,6 @@ class VariantPlayoutStrategy:
         base_ts = int(start_datetime.timestamp())
 
         activity_delays = simulation_model.activity_delays or {}
-        model_durations = bool(
-            simulation_config.model_activity_durations and activity_delays
-        )
 
         schedule = generate_arrival_schedule(
             self.variants,
@@ -1608,17 +1612,16 @@ class VariantPlayoutStrategy:
 
                     # Duration model: hold a node back until its enabling time
                     # + sampled inter-activity delay. Execution-start nodes (no predecessors) fire immediately;
-                    if model_durations:
-                        preds = preds_map[node]
-                        if preds:
-                            if node not in ready_at:
-                                ready_at[node] = _sample_ready_time(
-                                    max(finish_time[p] for p in preds),
-                                    activity,
-                                    activity_delays,
-                                )
-                            if now < ready_at[node]:
-                                continue  # not due yet
+                    preds = preds_map[node]
+                    if preds:
+                        if node not in ready_at:
+                            ready_at[node] = _sample_ready_time(
+                                max(finish_time[p] for p in preds),
+                                activity,
+                                activity_delays,
+                            )
+                        if now < ready_at[node]:
+                            continue  # not due yet
 
                     # Determine how many resources of each type this activity needs
                     needed_res_types = needed_res_cache.get(node)
@@ -1736,11 +1739,7 @@ class VariantPlayoutStrategy:
                     if fired_any:
                         inst["next_wake"] = now + MIN_EVENT_SPACING_S
                     else:
-                        wake = (
-                            _earliest_future_ready(inst, now, activity_delays)
-                            if model_durations
-                            else None
-                        )
+                        wake = _earliest_future_ready(inst, now, activity_delays)
                         if resource_blocked:
                             blocked_wake = _resource_blocked_wake(
                                 now,
@@ -1868,9 +1867,6 @@ class StateSpacePlayoutStrategy:
         simulation_config = simulation_model.simulation_config
         base_ts = int(start_datetime.timestamp())
         activity_delays = simulation_model.activity_delays or {}
-        model_durations = bool(
-            simulation_config.model_activity_durations and activity_delays
-        )
 
         schedule = generate_arrival_schedule(
             self.structure_variants,
@@ -1986,14 +1982,14 @@ class StateSpacePlayoutStrategy:
                         _sample_ready_time(
                             inst["last_finish"], event[0], activity_delays
                         )
-                        if model_durations and inst["event_index"] > 0
+                        if inst["event_index"] > 0
                         else inst["last_finish"]
                     )
 
                 activity, participants = inst["pending"]
 
                 # Duration model: hold the event until its ready time.
-                if model_durations and now < inst["ready_at"]:
+                if now < inst["ready_at"]:
                     inst["next_wake"] = inst["ready_at"]
                     next_active.append(inst)
                     continue

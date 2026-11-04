@@ -18,6 +18,7 @@ from itertools import pairwise
 
 import networkx as nx
 import numpy as np
+import pytest
 
 from totem_lib.simulation.simulation import (
     MIN_EVENT_SPACING_S,
@@ -243,6 +244,24 @@ def test_pool_too_small_blocks_activity():
     assert spawned > 0
     assert fin_small == 0
     assert fin_ok > 0
+
+
+@pytest.mark.parametrize("count", [0, -1])
+def test_pool_not_strictly_positive_is_rejected(count):
+    """A run with a count below one does not start, and the error names the type."""
+    model = _build_model(_single("Load"), needed=_needs({"Load": {"Worker": 1}}))
+    with pytest.raises(ValueError, match="Forklift"):
+        _run(model, pool={"Worker": 2, "Forklift": count})
+
+
+def test_pool_missing_type_does_not_block():
+    """A type missing from the pool is not modelled, so its demand is skipped."""
+    needed = _needs({"Load": {"Worker": 1, "Forklift": 1}})
+    _, finished, spawned = _run(
+        _build_model(_single("Load"), needed=needed), pool={"Worker": 2}
+    )
+    assert spawned > 0
+    assert finished > 0
 
 
 # --- resource constraints & violation degree ---
@@ -662,30 +681,22 @@ def test_arrival_schedule_count_follows_the_hourly_rate():
 
 
 def test_activity_duration_model_delays_successor():
-    """With the duration model on, B is held back by a sampled inter-activity
-    delay; with it off, B fires one time step after A. Resource-free so the gap
+    """B is held back by a sampled inter-activity delay. Resource-free so the gap
     is pure timing.
     """
     delay_s = 1800
     needed = _needs({"A": {}, "B": {}})
-    delays = {"B": [delay_s]}
+    variant = _chain("A", "B")
+    model = _build_model(variant, needed=needed, delays={"B": [delay_s]})
+    ocel, _, _ = _run(model, pool={}, duration_s=2 * HOUR)
+    gaps = [
+        acts["B"]["ts"] - acts["A"]["ts"]
+        for acts in _by_instance(ocel).values()
+        if "A" in acts and "B" in acts
+    ]
 
-    def gaps(config):
-        variant = _chain("A", "B")
-        model = _build_model(variant, needed=needed, delays=delays, config=config)
-        ocel, _, _ = _run(model, pool={}, duration_s=2 * HOUR)
-        return [
-            acts["B"]["ts"] - acts["A"]["ts"]
-            for acts in _by_instance(ocel).values()
-            if "A" in acts and "B" in acts
-        ]
-
-    on = gaps(OCProcessAreaSimulationConfiguration(model_activity_durations=True))
-    off = gaps(OCProcessAreaSimulationConfiguration(model_activity_durations=False))
-
-    assert on and off
-    assert all(gap == delay_s for gap in on)
-    assert all(gap == MIN_EVENT_SPACING_S for gap in off)
+    assert gaps
+    assert all(gap == delay_s for gap in gaps)
 
 
 def test_causal_successor_never_shares_its_predecessors_timestamp():

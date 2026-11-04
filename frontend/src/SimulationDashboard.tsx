@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
-import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
@@ -31,6 +30,8 @@ import {
   CalendarProbability,
   ShiftPattern,
   CooldownDistribution,
+  ActivityDelayDistribution,
+  ResourceDemand,
   AllocationStrategy,
   PaperEvaluationResult,
 } from "@/api/simulationApi";
@@ -43,6 +44,11 @@ import {
 } from "@/components/simulation/ResourceCalendarEditor";
 import { ConstraintsEditorPanel } from "@/components/simulation/ConstraintsEditor";
 import { CooldownEditor } from "@/components/simulation/CooldownEditor";
+import { ActivityDelayEditor } from "@/components/simulation/ActivityDelayEditor";
+import {
+  ResourceDemandEditor,
+  cloneDemand,
+} from "@/components/simulation/ResourceDemandEditor";
 import {
   ExternalLoadEditor,
   type ExternalLoadSetting,
@@ -247,7 +253,6 @@ export const SimulationDashboard: React.FC = () => {
   const [simStartUnix, setSimStartUnix] = useState<number | null>(null);
   const [violationDegree, setViolationDegree] = useState(0.0);
   const [lookbackLength, setLookbackLength] = useState<number | null>(null);
-  const [modelActivityDurations, setModelActivityDurations] = useState(true);
 
   // Constraint mining config
   const [supportThreshold, setSupportThreshold] = useState(0.8);
@@ -302,6 +307,10 @@ export const SimulationDashboard: React.FC = () => {
   // Cooldowns and allocation strategy
   const [cooldowns, setCooldowns] = useState<CooldownDistribution>({});
   const [allocationStrategy, setAllocationStrategy] = useState<AllocationStrategy>({});
+
+  // Activity delays (duration model) and the per-variant resource demand
+  const [activityDelays, setActivityDelays] = useState<ActivityDelayDistribution>({});
+  const [resourceDemand, setResourceDemand] = useState<Record<number, ResourceDemand>>({});
 
   // External load: discovered process-area capacity share per resource type and
   // the user's setting (on/off + share) on top of it.
@@ -370,6 +379,8 @@ export const SimulationDashboard: React.FC = () => {
     setCalendarOverrides([]);
     setCooldowns({});
     setAllocationStrategy({});
+    setActivityDelays({});
+    setResourceDemand({});
     setDiscoveredCapacityShares({});
     setExternalLoad({});
     setPhase("configure");
@@ -590,6 +601,13 @@ export const SimulationDashboard: React.FC = () => {
       setCooldowns(data.cooldown_distribution || {});
       setAllocationStrategy(data.allocation_strategy || {});
 
+      setActivityDelays(data.activity_delays || {});
+      const initialDemand: Record<number, ResourceDemand> = {};
+      data.variants.forEach((v) => {
+        initialDemand[v.id] = cloneDemand(v.resource_distribution);
+      });
+      setResourceDemand(initialDemand);
+
       // External load starts on with the discovered share; a type without
       // observed events has no evidence of external work (share 1.0).
       const discoveredShares = data.pa_capacity_shares || {};
@@ -725,7 +743,9 @@ export const SimulationDashboard: React.FC = () => {
         constraints: constraintsPayload,
         global_constraints: globalConstraints,
         arrival_distributions: arrivalDistributions,
+        resource_demand: resourceDemand,
         cooldowns,
+        activity_delays: activityDelays,
         allocation_strategy: allocationStrategy,
         type_calendars: editedTypeCalendars,
         resource_calendars: resourceCalendars,
@@ -741,7 +761,6 @@ export const SimulationDashboard: React.FC = () => {
       resource_pool: resourcePool,
       sim_duration_days: simDurationDays,
       sim_start_unix: simStartUnix,
-      model_activity_durations: modelActivityDurations,
       resource_constraint_violation_degree: violationDegree,
       constraint_lookback_length: lookbackLength,
       mode,
@@ -786,7 +805,9 @@ export const SimulationDashboard: React.FC = () => {
     }
   };
 
-  const canLoadDetails = selectedObjectTypes.length > 0 && selectedActivities.length > 0;
+  const invalidPoolTypes = Object.keys(resourcePool).filter((t) => resourcePool[t] < 1);
+  const canLoadDetails =
+    selectedObjectTypes.length > 0 && selectedActivities.length > 0 && invalidPoolTypes.length === 0;
   const canRun = canLoadDetails;
 
   const loadDetailsHint =
@@ -796,7 +817,9 @@ export const SimulationDashboard: React.FC = () => {
         ? "Select at least one object type to continue."
         : selectedActivities.length === 0
           ? "Select at least one activity to continue."
-          : "";
+          : invalidPoolTypes.length > 0
+            ? "Every resource type needs at least one resource."
+            : "";
 
   // --- Render ---
 
@@ -1008,7 +1031,7 @@ export const SimulationDashboard: React.FC = () => {
                     <span className="text-sm flex-1 min-w-0 truncate">{resType}</span>
                     <Input
                       type="number"
-                      min={0}
+                      min={1}
                       value={count}
                       onChange={(e) => updateResourceCount(resType, parseInt(e.target.value) || 0)}
                       className="w-20"
@@ -1016,6 +1039,11 @@ export const SimulationDashboard: React.FC = () => {
                     <Button variant="ghost" size="sm" onClick={() => removeResourceType(resType)}>x</Button>
                   </div>
                 ))}
+                {invalidPoolTypes.length > 0 && (
+                  <p className="text-destructive text-sm">
+                    Every resource type needs at least one resource: {invalidPoolTypes.join(", ")}
+                  </p>
+                )}
 
                 {resourceSuggestions.filter((ot) => !resourcePool[ot] && !selectedObjectTypes.includes(ot)).length > 0 && (
                   <div className="pt-2">
@@ -1057,20 +1085,6 @@ export const SimulationDashboard: React.FC = () => {
             <Card>
               <CardHeader><CardTitle>Simulation Parameters</CardTitle></CardHeader>
               <CardContent className="space-y-4">
-                <div className="flex items-start gap-3">
-                  <Switch id="model-durations" className="mt-1"
-                    checked={modelActivityDurations}
-                    onCheckedChange={setModelActivityDurations} />
-                  <div>
-                    <Label htmlFor="model-durations">Model activity durations</Label>
-                    <p className="text-[10px] text-muted-foreground mt-0.5">
-                      Delay each activity by inter-activity times learned from the log
-                      so cycle times are realistic. Disable to fire activities
-                      immediately (events collapse onto tick boundaries).
-                    </p>
-                  </div>
-                </div>
-
                 <div>
                   <Label>Constraint violation degree: {violationDegree.toFixed(2)}</Label>
                   <Slider value={[violationDegree]} onValueChange={([v]) => setViolationDegree(v)}
@@ -1307,6 +1321,21 @@ export const SimulationDashboard: React.FC = () => {
             </CollapsibleSection>
           )}
 
+          {/* Activity Delay Editor */}
+          {Object.keys(activityDelays).length > 0 && (
+            <CollapsibleSection title="Activity Delays" description={`${Object.keys(activityDelays).length} activity delay(s)`}>
+              <ActivityDelayEditor
+                delays={activityDelays}
+                onUpdate={(activity, selectMin, selectMax) => {
+                  setActivityDelays((prev) => ({
+                    ...prev,
+                    [activity]: { ...prev[activity], select_min_s: selectMin, select_max_s: selectMax },
+                  }));
+                }}
+              />
+            </CollapsibleSection>
+          )}
+
           {/* Allocation Strategy */}
           {Object.keys(allocationStrategy).length > 0 && (
             <CollapsibleSection title="Resource Allocation Strategy" description="FIFO / LIFO / Random per resource type">
@@ -1366,59 +1395,16 @@ export const SimulationDashboard: React.FC = () => {
             />
           </CollapsibleSection>
 
-          {/* Resource Distribution */}
-          <CollapsibleSection title="Resource Distribution" description="Mean/min/max resource counts per activity" defaultOpen={false}>
-            <Card>
-              <CardContent className="pt-4 space-y-4">
-                {details.variants.map((variant) => (
-                  <div key={variant.id} className="border rounded p-3">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Badge variant="outline">Variant {variant.id + 1}</Badge>
-                      <span className="text-xs text-muted-foreground">Support: {variant.support}</span>
-                    </div>
-                    {Object.keys(variant.resource_distribution).length > 0 ? (
-                      <table className="w-full text-xs">
-                        <thead>
-                          <tr className="border-b">
-                            <th className="text-left py-1">Activity</th>
-                            <th className="text-left py-1">Resource Type</th>
-                            <th className="text-right py-1">Mean</th>
-                            <th className="text-left py-1">Count Distribution</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {Object.entries(variant.resource_distribution).map(([act, resTypes]) =>
-                            Object.entries(resTypes).map(([resType, stats], idx) => {
-                              const dist = stats.count_distribution ?? {};
-                              const entries = Object.entries(dist)
-                                .map(([count, prob]) => [Number(count), prob] as [number, number])
-                                .sort((a, b) => a[0] - b[0]);
-                              const mean = entries.reduce((s, [count, prob]) => s + count * prob, 0);
-                              return (
-                                <tr key={`${act}-${resType}`} className="border-b last:border-0">
-                                  {idx === 0 && (
-                                    <td className="py-1 font-medium" rowSpan={Object.keys(resTypes).length}>{act}</td>
-                                  )}
-                                  <td className="py-1">{resType}</td>
-                                  <td className="text-right py-1">{mean.toFixed(2)}</td>
-                                  <td className="py-1">
-                                    {entries
-                                      .map(([count, prob]) => `${count}: ${(prob * 100).toFixed(0)}%`)
-                                      .join(" · ")}
-                                  </td>
-                                </tr>
-                              );
-                            })
-                          )}
-                        </tbody>
-                      </table>
-                    ) : (
-                      <p className="text-xs text-muted-foreground">No resource data</p>
-                    )}
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
+          {/* Resource Demand Editor */}
+          <CollapsibleSection title="Resource Demand" description="Resources needed per activity occurrence, per variant">
+            <ResourceDemandEditor
+              variants={details.variants}
+              demand={resourceDemand}
+              resourceTypes={Object.keys(resourcePool).filter((t) => resourcePool[t] > 0)}
+              onChange={(variantId, demand) =>
+                setResourceDemand((prev) => ({ ...prev, [variantId]: demand }))
+              }
+            />
           </CollapsibleSection>
 
           {/* Run button at bottom */}

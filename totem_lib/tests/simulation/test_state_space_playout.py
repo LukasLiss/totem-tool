@@ -85,9 +85,7 @@ def _advanced_model(ocel):
         resource_allocation_strategy={},
         resource_cooldown_distribution={},
         needed_resources_per_activity={},  # no activity needs resources
-        simulation_config=OCProcessAreaSimulationConfiguration(
-            model_activity_durations=False
-        ),
+        simulation_config=OCProcessAreaSimulationConfiguration(),
         source_log_start_unix=int(START.timestamp()),
         activity_delays={},
     )
@@ -128,9 +126,7 @@ def test_state_space_playout_no_arrivals_is_empty():
         resource_allocation_strategy={},
         resource_cooldown_distribution={},
         needed_resources_per_activity={},
-        simulation_config=OCProcessAreaSimulationConfiguration(
-            model_activity_durations=False
-        ),
+        simulation_config=OCProcessAreaSimulationConfiguration(),
         source_log_start_unix=int(START.timestamp()),
         activity_delays={},
     )
