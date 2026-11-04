@@ -159,8 +159,8 @@ const StepProgress: React.FC<{ steps: string[]; active: number; percent?: number
 
 /**
  * Wizard-style step indicator across the top of the dashboard.
- * Maps the current simulation `phase` onto discrete steps (Basics -> Details ->
- * Results). **/
+ * Maps the current simulation `phase` onto discrete steps (Model Discovery ->
+ * Scenario Configuration -> Results). **/
 
 const SimulationStepper: React.FC<{
   phase: Phase;
@@ -169,8 +169,8 @@ const SimulationStepper: React.FC<{
 }> = ({ phase, onGoConfigure, onGoDetails }) => {
   // review and adjust the discovered parameters before running, in either mode.
   const steps: { key: string; title: string }[] = [
-    { key: "configure", title: "Basics" },
-    { key: "details", title: "Details" },
+    { key: "configure", title: "Model Discovery" },
+    { key: "details", title: "Scenario Configuration" },
     { key: "results", title: "Results" },
   ];
 
@@ -622,7 +622,7 @@ export const SimulationDashboard: React.FC = () => {
       setPhase("details");
     } catch (err: any) {
       if (fileIdRef.current !== fileId) return;
-      setDetailsError(err.message || "Failed to load details");
+      setDetailsError(err.message || "Failed to discover model");
       setDetailsLoading(false);
     }
   };
@@ -899,7 +899,6 @@ export const SimulationDashboard: React.FC = () => {
                 <p className="text-sm text-muted-foreground mt-1">
                   State-space playout with connected component distribution.
                 </p>
-                <Badge variant="outline" className="mt-2">Experimental</Badge>
               </button>
             </div>
           </CardContent>
@@ -1147,7 +1146,7 @@ export const SimulationDashboard: React.FC = () => {
                 <span className="block w-full">
                   <Button className="w-full" size="lg" disabled={!canLoadDetails || detailsLoading}
                     onClick={handleLoadDetails}>
-                    {detailsLoading ? "Loading details..." : "Load Simulation Details"}
+                    {detailsLoading ? "Discovering model..." : "Discover Model"}
                   </Button>
                 </span>
               </TooltipTrigger>
