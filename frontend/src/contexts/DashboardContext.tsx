@@ -1,5 +1,14 @@
-import React, { createContext, useCallback, useRef, useState } from "react";
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { useNavigate } from "react-router-dom";
+
+import { SelectedFileContext } from "./SelectedFileContext";
 
 export type AnalysisComponent =
   | "processArea"
@@ -61,6 +70,29 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({
   const [viewMode, setViewModeState] = useState<ViewMode>({ type: "overview" });
   const navigate = useNavigate();
   const navigationGuard = useRef<NavigationGuard | null>(null);
+
+  // Every view but the overview belongs to the project it was opened from: a
+  // dashboard of one project is not in another's sidebar and its widgets would
+  // compute against the wrong log, and the asset ids carried by the model,
+  // query, conformance and editor views are project-scoped just the same. So
+  // changing the open event log drops the app back to the overview.
+  //
+  // Keyed on the id rather than the object: renaming the open project hands
+  // back a fresh object for the same log (`team-switcher.tsx`), and that must
+  // not eject the user from what they are looking at. Editors keep their
+  // unsaved models across the unmount via `editors/shared/sessionCache.ts`.
+  const { selectedFile } = useContext(SelectedFileContext);
+  const openFileId = selectedFile?.id ?? null;
+  const lastOpenFileId = useRef(openFileId);
+
+  useEffect(() => {
+    if (lastOpenFileId.current === openFileId) return;
+    lastOpenFileId.current = openFileId;
+    // `setViewModeState`, not `setViewMode`: navigating would throw the user
+    // off the start page while they are still choosing which project to open,
+    // and the navigation guard defends a view whose project has just been left.
+    setViewModeState({ type: "overview" });
+  }, [openFileId]);
 
   const registerNavigationGuard = useCallback(
     (guard: NavigationGuard | null) => {
