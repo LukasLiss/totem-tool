@@ -1,10 +1,11 @@
-const { app, BrowserWindow, dialog, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, shell } = require('electron');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const http = require('http');
 const net = require('net');
 const express = require('express');
 const treeKill = require('tree-kill');
+const { checkForUpdates } = require('./update-check');
 
 let mainWindow = null;
 let backendProcess = null;
@@ -335,6 +336,38 @@ function createWindow() {
 }
 
 // ---------------------------------------------------------------------------
+// Menu (the default one, plus "Check for Updates..." under Help)
+// ---------------------------------------------------------------------------
+
+function buildMenu() {
+  const isMac = process.platform === 'darwin';
+  const template = [
+    ...(isMac ? [{ role: 'appMenu' }] : []),
+    { role: 'fileMenu' },
+    { role: 'editMenu' },
+    { role: 'viewMenu' },
+    { role: 'windowMenu' },
+    {
+      role: 'help',
+      submenu: [
+        {
+          label: 'Check for Updates...',
+          click: () => checkForUpdates(mainWindow, { manual: true }),
+        },
+        {
+          label: 'Visit totem-tool.com',
+          click: () => shell.openExternal('https://totem-tool.com'),
+        },
+      ],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+// Delay the automatic check so the popup does not race the first paint.
+const UPDATE_CHECK_DELAY_MS = 5_000;
+
+// ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
 
@@ -342,6 +375,7 @@ app.whenReady().then(async () => {
   try {
     await startFrontendServer();
     await startBackend();
+    buildMenu();
     createWindow();
   } catch (e) {
     console.error('Startup failed:', e);
@@ -352,6 +386,13 @@ app.whenReady().then(async () => {
         : `${e && e.message ? e.message : e}`
     );
     app.exit(1);
+    return;
+  }
+  // Only installed builds check: a dev checkout is not a release.
+  if (!isDev && process.env.TOTEM_DISABLE_UPDATE_CHECK !== '1') {
+    setTimeout(() => {
+      checkForUpdates(mainWindow).catch((e) => console.warn(`[Update] ${e.message}`));
+    }, UPDATE_CHECK_DELAY_MS);
   }
 });
 
