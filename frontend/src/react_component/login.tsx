@@ -63,8 +63,6 @@ const GoogleIcon = () => (
   </svg>
 );
 
-const ALL_PROVIDERS: OAuthProvider[] = ["github", "google"];
-
 const PROVIDER_ICONS: Record<OAuthProvider, ComponentType> = {
   github: GitHubIcon,
   google: GoogleIcon,
@@ -76,6 +74,9 @@ export const Login = () => {
   const [password, setPassword] = useState('');
   // null while loading.
   const [options, setOptions] = useState<LoginOptions | null>(null);
+  // The password form is only for the admin, so it starts folded away
+  // unless the server runs with DEV_LOGIN (local development).
+  const [showAdminLogin, setShowAdminLogin] = useState(false);
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -96,6 +97,7 @@ export const Login = () => {
             password_login: Boolean(data.password_login),
             providers: data.providers ?? [],
           });
+          setShowAdminLogin(Boolean(data.password_login));
         }
       })
       .catch(() => {
@@ -205,30 +207,45 @@ export const Login = () => {
     </div>
   );
 
+  // Each OAuth button hands off to the provider, where the user signs in or
+  // signs up; the first sign-in creates the TOTeM account. /token/ is always
+  // enabled, so the admin can use the password form on any server.
   let body: ReactNode;
   if (options === null) {
     body = <div className="h-24" aria-busy="true" />;
-  } else if (options.password_login) {
+  } else {
     body = (
       <>
-        {passwordForm}
-        {options.providers.length > 0 && (
+        {options.providers.length > 0 ? (
+          renderOAuthButtons(options.providers)
+        ) : (
+          <p className="text-muted-foreground text-center text-sm">
+            No OAuth login options are set up. Contact the admin.
+          </p>
+        )}
+        {showAdminLogin ? (
           <>
             <div className="text-muted-foreground flex items-center gap-3 text-xs">
               <span className="bg-border h-px flex-1" />
               or
               <span className="bg-border h-px flex-1" />
             </div>
-            {renderOAuthButtons(options.providers)}
+            <p className="text-muted-foreground text-center text-sm">
+              Admin login with email and password
+            </p>
+            {passwordForm}
           </>
+        ) : (
+          <button
+            type="button"
+            className="text-muted-foreground hover:text-foreground w-fit text-left text-xs underline-offset-4 hover:underline"
+            onClick={() => setShowAdminLogin(true)}
+          >
+            Admin login
+          </button>
         )}
       </>
     );
-  } else {
-    // OAuth login (DEV_LOGIN off): no username/password, just GitHub and
-    // Google. Each button hands off to the provider, where the user signs
-    // in or signs up; the first sign-in creates the TOTeM account.
-    body = renderOAuthButtons(ALL_PROVIDERS);
   }
 
   return (
@@ -239,9 +256,7 @@ export const Login = () => {
         <CardHeader className="text-center">
           <CardTitle className="text-xl">Welcome back</CardTitle>
           <CardDescription>
-            {options?.password_login
-              ? "Login with your account details"
-              : "Sign in or sign up with your GitHub or Google account"}
+            Sign in or sign up with your GitHub or Google account
           </CardDescription>
         </CardHeader>
         <CardContent>
