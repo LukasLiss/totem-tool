@@ -45,6 +45,11 @@ class Project(models.Model):
     # existed.
     display_name = models.CharField(max_length=120, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
+    # Per-project preferences of analysis views, keyed by view (e.g. the
+    # OC-DFG layout under "ocdfg-variants"). Written through
+    # /api/projects/<id>/view-settings/<key>/; the frontend validates what it
+    # reads and falls back to its defaults when an entry is unusable.
+    view_settings = models.JSONField(default=dict, blank=True)
 
     def __str__(self):
         return f"{self.display_name or self.name}"
@@ -406,6 +411,9 @@ class NewOCDFGComponent(DashboardComponent):
         choices=[('TB', 'Top to Bottom'), ('LR', 'Left to Right')],
         default='TB',
     )
+    # Layout preferences chosen in the widget's layout panel
+    # ({"version": 1, "options": {...}}); null means the defaults.
+    layout_options = models.JSONField(null=True, blank=True, default=None)
 
 class PieChartComponent(DashboardComponent):
     query = models.TextField(default="SELECT * FROM events LIMIT 10")

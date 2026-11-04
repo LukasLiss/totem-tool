@@ -81,19 +81,6 @@ html, body, #root {
 
 }
 
-:root {
-  --ocdfg-flow-length: 60;
-}
-
-@keyframes ocdfg-flow {
-  0% {
-    stroke-dashoffset: var(--ocdfg-flow-length);
-  }
-  100% {
-    stroke-dashoffset: 0;
-  }
-}
-
 .ocdfg-controls.react-flow__controls {
   background: #ffffff;
   border: 1px solid #e2e8f0;
@@ -131,12 +118,6 @@ html, body, #root {
   background-color: #e2e8f0;
 }
 
-/* Keep arrow heads static even when edges are animated */
-.react-flow__edge.animated .ocdfg-arrow-head {
-  stroke-dasharray: none;
-  animation: none;
-}
-
 
 
 /* Ensure mouse hover events reach nodes when interaction is locked */
@@ -147,9 +128,6 @@ html, body, #root {
 /* Prevent subpixel SVG edge flickering during pan and zoom */
 .react-flow__edges,
 .react-flow__edge-path,
-.ocdfg-edge-line,
-.ocdfg-edge-base,
-.ocdfg-arrow-head,
 .totem-primary-svg path,
 .totem-primary-svg line {
   transform: translateZ(0);
@@ -158,8 +136,6 @@ html, body, #root {
 }
 
 .react-flow__edge-path,
-.ocdfg-edge-line,
-.ocdfg-edge-base,
 .totem-primary-svg path,
 .totem-primary-svg line {
   shape-rendering: geometricPrecision;

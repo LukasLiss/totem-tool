@@ -36,6 +36,7 @@ from ..models import (
     ResourceProfilingComponent,
     OCAlignmentComponent,
 )
+from ..view_preferences import clean_preferences, preferences_error
 from ..serializers import (
     DashboardComponentPolymorphicSerializer,
     DashboardSerializer,
@@ -307,6 +308,47 @@ class DashboardViewSet(viewsets.ModelViewSet):
     }
 
     _REQUIRED_LAYOUT_KEYS = ("component_name", "x", "y", "w", "h")
+
+    @action(detail=True, methods=["PATCH"])
+    def ocdfg_layout(self, request, pk=None):
+        """
+        Store the layout options of one OC-DFG widget while the dashboard is
+        viewed (outside edit mode, where `save_layout` would rebuild every
+        component).
+
+        Body: ``{"x": int, "y": int, "layout_options": object | null}``. The
+        widget is identified by its grid position: widgets never overlap, and
+        component ids change with every `save_layout`, so an id held by the
+        page can be stale. ``null`` resets the widget to the default layout.
+        """
+        dashboard = self.get_object()
+        x = request.data.get("x")
+        y = request.data.get("y")
+        if not all(isinstance(v, int) and not isinstance(v, bool) for v in (x, y)):
+            return Response(
+                {"error": "x and y must be integers"}, status=status.HTTP_400_BAD_REQUEST
+            )
+        if "layout_options" not in request.data:
+            return Response(
+                {"error": "layout_options is required (null resets the layout)"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        layout_options = request.data.get("layout_options")
+        error = preferences_error(layout_options)
+        if error:
+            return Response(
+                {"error": f"layout_options {error}"}, status=status.HTTP_400_BAD_REQUEST
+            )
+        matches = list(NewOCDFGComponent.objects.filter(dashboard=dashboard, x=x, y=y))
+        if len(matches) != 1:
+            return Response(
+                {"error": "No OC-DFG widget at this position"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        component = matches[0]
+        component.layout_options = layout_options
+        component.save(update_fields=["layout_options"])
+        return Response({"x": x, "y": y, "layout_options": layout_options})
 
     @action(detail=True, methods=["GET"])
     def get_layout(self, request, pk=None):
@@ -592,6 +634,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                         "initial_interaction_locked", True
                     ),
                     layout_direction=item.get("layout_direction", "TB"),
+                    layout_options=clean_preferences(item.get("layout_options")),
                 )
             elif component_name == "OCCNComponent":
                 OCCNComponent.objects.create(

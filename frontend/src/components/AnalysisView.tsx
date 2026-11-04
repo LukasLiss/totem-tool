@@ -11,6 +11,8 @@ import {
 } from "@/components/ui/card";
 import ProcessArea from "@/react_component/ProcessArea";
 import NewOCDFGVariantsVisualizer from "@/react_component/NewOCDFGVariantsVisualizer";
+import { OCDFG_PROJECT_LAYOUT_KEY } from "@/react_component/ocdfg-layout/options";
+import { useProjectLayoutStorage } from "@/react_component/ocdfg-layout/useLayoutOptions";
 import OCCNVisualizer from "@/react_component/OCCNVisualizer";
 import VariantsExplorer from "@/react_component/VariantsExplorer";
 import DottedChart from "@/react_component/DottedChart";
@@ -34,6 +36,11 @@ export function AnalysisView() {
   // Reset local filter when switching components or files
   const viewComponent = viewMode.type === "analysis" ? viewMode.component : null;
   React.useEffect(() => { setLocalFilterParams({}); }, [viewComponent, selectedFile?.id]);
+  // The OC-DFG layout is stored with the project (shared with the overview).
+  const ocdfgLayout = useProjectLayoutStorage(
+    viewComponent === "ocdfg" ? selectedFile?.project : undefined,
+    OCDFG_PROJECT_LAYOUT_KEY,
+  );
 
   if (viewMode.type !== "analysis") return null;
 
@@ -59,16 +66,17 @@ export function AnalysisView() {
                 <CardDescription>Directly-Follows Graph visualization</CardDescription>
               </CardHeader>
               <CardContent className="h-[700px] p-0">
-                <ReactFlowProvider>
-                  <NewOCDFGVariantsVisualizer
-                    height="100%"
-                    fileId={selectedFile?.id}
-                    filterEnabled={filterEnabled}
-                    onToggleFilter={toggleFilter}
-                    showTitle={false}
-                    localFilterParams={localFilterParams}
-                  />
-                </ReactFlowProvider>
+                <NewOCDFGVariantsVisualizer
+                  height="100%"
+                  fileId={selectedFile?.id}
+                  filterEnabled={filterEnabled}
+                  onToggleFilter={toggleFilter}
+                  showTitle={false}
+                  localFilterParams={localFilterParams}
+                  storedLayout={ocdfgLayout.stored}
+                  onLayoutChange={ocdfgLayout.save}
+                  layoutScope={ocdfgLayout.scope}
+                />
               </CardContent>
             </Card>
           </div>

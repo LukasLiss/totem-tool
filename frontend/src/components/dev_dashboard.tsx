@@ -8,10 +8,11 @@ import {
 } from "@/components/ui/card"
 import { GlobalFilterToggle } from "@/components/ui/GlobalFilterToggle";
 import { LocalFilterDropdown } from "@/components/ui/LocalFilterDropdown";
-import { ReactFlowProvider } from "@xyflow/react";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import ProcessArea from "@/react_component/ProcessArea";
 import NewOCDFGVariantsVisualizer from "@/react_component/NewOCDFGVariantsVisualizer";
+import { OCDFG_PROJECT_LAYOUT_KEY } from "@/react_component/ocdfg-layout/options";
+import { useProjectLayoutStorage } from "@/react_component/ocdfg-layout/useLayoutOptions";
 import LogStatistics from "@/components/LogStatistics";
 
 /**
@@ -28,6 +29,8 @@ export function DevDashboard() {
   const { selectedFile } = useContext(SelectedFileContext);
   const [dfgFilterEnabled, setDfgFilterEnabled] = useState(true);
   const [dfgLocalFilter, setDfgLocalFilter] = useState<Record<string, string>>({});
+  // Same project-stored layout as Analysis → OC-DFG.
+  const ocdfgLayout = useProjectLayoutStorage(selectedFile?.project, OCDFG_PROJECT_LAYOUT_KEY);
 
   return (
     <div>
@@ -50,19 +53,20 @@ export function DevDashboard() {
             <CardDescription>Directly-follows relations per object type with arc weights and automatic layout</CardDescription>
           </CardHeader>
           <CardContent className="h-[640px] p-0">
-            <ReactFlowProvider>
-              <NewOCDFGVariantsVisualizer
-                height="100%"
-                fileId={selectedFile?.id}
-                showControls={true}
-                initialInteractionLocked={true}
-                layoutDirection="TB"
-                filterEnabled={dfgFilterEnabled}
-                onToggleFilter={() => setDfgFilterEnabled(p => !p)}
-                showTitle={false}
-                localFilterParams={dfgLocalFilter}
-              />
-            </ReactFlowProvider>
+            <NewOCDFGVariantsVisualizer
+              height="100%"
+              fileId={selectedFile?.id}
+              showControls={true}
+              initialInteractionLocked={true}
+              layoutDirection="TB"
+              filterEnabled={dfgFilterEnabled}
+              onToggleFilter={() => setDfgFilterEnabled(p => !p)}
+              showTitle={false}
+              localFilterParams={dfgLocalFilter}
+              storedLayout={ocdfgLayout.stored}
+              onLayoutChange={ocdfgLayout.save}
+              layoutScope={ocdfgLayout.scope}
+            />
           </CardContent>
         </Card>
       </div>
