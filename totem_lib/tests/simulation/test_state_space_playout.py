@@ -10,7 +10,9 @@ reused.
 """
 
 import datetime as dt
+import json
 import random
+from collections import defaultdict
 
 import numpy as np
 import polars as pl
@@ -210,3 +212,33 @@ def test_resource_demand_is_drawn_once_per_pending_event(monkeypatch):
     assert ocel.events.height > 0
     assert finished < spawned  # congested: the Worker is the bottleneck
     assert len(draws) == len(generated)
+
+
+def test_same_resource_fixes_the_drawn_demand():
+    """ship draws two Workers but create used one: a strict same_resource relation
+    makes ship reuse create's Worker instead of blocking its instance forever."""
+    random.seed(0)
+    np.random.seed(0)
+    model = _advanced_model(_order_items_log())
+    model.needed_resources_per_activity = {
+        sv: {
+            "create": {"Worker": {"count_distribution": {1: 1.0}}},
+            "ship": {"Worker": {"count_distribution": {2: 1.0}}},
+        }
+        for sv in model.playout_strategy.structure_variants
+    }
+    model.resource_constraints = {
+        sv: {"ship": {"create": {"Worker": "same_resource"}}}
+        for sv in model.playout_strategy.structure_variants
+    }
+    ocel, _, _ = model.run(sim_duration_s=6 * HOUR, resource_pool={"Worker": 5})
+
+    resources = defaultdict(dict)
+    for row in ocel.events.iter_rows(named=True):
+        instance = row["_eventId"].split("_")[2]
+        attributes = json.loads(row["_attributes"])
+        resources[instance][row["_activity"]] = attributes["process_area_resources"]
+
+    shipped = [acts for acts in resources.values() if "ship" in acts]
+    assert shipped
+    assert all(acts["ship"] == acts["create"] for acts in shipped)

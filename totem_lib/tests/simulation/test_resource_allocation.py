@@ -7,6 +7,7 @@ from totem_lib.simulation.simulation import (
     _allocate_single_type,
     _estimate_constraint_slots,
     _make_violation_budget,
+    _same_resource_demand,
     _ViolationBudget,
 )
 
@@ -113,6 +114,46 @@ def test_alloc_same_resource_infeasible_when_member_missing_and_strict():
     free = ["A", "C"]  # B not available
     vb = make_budget(0, 2)
     assert _allocate_single_type(2, free, [_same("A", "B")], vb, "FIFO") is None
+
+
+def test_same_demand_follows_reference_set():
+    constraints = {"prior": {"Worker": "same_resource"}}
+    assigned = {"prior": {"Worker": ["A", "B"]}}
+    assert _same_resource_demand({"Worker": 1}, constraints, assigned) == {"Worker": 2}
+    assert _same_resource_demand({"Worker": 3}, constraints, assigned) == {"Worker": 2}
+
+
+def test_same_demand_counts_a_repeated_resource_once():
+    constraints = {"prior": {"Worker": "same_resource"}}
+    assigned = {"prior": {"Worker": ["A", "A"]}}
+    assert _same_resource_demand({"Worker": 3}, constraints, assigned) == {"Worker": 1}
+
+
+def test_same_demand_leaves_other_types_and_constraints_alone():
+    constraints = {"prior": {"Worker": "subset"}}
+    assigned = {"prior": {"Worker": ["A", "B"]}}
+    needed = {"Worker": 1, "Forklift": 3}
+    assert _same_resource_demand(needed, constraints, assigned) == needed
+
+
+def test_same_demand_keeps_sampled_count_without_prior_assignment():
+    constraints = {"prior": {"Worker": "same_resource"}}
+    assert _same_resource_demand({"Worker": 3}, constraints, {}) == {"Worker": 3}
+
+
+def test_same_demand_ignores_types_the_event_does_not_need():
+    constraints = {"prior": {"Forklift": "same_resource"}}
+    assigned = {"prior": {"Forklift": ["F"]}}
+    assert _same_resource_demand({"Worker": 1}, constraints, assigned) == {"Worker": 1}
+
+
+def test_same_demand_uses_smallest_of_disagreeing_references():
+    constraints = {
+        "first": {"Worker": "same_resource"},
+        "second": {"Worker": "same_resource"},
+    }
+    assigned = {"first": {"Worker": ["A", "B"]}, "second": {"Worker": ["A"]}}
+    assert _same_resource_demand({"Worker": 3}, constraints, assigned) == {"Worker": 1}
 
 
 def test_alloc_must_use_included_when_available():

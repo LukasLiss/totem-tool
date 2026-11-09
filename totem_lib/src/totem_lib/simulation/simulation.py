@@ -601,6 +601,39 @@ def _allocate_single_type(n, free, constraints, vb, strategy):
     return selected
 
 
+def _same_resource_demand(needed_res_types, activity_constraints, prior_assignments):
+    """
+    Resource demand after applying the ``same_resource`` constraints.
+
+    Same requires identical resource sets, so a reference set fixes the count and
+    replaces the sampled one. Which resources are picked stays with the cost logic
+    of ``_allocate_single_type``. References can disagree, e.g. after an earlier
+    deviation; the smallest one then applies, as any further pick would be a
+    violation.
+
+    Args:
+        needed_res_types: Sampled demand {res_type: count}.
+        activity_constraints: {other_activity: {res_type: constraint_type}} of the
+            activity being allocated.
+        prior_assignments: {activity: {res_type: [res_id, ...]}} to compare against.
+
+    Returns:
+        {res_type: count} with the counts of same_resource types replaced.
+    """
+    demand = dict(needed_res_types)
+    same_counts = defaultdict(list)
+    for other_act, type_ctype_map in activity_constraints.items():
+        for res_type, ctype in type_ctype_map.items():
+            if ctype != "same_resource" or res_type not in demand:
+                continue
+            refs = prior_assignments.get(other_act, {}).get(res_type)
+            if refs:
+                same_counts[res_type].append(len(set(refs)))
+    for res_type, counts in same_counts.items():
+        demand[res_type] = min(counts)
+    return demand
+
+
 def _allocate_resources(
     activity,
     variant_constraints,
@@ -616,7 +649,8 @@ def _allocate_resources(
     """
     Allocate resources for an activity, respecting the given constraints.
 
-    Uses a two-phase approach:
+    ``same_resource`` constraints first fix the demand of their type (see
+    ``_same_resource_demand``). The allocation then uses a two-phase approach:
         Phase 1 — Collect the raw constraints per resource type (one entry per
             (prior activity, constraint type).
 
@@ -644,7 +678,8 @@ def _allocate_resources(
         resource_queues: Currently available resources: {res_type: [res_id, ...]}.
         resource_id_type_map: Mapping from resource ID to resource type.
         allocation_strategy: {res_type: strategy_name} for picking from available pool.
-        needed_res_types: Dict {res_type: count} — how many of each type this activity needs.
+        needed_res_types: Dict {res_type: count} — how many of each type this activity
+            needs, as sampled. A same_resource constraint overrides the count.
         simulation_config: Config of the Simulation Model.
         violation_budget: The instance's _ViolationBudget (spent on a working copy).
         prior_assignments_full: Optional pre-built {activity: {res_type: [res_id, ...]}}
@@ -691,6 +726,15 @@ def _allocate_resources(
 
     constraints_for_activity = variant_constraints.get(activity, {})
 
+    demand = _same_resource_demand(
+        needed_res_types, constraints_for_activity, prior_assignments
+    )
+
+    # Cheap availability pre-check: skip the full constraint allocation when a
+    # needed type plainly lacks free units
+    if any(len(resource_queues.get(t, ())) < n for t, n in demand.items()):
+        return None, violation_budget
+
     # ── Phase 1: Collect the raw constraints per resource type ──
     # Constraints are keyed per resource type: {other_activity: {res_type: ctype}}.
     # Each type's relation is enforced only against that type's prior resources.
@@ -711,7 +755,7 @@ def _allocate_resources(
     vb = violation_budget.clone()
     assignment = {}
 
-    for res_type, n in needed_res_types.items():
+    for res_type, n in demand.items():
         strategy = allocation_strategy.get(res_type, "random")
         result = _allocate_single_type(
             n,
@@ -1642,16 +1686,6 @@ class VariantPlayoutStrategy:
                         hour_index,
                     )
 
-                    # Cheap availability pre-check: skip the full constraint
-                    # allocation when a needed type plainly lacks free units
-                    if any(
-                        len(available_queues.get(t, ())) < cnt
-                        for t, cnt in needed_res_types.items()
-                    ):
-                        resource_blocked = True
-                        blocked_res_types.update(needed_res_types)
-                        continue
-
                     # Allocate resources respecting constraints
                     allocated, new_budget = _allocate_resources(
                         activity,
@@ -2019,27 +2053,20 @@ class StateSpacePlayoutStrategy:
                     hour_index,
                 )
 
-                resource_blocked = any(
-                    len(available_queues.get(t, ())) < cnt
-                    for t, cnt in needed_res_types.items()
+                allocated, new_budget = _allocate_resources(
+                    activity,
+                    variant_constraints,
+                    inst["simulated_events"],
+                    available_queues,
+                    resource_id_type_map,
+                    allocation_strategy,
+                    needed_res_types,
+                    simulation_config,
+                    inst["violation_budget"],
+                    prior_assignments_full=inst["resources_by_activity"],
                 )
-                allocated, new_budget = None, inst["violation_budget"]
-                if not resource_blocked:
-                    allocated, new_budget = _allocate_resources(
-                        activity,
-                        variant_constraints,
-                        inst["simulated_events"],
-                        available_queues,
-                        resource_id_type_map,
-                        allocation_strategy,
-                        needed_res_types,
-                        simulation_config,
-                        inst["violation_budget"],
-                        prior_assignments_full=inst["resources_by_activity"],
-                    )
-                    resource_blocked = allocated is None
 
-                if resource_blocked:
+                if allocated is None:
                     # Keep the pending event; retry when a resource frees or a
                     # free one turns present.
                     inst["next_wake"] = _resource_blocked_wake(

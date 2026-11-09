@@ -27,6 +27,7 @@ from totem_lib.simulation.utils.state_space import (
     ObjectParticipationModel,
     ParticipationSignatureModel,
     StateConfig,
+    StatefulActivityVMM,
     StateSpaceModel,
     _activity_projections,
     _summarize_state,
@@ -260,6 +261,24 @@ def test_stateful_vmm_flat_config_ignores_object_state():
     assert {"Pick", "Ship"} <= set(after_one)  # ambiguous without object state
 
 
+def test_stateful_vmm_support_counts_only_allowed_continuations():
+    """min_support is checked after the mask: a level with enough observations in
+    total but fewer than min_support allowed ones is skipped for a coarser level."""
+    config = StateConfig.m0(suffix_length=1, min_support=3)
+    counts = {
+        ("S", ("A",)): Counter({"B": 2, "C": 1}),
+        ("S", ()): Counter({"C": 2, "D": 2}),
+    }
+    vmm = StatefulActivityVMM(counts, config)
+    state = _summarize_state([START, "A"], {}, {}, Counter(), set(), config, [])
+
+    assert vmm.next_distribution(state) == {"B": 2 / 3, "C": 1 / 3}
+    # Only one allowed observation (C) on ("A",) -> back off to the empty context.
+    assert vmm.next_distribution(state, allowed={"C", "D"}) == {"C": 0.5, "D": 0.5}
+    # No level has enough allowed observations -> END.
+    assert vmm.next_distribution(state, allowed={"D"}) == {END: 1.0}
+
+
 # --- graph-signature conditioning level (advisor decision 2026-07-28) ---
 
 
@@ -389,7 +408,7 @@ def test_participation_signature_respects_availability():
 def test_generator_case_is_connected():
     """Every generated case graph is weakly connected across seeds."""
     ocel = _order_items_ocel()
-    model = StateSpaceModel.build(ocel)
+    model = StateSpaceModel.build(ocel, config=StateConfig(min_support=1))
     for seed in range(10):
         graph, _ = _generate_over_structure(model, ocel, seed)
         assert graph.number_of_nodes() >= 1
@@ -399,7 +418,7 @@ def test_generator_case_is_connected():
 def test_generator_case_covers_all_objects():
     """Every object of the arriving structure appears in at least one event."""
     ocel = _order_items_ocel()
-    model = StateSpaceModel.build(ocel)
+    model = StateSpaceModel.build(ocel, config=StateConfig(min_support=1))
     for seed in range(10):
         graph, object_type_map = _generate_over_structure(model, ocel, seed)
         covered = set()
@@ -410,7 +429,9 @@ def test_generator_case_covers_all_objects():
 
 def test_generator_case_is_reproducible():
     """The same seed and structure reproduce the identical case graph."""
-    model = StateSpaceModel.build(_order_items_ocel())
+    model = StateSpaceModel.build(
+        _order_items_ocel(), config=StateConfig(min_support=1)
+    )
     pool = _order_pool()
 
     def fingerprint(graph):
@@ -445,7 +466,7 @@ def test_generator_graph_signatures_produce_valid_executions():
     """The full model (graph signatures on) still generates connected, fully
     covered executions across seeds."""
     ocel = _order_items_ocel()
-    model = StateSpaceModel.build(ocel)  # default: signatures on
+    model = StateSpaceModel.build(ocel, config=StateConfig(min_support=1))
     for seed in range(8):
         graph, otm = _generate_over_structure(model, ocel, seed)
         covered = set()
@@ -460,10 +481,10 @@ def test_generator_ablation_configs_produce_valid_executions():
     executions."""
     ocel = _order_items_ocel()
     for config in (
-        StateConfig.m0(),
-        StateConfig.m1(),
-        StateConfig.m2(),
-        StateConfig.m3(),
+        StateConfig.m0(min_support=1),
+        StateConfig.m1(min_support=1),
+        StateConfig.m2(min_support=1),
+        StateConfig.m3(min_support=1),
     ):
         model = StateSpaceModel.build(ocel, config=config)
         for seed in range(5):
@@ -481,7 +502,9 @@ def test_generator_ablation_configs_produce_valid_executions():
 def test_generator_step_loop_matches_run():
     """Driving ``step()`` to exhaustion yields the same execution as ``run()`` —
     there is a single generation path."""
-    model = StateSpaceModel.build(_order_items_ocel())
+    model = StateSpaceModel.build(
+        _order_items_ocel(), config=StateConfig(min_support=1)
+    )
 
     stepped = model.new_generator(_order_pool(), _rng(5))
     events = []
@@ -506,7 +529,9 @@ def test_generator_step_loop_matches_run():
 
 def test_generator_step_accepts_runtime_context():
     """The ``runtime_context`` seam is accepted and (currently) ignored."""
-    model = StateSpaceModel.build(_order_items_ocel())
+    model = StateSpaceModel.build(
+        _order_items_ocel(), config=StateConfig(min_support=1)
+    )
     gen = model.new_generator(_order_pool(), _rng(0))
     assert gen.step(runtime_context={"load": 0.5}) is not None
 

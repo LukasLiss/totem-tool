@@ -221,9 +221,10 @@ class StateConfig:
     progress signal; only sound under conditional simulation with a given pool).
     ``suffix_length`` is the activity horizon k. Remaining counts are bucketed as
     ``0, 1, ..., remaining_cap`` (cap meaning "cap or more"). A projection is used at
-    query time only if it has at least ``min_support`` observations, else the model
-    backs off (guards single-observation probability-1 states). The M0-M3 helpers
-    name the ablation levels.
+    query time only if its allowed continuations (after masking, ``END`` included)
+    have at least ``min_support`` observations, else the model backs off (guards
+    single-observation probability-1 states). The M0-M3 helpers name the ablation
+    levels.
     """
 
     def __init__(
@@ -445,7 +446,8 @@ class StatefulActivityVMM:
     Generalizes ``ControlFlowVMM`` from a bare activity suffix to the full
     ``_ActivityState`` (suffix + object-pool summary). Holds counts
     ``{projection_key: Counter{activity_or_END: n}}`` at every backoff level and
-    resolves the richest projection meeting ``min_support`` at query time.
+    resolves the richest projection whose allowed continuations meet
+    ``min_support`` at query time.
     """
 
     def __init__(self, counts, config):
@@ -465,15 +467,15 @@ class StatefulActivityVMM:
         """Distribution over the next activity (plus ``END``) for ``state``."""
         for key in _activity_projections(state, self.config):
             counts = self._counts.get(key)
-            if not counts or sum(counts.values()) < self.config.min_support:
+            if not counts:
                 continue
             filtered = {
                 a: n
                 for a, n in counts.items()
                 if a == END or allowed is None or a in allowed
             }
-            if filtered:
-                total = sum(filtered.values())
+            total = sum(filtered.values())
+            if filtered and total >= self.config.min_support:
                 return {a: n / total for a, n in filtered.items()}
         return {END: 1.0}
 

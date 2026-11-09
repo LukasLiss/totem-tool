@@ -319,6 +319,39 @@ def test_disjoint_constraint_uses_distinct_resources_when_feasible():
         assert set(acts["A"]["resources"]).isdisjoint(acts["B"]["resources"])
 
 
+def _same_resource_run(a_count, b_count, pool_size):
+    """Strict A -> B run with a same_resource Worker relation; the demand of B
+    deliberately disagrees with A's assignment."""
+    variant = _chain("A", "B")
+    model = _build_model(
+        variant,
+        needed=_needs({"A": {"Worker": a_count}, "B": {"Worker": b_count}}),
+        constraints={variant: {"B": {"A": {"Worker": "same_resource"}}}},
+    )
+    ocel, _, _ = _run(model, pool={"Worker": pool_size}, duration_s=6 * HOUR)
+    return _by_instance(ocel)
+
+
+@pytest.mark.parametrize("pool_size", [1, 5])
+def test_same_resource_demand_above_reference_set_does_not_block(pool_size):
+    """B draws two Workers but A used one: the reference set fixes the count, so
+    B reuses exactly A's Worker instead of waiting for a pick it cannot afford.
+    The pool of one also covers the availability check before the allocation."""
+    instances = _same_resource_run(a_count=1, b_count=2, pool_size=pool_size)
+    assert instances
+    for acts in instances.values():
+        assert "B" in acts
+        assert acts["B"]["resources"] == acts["A"]["resources"]
+
+
+def test_same_resource_demand_below_reference_set_takes_whole_set():
+    """B draws one Worker but A used two: B still gets A's complete set."""
+    instances = _same_resource_run(a_count=2, b_count=1, pool_size=5)
+    assert instances
+    for acts in instances.values():
+        assert set(acts["B"]["resources"]) == set(acts["A"]["resources"])
+
+
 # --- resource cooldown ---
 
 
