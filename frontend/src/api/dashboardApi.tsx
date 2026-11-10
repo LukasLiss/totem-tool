@@ -70,3 +70,16 @@ export async function importDashboard(
   });
   return data;
 }
+
+/**
+ * Store the layout options of the OC-DFG widget at grid position (x, y)
+ * while the dashboard is viewed; null resets it to the default layout.
+ */
+export async function saveOcdfgWidgetLayout(
+  dashboardId: number,
+  x: number,
+  y: number,
+  layoutOptions: unknown,
+): Promise<void> {
+  await axios.patch(`/api/dashboard/${dashboardId}/ocdfg_layout/`, { x, y, layout_options: layoutOptions });
+}

@@ -338,6 +338,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           show_controls: node.show_controls ?? true,
           initial_interaction_locked: node.initial_interaction_locked ?? true,
           layout_direction: node.layout_direction ?? 'TB',
+          // Layout panel settings; saved as is (null = the defaults).
+          layout_options: node.layout_options ?? null,
         };
       } else if (component_name === "ProcessAreaComponent") {
         props = {
@@ -623,6 +625,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             row_order_direction: item.row_order_direction,
             max_points: item.max_points,
             layout_direction: item.layout_direction,
+            layout_options: item.layout_options,
             // PieChartComponent properties
             query: item.query,
             ring_text: item.ring_text,
@@ -752,6 +755,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node.row_order_direction = item.row_order_direction;
               node.max_points = item.max_points;
               node.layout_direction = item.layout_direction;
+              node.layout_options = item.layout_options;
               // OCPNFlattenedReplayComponent properties
               node.ocpn_asset_id = item.ocpn_asset_id;
               // OCCNComponent properties

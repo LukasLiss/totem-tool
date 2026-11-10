@@ -249,6 +249,7 @@ axios.interceptors.request.use((config) => {
   const isDataEndpoint =
     url.includes("/api/files/") ||
     url.includes("/api/new-ocdfg/") ||
+    url.includes("/api/ocdfg-block-structure/") ||
     url.includes("/api/variants/") ||
     url.includes("/api/occn/") ||
     url.includes("/api/ocpn/") ||

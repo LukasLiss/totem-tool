@@ -60,6 +60,8 @@ import OCPNVisualizer from '@/react_component/OCPNVisualizer';
 import OcpnFlattenedReplay from '@/components/ocpn-flattened-replay/OcpnFlattenedReplay';
 import { listAssets, type ProjectAsset } from '@/api/assetsApi';
 import { toast } from "sonner";
+import { saveOcdfgWidgetLayout } from "@/api/dashboardApi";
+import type { SaveLayout } from "@/react_component/ocdfg-layout/useLayoutOptions";
 import OCCNVisualizer from '@/react_component/OCCNVisualizer';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
@@ -1637,105 +1639,133 @@ function isBuiltinDottedChartAxis(
 }
 
 
-// NewOCDFGComponent: Dashboard wrapper for the new Object-Centric Directly Follows Graph (ELK layout)
+/**
+ * Layout panel settings of an OC-DFG widget, stored with the widget. While
+ * the dashboard is viewed they are saved right away (by grid position, see
+ * `saveOcdfgWidgetLayout`); the node is updated too, so a later save of the
+ * dashboard in edit mode keeps them.
+ */
+function useDashboardOcdfgLayout(
+  node: ComponentProps["node"],
+  dashboardId: number | undefined,
+  onUpdate: ComponentProps["onUpdate"],
+) {
+  const save = useCallback<SaveLayout>(
+    async (entry) => {
+      onUpdate?.({ layout_options: entry });
+      if (!dashboardId || node.x == null || node.y == null) return;
+      try {
+        await saveOcdfgWidgetLayout(dashboardId, node.x, node.y, entry);
+      } catch {
+        toast.error("The OC-DFG layout could not be saved");
+      }
+    },
+    [dashboardId, node, onUpdate],
+  );
+  return {
+    storedLayout: node.layout_options ?? null,
+    onLayoutChange: save,
+    layoutScope: `dashboard:${dashboardId ?? ""}:${node.x ?? ""}:${node.y ?? ""}`,
+  };
+}
+
+function OcdfgWidgetSettings({
+  title,
+  description,
+  idPrefix,
+  showControls,
+  initialInteractionLocked,
+  onShowControlsChange,
+  onInitialInteractionLockedChange,
+}: {
+  title: string;
+  description: string;
+  idPrefix: string;
+  showControls: boolean;
+  initialInteractionLocked: boolean;
+  onShowControlsChange: (checked: boolean) => void;
+  onInitialInteractionLockedChange: (checked: boolean) => void;
+}) {
+  return (
+    <Card className="w-full h-full rounded-none">
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm text-muted-foreground">{description}</p>
+        <div className="flex items-center justify-between">
+          <Label htmlFor={`${idPrefix}-show-controls`}>Show Controls Panel</Label>
+          <Switch id={`${idPrefix}-show-controls`} checked={showControls} onCheckedChange={onShowControlsChange} />
+        </div>
+        <div className="flex items-center justify-between">
+          <Label htmlFor={`${idPrefix}-initial-locked`}>Lock Interactions Initially</Label>
+          <Switch
+            id={`${idPrefix}-initial-locked`}
+            checked={initialInteractionLocked}
+            onCheckedChange={onInitialInteractionLockedChange}
+          />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          The layout is changed with the layout button in the widget&apos;s toolbar and stored with this widget.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+// NewOCDFGComponent: Dashboard wrapper for the Object-Centric DFG (arc weight)
 export const NewOCDFGComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
-  selectedFile
+  selectedFile,
+  dashboardId,
 }) => {
   const [filterEnabled, setFilterEnabled] = useState(true);
   const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>({});
   const [showControls, setShowControls] = useState(node.show_controls ?? true);
   const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
-  const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>(node.layout_direction ?? 'TB');
+  const layout = useDashboardOcdfgLayout(node, dashboardId, onUpdate);
 
   useEffect(() => {
     setShowControls(node.show_controls ?? true);
     setInitialInteractionLocked(node.initial_interaction_locked ?? true);
-    setLayoutDirection(node.layout_direction ?? 'TB');
-  }, [node.show_controls, node.initial_interaction_locked, node.layout_direction]);
-
-  const handleShowControlsChange = (checked: boolean) => {
-    setShowControls(checked);
-    onUpdate?.({ show_controls: checked });
-  };
-
-  const handleInitialInteractionLockedChange = (checked: boolean) => {
-    setInitialInteractionLocked(checked);
-    onUpdate?.({ initial_interaction_locked: checked });
-  };
-
-  const handleLayoutDirectionChange = (value: string) => {
-    setLayoutDirection(value as 'TB' | 'LR');
-    onUpdate?.({ layout_direction: value as "TB" | "LR" });
-  };
+  }, [node.show_controls, node.initial_interaction_locked]);
 
   if (isEditMode) {
-    // EDIT MODE: Show configuration controls
     return (
-      <Card className="w-full h-full rounded-none">
-        <CardHeader>
-          <CardTitle>New OCDFG (ELK) Settings</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            New Object-Centric Directly Follows Graph (OCDFG) visualization with ELK layout.
-          </p>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="new-show-controls">Show Controls Panel</Label>
-            <Switch
-              id="new-show-controls"
-              checked={showControls}
-              onCheckedChange={handleShowControlsChange}
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="new-initial-locked">Lock Interactions Initially</Label>
-            <Switch
-              id="new-initial-locked"
-              checked={initialInteractionLocked}
-              onCheckedChange={handleInitialInteractionLockedChange}
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label>Layout Direction</Label>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="w-[180px] justify-between font-normal">
-                  <span>{layoutDirection === 'TB' ? 'Top to Bottom' : 'Left to Right'}</span>
-                  <ChevronDown className="h-4 w-4 opacity-50" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-[180px]">
-                <DropdownMenuRadioGroup value={layoutDirection} onValueChange={handleLayoutDirectionChange}>
-                  <DropdownMenuRadioItem value="TB">Top to Bottom</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="LR">Left to Right</DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        </CardContent>
-      </Card>
+      <OcdfgWidgetSettings
+        title="Object-Centric DFG (Arc Weight) Settings"
+        description="Object-Centric Directly Follows Graph with a minimum arc weight per object type."
+        idPrefix="new"
+        showControls={showControls}
+        initialInteractionLocked={initialInteractionLocked}
+        onShowControlsChange={(checked) => {
+          setShowControls(checked);
+          onUpdate?.({ show_controls: checked });
+        }}
+        onInitialInteractionLockedChange={(checked) => {
+          setInitialInteractionLocked(checked);
+          onUpdate?.({ initial_interaction_locked: checked });
+        }}
+      />
     );
   }
 
-  // VIEW MODE: Render NewOCDFGVisualizer
   return (
     <div className="w-full h-full flex flex-col">
       <WidgetFilterHeader title="Object-Centric DFG (Arc Weight)" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={setLocalFilterParams} />
       <div style={{ flex: 1, minHeight: 0, background: '#fff' }}>
-        <ReactFlowProvider>
-          <NewOCDFGVisualizer
-            height="100%"
-            fileId={selectedFile?.id}
-            showControls={showControls}
-            initialInteractionLocked={initialInteractionLocked}
-            layoutDirection={layoutDirection}
-            filterEnabled={filterEnabled}
-            localFilterParams={localFilterParams}
-          />
-        </ReactFlowProvider>
+        <NewOCDFGVisualizer
+          height="100%"
+          fileId={selectedFile?.id}
+          showControls={showControls}
+          initialInteractionLocked={initialInteractionLocked}
+          layoutDirection={node.layout_direction ?? 'TB'}
+          filterEnabled={filterEnabled}
+          localFilterParams={localFilterParams}
+          {...layout}
+        />
       </div>
     </div>
   );
@@ -1746,97 +1776,51 @@ export const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
-  selectedFile
+  selectedFile,
+  dashboardId,
 }) => {
   const [filterEnabled, setFilterEnabled] = useState(true);
   const [showControls, setShowControls] = useState(node.show_controls ?? true);
   const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
-  const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>(node.layout_direction ?? 'TB');
+  const layout = useDashboardOcdfgLayout(node, dashboardId, onUpdate);
 
   useEffect(() => {
     setShowControls(node.show_controls ?? true);
     setInitialInteractionLocked(node.initial_interaction_locked ?? true);
-    setLayoutDirection(node.layout_direction ?? 'TB');
-  }, [node.show_controls, node.initial_interaction_locked, node.layout_direction]);
-
-  const handleShowControlsChange = (checked: boolean) => {
-    setShowControls(checked);
-    onUpdate?.({ show_controls: checked });
-  };
-
-  const handleInitialInteractionLockedChange = (checked: boolean) => {
-    setInitialInteractionLocked(checked);
-    onUpdate?.({ initial_interaction_locked: checked });
-  };
-
-  const handleLayoutDirectionChange = (value: string) => {
-    setLayoutDirection(value as 'TB' | 'LR');
-    onUpdate?.({ layout_direction: value as "TB" | "LR" });
-  };
+  }, [node.show_controls, node.initial_interaction_locked]);
 
   if (isEditMode) {
-    // EDIT MODE: Show configuration controls
     return (
-      <Card className="w-full h-full rounded-none">
-        <CardHeader>
-          <CardTitle>OCDFG (Variants) Settings</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            Object-Centric Directly Follows Graph (OCDFG) visualization with Variant/Trace filtering.
-          </p>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="variants-show-controls">Show Controls Panel</Label>
-            <Switch
-              id="variants-show-controls"
-              checked={showControls}
-              onCheckedChange={handleShowControlsChange}
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="variants-initial-locked">Lock Interactions Initially</Label>
-            <Switch
-              id="variants-initial-locked"
-              checked={initialInteractionLocked}
-              onCheckedChange={handleInitialInteractionLockedChange}
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label>Layout Direction</Label>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="w-[180px] justify-between font-normal">
-                  <span>{layoutDirection === 'TB' ? 'Top to Bottom' : 'Left to Right'}</span>
-                  <ChevronDown className="h-4 w-4 opacity-50" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-[180px]">
-                <DropdownMenuRadioGroup value={layoutDirection} onValueChange={handleLayoutDirectionChange}>
-                  <DropdownMenuRadioItem value="TB">Top to Bottom</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="LR">Left to Right</DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        </CardContent>
-      </Card>
+      <OcdfgWidgetSettings
+        title="OCDFG (Variants) Settings"
+        description="Object-Centric Directly Follows Graph (OCDFG) visualization with Variant/Trace filtering."
+        idPrefix="variants"
+        showControls={showControls}
+        initialInteractionLocked={initialInteractionLocked}
+        onShowControlsChange={(checked) => {
+          setShowControls(checked);
+          onUpdate?.({ show_controls: checked });
+        }}
+        onInitialInteractionLockedChange={(checked) => {
+          setInitialInteractionLocked(checked);
+          onUpdate?.({ initial_interaction_locked: checked });
+        }}
+      />
     );
   }
 
-  // VIEW MODE: Render NewOCDFGVariantsVisualizer
   return (
     <div className="w-full h-full">
-      <ReactFlowProvider>
-        <NewOCDFGVariantsVisualizer
-          height="100%"
-          fileId={selectedFile?.id}
-          showControls={showControls}
-          initialInteractionLocked={initialInteractionLocked}
-          layoutDirection={layoutDirection}
-          filterEnabled={filterEnabled}
-          onToggleFilter={() => setFilterEnabled(p => !p)}
-        />
-      </ReactFlowProvider>
+      <NewOCDFGVariantsVisualizer
+        height="100%"
+        fileId={selectedFile?.id}
+        showControls={showControls}
+        initialInteractionLocked={initialInteractionLocked}
+        layoutDirection={node.layout_direction ?? 'TB'}
+        filterEnabled={filterEnabled}
+        onToggleFilter={() => setFilterEnabled(p => !p)}
+        {...layout}
+      />
     </div>
   );
 };

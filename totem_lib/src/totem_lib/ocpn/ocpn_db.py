@@ -33,7 +33,8 @@ from typing import Dict, Iterator, List, Optional, Sequence, Tuple
 from ..ocel.ocel_duckdb import OcelDuckDB
 from ..progress import as_progress
 from ..visualization import VisualizableMixin, ocpn_to_graphviz
-from .inductive_miner import discover_petri_net
+from .inductive_miner import discover_petri_net, discover_process_tree
+from .process_tree import process_tree_to_dict
 
 #: Default threshold for the variable-arc score, taken from the paper.
 DEFAULT_VARIABLE_ARC_THRESHOLD = 0.98
@@ -254,6 +255,73 @@ def discover_ocpn_db(
         if _is_interrupted_error(exc):
             raise TimeoutError(
                 f"OCPN discovery timed out after {timeout_s} seconds"
+            ) from exc
+        raise
+
+
+def discover_process_trees_db(
+    ocel_db: OcelDuckDB,
+    *,
+    object_types: Optional[Sequence[str]] = None,
+    timeout_s: Optional[float] = None,
+    progress=None,
+) -> Dict[str, dict]:
+    """Discover one process tree per object type with the inductive miner.
+
+    Every object type's log is flattened (each object is a case, see
+    ``_VARIANTS_SQL``) and mined with the from-scratch inductive miner, which
+    splits the log after every cut. The trees describe the block structure
+    (sequence, exclusive choice, parallel, loop) of each object type's
+    behaviour; the OC-DFG layout lab uses them to arrange the DFG.
+
+    Parameters
+    ----------
+    ocel_db:
+        The event log as :class:`~totem_lib.ocel.ocel_duckdb.OcelDuckDB`.
+    object_types:
+        Optional subset of object types. Defaults to all types in the log.
+    timeout_s:
+        Abort with :class:`TimeoutError` after this many seconds. ``None`` or
+        a non-positive value disables the timeout.
+    progress:
+        Optional ``callback(fraction, message)`` (see :mod:`totem_lib.progress`).
+
+    Returns
+    -------
+    dict
+        ``{object_type: tree}`` with trees in the form of
+        :func:`~totem_lib.ocpn.process_tree.process_tree_to_dict`. Types
+        without events are left out.
+    """
+    progress = as_progress(progress)
+    try:
+        with _timeout_watchdog(ocel_db, timeout_s) as cancel_event:
+            should_cancel = cancel_event.is_set if cancel_event is not None else None
+            available_types = _fetch_object_types(ocel_db)
+            if object_types is not None:
+                wanted = set(object_types)
+                selected = [ot for ot in available_types if ot in wanted]
+            else:
+                selected = available_types
+            trees: Dict[str, dict] = {}
+            n_selected = max(1, len(selected))
+            for index, obj_type in enumerate(selected):
+                if should_cancel is not None and should_cancel():
+                    raise TimeoutError("Process tree discovery cancelled (timeout)")
+                progress.report(index / n_selected, f"Mining process tree for {obj_type}")
+                variants = _fetch_variants(ocel_db, obj_type)
+                if not variants:
+                    continue
+                tree = discover_process_tree(variants, should_cancel)
+                trees[obj_type] = process_tree_to_dict(tree)
+        progress.report(1.0, "Done")
+        return trees
+    except TimeoutError:
+        raise
+    except Exception as exc:
+        if _is_interrupted_error(exc):
+            raise TimeoutError(
+                f"Process tree discovery timed out after {timeout_s} seconds"
             ) from exc
         raise
 

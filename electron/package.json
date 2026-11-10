@@ -19,6 +19,7 @@
     },
     "files": [
       "main.js",
+      "update-check.js",
       "build/icon.png",
       "resources/frontend-build"
     ],

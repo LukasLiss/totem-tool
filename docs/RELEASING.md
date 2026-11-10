@@ -85,6 +85,22 @@ version.
 gh release edit v1.2.3 --draft=false --latest
 ```
 
+## In-app update notice
+
+The desktop app asks GitHub for the latest release
+(`/repos/LukasLiss/totem-tool/releases/latest`) five seconds after it starts,
+and again when the user picks **Help → Check for Updates...**. If the release's
+tag is newer than the installed version, a popup offers to open
+[totem-tool.com](https://totem-tool.com) to download it. The user can also skip
+that version. The choice is saved in `update-check.json` in the app's data
+folder.
+
+Drafts and prereleases don't count, so the popup appears only once you publish
+in step 6. The comparison uses the tag, so tag as `vX.Y.Z`. Dev builds
+(`npm run electron-dev`) never check automatically. Setting
+`TOTEM_DISABLE_UPDATE_CHECK=1` turns the automatic check off. The code is in
+`electron/update-check.js`.
+
 ## How the website links work
 
 The website links to the version-free copies through GitHub's "latest release"
