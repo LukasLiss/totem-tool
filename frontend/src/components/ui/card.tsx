@@ -54,6 +54,9 @@ function CardAction({ className, ...props }: React.ComponentProps<"div">) {
       data-slot="card-action"
       className={cn(
         "col-start-2 row-span-2 row-start-1 self-start justify-self-end",
+        // In a narrow header (phone, small dashboard tile) the actions drop
+        // below the title and wrap instead of pushing the card wider.
+        "@max-md/card-header:col-start-1 @max-md/card-header:row-span-1 @max-md/card-header:row-start-auto @max-md/card-header:justify-self-start @max-md/card-header:max-w-full @max-md/card-header:flex-wrap",
         className
       )}
       {...props}

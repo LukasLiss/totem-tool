@@ -27,7 +27,7 @@ export function OcpnFlattenedReplayView({
   }, [selectedFile?.id]);
 
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className="flex flex-col md:min-h-screen">
       <main className="flex-1 p-4">
         <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-6">
           <header className="border-b pb-4">

@@ -72,7 +72,8 @@ function UserFileSelect() {
     };
 
     return(
-    <Card className="flex-col w-full max-w-sm m-6">
+    <div className="w-full max-w-sm p-4 pt-0 md:p-6">
+    <Card className="flex-col w-full">
       <CardHeader>
         <CardTitle>
           Select a file to work on
@@ -85,7 +86,7 @@ function UserFileSelect() {
               variant="outline"
               role="combobox"
               aria-expanded={open}
-              className="w-[300px] justify-between"
+              className="max-md:w-full md:w-[300px] justify-between"
             >
               <span className="min-w-0 truncate">
                 {selectedFile ? projectLabel(selectedFile) : "Select OCEL File"}
@@ -93,7 +94,7 @@ function UserFileSelect() {
               <ChevronsUpDownIcon className="ml-2 h-4 w-4 shrink-0 opacity-50" />
             </Button>
           </PopoverTrigger>
-          <PopoverContent className="w-[300px] p-0">
+          <PopoverContent className="w-(--radix-popover-trigger-width) p-0">
             <Command>
               <CommandInput placeholder="Search files..." />
               <CommandList>
@@ -132,6 +133,7 @@ function UserFileSelect() {
         </CardFooter>
       </CardContent>
     </Card>
+    </div>
     )
 }
 

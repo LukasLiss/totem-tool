@@ -340,7 +340,7 @@ export function PlayoutView() {
               onValueChange={loadFromAsset}
               disabled={!projectId || assetsLoading || assets.length === 0}
             >
-              <SelectTrigger className="w-[320px]" aria-label="Stored model">
+              <SelectTrigger className="w-[320px] max-w-full" aria-label="Stored model">
                 <SelectValue
                   placeholder={
                     !projectId

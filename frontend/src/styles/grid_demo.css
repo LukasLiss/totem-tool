@@ -12,8 +12,10 @@
   border-radius: .25rem;
 }
 
-/* 1. Make sure the shadcn sidebar is visually on top */
-[data-sidebar="sidebar"] {
+/* 1. Make sure the shadcn sidebar is visually on top.
+   Not the phone drawer ([data-mobile]): that one is position: fixed, and
+   forcing it to relative drops it below the page, out of sight. */
+[data-sidebar="sidebar"]:not([data-mobile="true"]) {
   position: relative;
   z-index: 1000; /* above gridstack */
 }
@@ -36,7 +38,7 @@ body.sidebar-open .grid-stack {
 }
 
 /* Always keep the sidebar above */
-[data-sidebar="sidebar"] {
+[data-sidebar="sidebar"]:not([data-mobile="true"]) {
   position: relative;
   z-index: 2000;
 }
@@ -61,6 +63,14 @@ a {
 h1 {
   font-size: 2.5rem;
   margin-bottom: .5rem;
+}
+
+/* Page titles at 2.5rem wrap onto three lines on a phone. */
+@media (max-width: 767px) {
+  h1 {
+    font-size: 1.75rem;
+    line-height: 1.2;
+  }
 }
 
 

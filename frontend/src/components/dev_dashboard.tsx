@@ -34,7 +34,7 @@ export function DevDashboard() {
 
   return (
     <div>
-      <div className="flex flex-1 flex-col gap-4 p-4 pt-4">
+      <div className="flex min-w-0 flex-1 flex-col gap-4 p-4 pt-4">
         <LogStatistics
           fileId={selectedFile?.id}
           showNumEvents={true}
@@ -45,14 +45,14 @@ export function DevDashboard() {
         <ProcessArea fileId={selectedFile?.id} />
         <Card className="@container/card" data-testid="overview-dfg-card">
           <CardHeader className="items-center relative z-10 justify-between">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <CardTitle>Object-Centric Directly-Follows Graph</CardTitle>
               <GlobalFilterToggle filterEnabled={dfgFilterEnabled} onToggle={() => setDfgFilterEnabled(p => !p)} />
               <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setDfgLocalFilter} />
             </div>
             <CardDescription>Directly-follows relations per object type with arc weights and automatic layout</CardDescription>
           </CardHeader>
-          <CardContent className="h-[640px] p-0">
+          <CardContent className="h-[min(640px,70svh)] p-0">
             <NewOCDFGVariantsVisualizer
               height="100%"
               fileId={selectedFile?.id}

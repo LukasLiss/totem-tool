@@ -16,6 +16,9 @@ import { GridContext, GridModeContext, type GridLayoutItem } from "./gridContext
 import { toast } from "sonner";
 import { resolveTextBoxFormat } from "../../components/text-box/textBoxFormat";
 
+/** Widest window that still gets the one-column dashboard (matches useIsMobile). */
+const MOBILE_MAX_WIDTH = 767;
+
 type GridWidgetElement = HTMLElement & {
   _reactRoot?: Root;
   gridstackNode?: GridStackNode;
@@ -85,6 +88,13 @@ export const GridProvider: React.FC<GridProviderProps> = ({
     acceptWidgets: true,
     removable: "#trash",
     float: true,
+    // Phones show the dashboard as a single column, widgets stacked in
+    // reading order. GridStack keeps the 12-column layout cached and puts it
+    // back when the window is wide again.
+    columnOpts: {
+      breakpointForWindow: true,
+      breakpoints: [{ w: MOBILE_MAX_WIDTH, c: 1 }],
+    },
     ...(options || {}),
   };
 
