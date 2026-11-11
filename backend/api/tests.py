@@ -63,6 +63,7 @@ from .models import (
     ImageAsset,
     ImageComponent,
     KpiComponent,
+    NumberofEventsComponent,
     OCAlignmentComponent,
     OCDottedChartComponent,
     OCPNFlattenedReplayComponent,
@@ -7186,6 +7187,169 @@ class DashboardExportImportApiTests(TestCase):
             response = self._import(bundle, expect=400)
             self.assertIn("error", response)
         self.assertEqual(Dashboard.objects.count(), before)
+class DashboardBundleReviewFixTests(TestCase):
+    """Follow-ups from the second review of the export/import branch."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="bundle-review")
+        self.source = Project.objects.create(name="ReviewSource")
+        self.source.users.add(self.user)
+        self.target = Project.objects.create(name="ReviewTarget")
+        self.target.users.add(self.user)
+        self.dashboard = Dashboard.objects.create(
+            project=self.source, name="Ops", order_in_project=0
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def _export(self):
+        response = self.client.get(f"/api/dashboard/{self.dashboard.pk}/export/")
+        self.assertEqual(response.status_code, 200, response.data)
+        return response.data
+
+    def _import(self, bundle, project):
+        response = self.client.post(
+            "/api/dashboard/import/",
+            {"project": project.pk, "event_log": None, "bundle": bundle},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        return response.data
+
+    def test_version_zero_is_reported_as_corrupt_not_newer(self):
+        bundle = {
+            "schema": DASHBOARD_BUNDLE_SCHEMA,
+            "version": 0,
+            "dashboard": {"name": "D"},
+            "components": [],
+        }
+        with self.assertRaisesMessage(ValueError, "may be corrupt"):
+            validate_dashboard_bundle_dict(bundle)
+
+    def test_a_legacy_number_of_events_row_survives_export_and_import(self):
+        NumberofEventsComponent.objects.create(
+            dashboard=self.dashboard,
+            x=0, y=0, w=2, h=2,
+            component_name="NumberofEventsComponent",
+            color="#00ff00",
+        )
+        bundle = self._export()
+        self.assertEqual(
+            bundle["components"][0]["component_name"], "NumberOfEventsComponent"
+        )
+        # An older file still carries the legacy spelling.
+        bundle["components"][0]["component_name"] = "NumberofEventsComponent"
+        result = self._import(bundle, self.target)
+        self.assertEqual(result["warnings"], [])
+        row = NumberofEventsComponent.objects.get(
+            dashboard_id=result["dashboard"]["id"]
+        )
+        self.assertEqual(row.component_name, "NumberOfEventsComponent")
+        self.assertEqual(row.color, "#00ff00")
+
+    def test_save_layout_keeps_a_legacy_number_of_events_widget(self):
+        response = self.client.post(
+            f"/api/dashboard/{self.dashboard.pk}/save_layout/",
+            {"layout": [{"component_name": "NumberofEventsComponent",
+                         "x": 0, "y": 0, "w": 2, "h": 2, "color": "red"}]},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(
+            list(self.dashboard.components.values_list("component_name", flat=True)),
+            ["NumberOfEventsComponent"],
+        )
+
+    def test_get_layout_downcasts_every_row_in_few_queries(self):
+        for i in range(6):
+            NumberofEventsComponent.objects.create(
+                dashboard=self.dashboard, x=i, y=0, w=1, h=1,
+                component_name="NumberOfEventsComponent", color="red",
+            )
+        TextBoxComponent.objects.create(
+            dashboard=self.dashboard, x=0, y=1, w=2, h=2,
+            component_name="TextBoxComponent", text="hi",
+        )
+        # Dashboard lookup, base rows, then one per concrete type — not one
+        # per row, which was 2 + 7 before.
+        with self.assertNumQueries(4):
+            response = self.client.get(
+                f"/api/dashboard/{self.dashboard.pk}/get_layout/"
+            )
+        self.assertEqual(response.status_code, 200)
+        colours = [c.get("color") for c in response.data if "color" in c]
+        self.assertEqual(colours, ["red"] * 6)
+
+    def test_alignment_execution_id_raises_the_log_coupled_warning(self):
+        OCAlignmentComponent.objects.create(
+            dashboard=self.dashboard, x=0, y=0, w=4, h=4,
+            component_name="OCAlignmentComponent", execution_id="exec-17",
+        )
+        warnings = self._import(self._export(), self.target)["warnings"]
+        coupled = [w for w in warnings if w["code"] == "log_coupled_settings"]
+        self.assertEqual(len(coupled), 1, warnings)
+        self.assertIn("OCAlignmentComponent", coupled[0]["detail"])
+
+    def test_the_name_fallback_never_returns_a_taken_name(self):
+        names = ["X", "X (imported)"] + [f"X ({n})" for n in range(2, 101)]
+        Dashboard.objects.bulk_create(
+            Dashboard(project=self.target, name=n, order_in_project=i)
+            for i, n in enumerate(names)
+        )
+        self.assertEqual(unique_dashboard_name(self.target, "X"), "X (101)")
+
+
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp(prefix="totem-test-bundle-image-"))
+class DashboardBundleLegacyImageTests(TestCase):
+    """A picture uploaded straight to the widget, not through the asset store."""
+
+    def setUp(self):
+        from django.conf import settings as dj_settings
+
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="bundle-image")
+        self.source = Project.objects.create(name="ImgSource")
+        self.source.users.add(self.user)
+        self.target = Project.objects.create(name="ImgTarget")
+        self.target.users.add(self.user)
+        self.dashboard = Dashboard.objects.create(
+            project=self.source, name="Pics", order_in_project=0
+        )
+        project_dir = os.path.join(dj_settings.MEDIA_ROOT, self.source.name)
+        os.makedirs(project_dir, exist_ok=True)
+        with open(os.path.join(project_dir, "logo.png"), "wb") as fh:
+            fh.write(b"\x89PNG\r\n\x1a\n")
+        ImageComponent.objects.create(
+            dashboard=self.dashboard, x=0, y=0, w=2, h=2,
+            component_name="ImageComponent", image=f"{self.source.name}/logo.png",
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def _round_trip(self, project):
+        bundle = self.client.get(
+            f"/api/dashboard/{self.dashboard.pk}/export/"
+        ).data
+        self.assertTrue(bundle["components"][0].get("image"))
+        response = self.client.post(
+            "/api/dashboard/import/",
+            {"project": project.pk, "event_log": None, "bundle": bundle},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        row = ImageComponent.objects.get(dashboard_id=response.data["dashboard"]["id"])
+        return row, response.data["warnings"]
+
+    def test_a_same_project_round_trip_keeps_the_picture(self):
+        row, warnings = self._round_trip(self.source)
+        self.assertEqual(row.image.name, f"{self.source.name}/logo.png")
+        self.assertEqual(warnings, [])
+
+    def test_another_project_imports_empty_and_says_so(self):
+        row, warnings = self._round_trip(self.target)
+        self.assertFalse(row.image)
+        self.assertEqual([w["code"] for w in warnings], ["image_asset_missing"])
+
+
 class HostingLimitsTests(TestCase):
     """TOTEM_MAX_UPLOAD_MB and TOTEM_MAX_PROJECTS_PER_USER."""
 

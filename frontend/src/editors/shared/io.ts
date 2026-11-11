@@ -73,8 +73,15 @@ export async function downloadJson(
     // failure here is a real write failure and belongs to the caller. It is not
     // a reason to also download the file somewhere else.
     const writable = await handle.createWritable();
-    await writable.write(text);
-    await writable.close();
+    try {
+      await writable.write(text);
+      await writable.close();
+    } catch (error) {
+      // Discard the swap file so a half-written export never replaces the
+      // target; the abort's own failure must not mask the real one.
+      await writable.abort().catch(() => {});
+      throw error;
+    }
     return 'saved';
   }
 

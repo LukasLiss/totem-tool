@@ -67,7 +67,7 @@ function wrongFormatMessage(parsed: unknown): string | null {
   // Two different faults, two different messages — as the backend already
   // does. A missing or non-numeric version means a truncated or corrupt file,
   // not one from the future.
-  if (typeof version !== "number" || !Number.isFinite(version)) {
+  if (typeof version !== "number" || !Number.isFinite(version) || version < 1) {
     return "That dashboard file looks incomplete or corrupt.";
   }
   if (version > DASHBOARD_BUNDLE_VERSION) {
@@ -86,7 +86,7 @@ export function NavDashboard({
   dashboards: { id: number; project: number; name: string; order_in_project: number; created_at: string }[];
   refreshDashboards: () => Promise<void> | void;
 }) {
-  const { viewMode, setViewMode } = useContext(DashboardContext);
+  const { viewMode, setViewMode, hasUnsavedChanges } = useContext(DashboardContext);
   const [ dashboardname, setDashboardname] = useState("");
   const [ open, setOpen] = useState(false);
   const [ openRename, setOpenRename ] = useState(false);
@@ -162,6 +162,17 @@ export function NavDashboard({
   };
 
   const handleExport = async (dashboard: { id: number; name: string }) => {
+    // The export reads what the server has. Edits still on the grid are not
+    // in it, and the user should hear that before trusting the file.
+    if (
+      viewMode.type === "dashboard" &&
+      viewMode.id === dashboard.id &&
+      hasUnsavedChanges?.()
+    ) {
+      toast.warning(
+        "Exporting the last saved layout. Your unsaved changes are not included — save first to export them."
+      );
+    }
     try {
       const bundle = await exportDashboard(dashboard.id);
       const filename = toFilename(dashboard.name, "dashboard");

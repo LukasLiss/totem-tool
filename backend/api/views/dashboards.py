@@ -58,6 +58,7 @@ from totem_lib.orgamining import (
 from ..dashboard_bundle import (
     WARN_COMPONENT_UNKNOWN,
     build_dashboard_bundle,
+    canonical_component_name,
     resolve_bundle_components,
     unique_dashboard_name,
     validate_dashboard_bundle_dict,
@@ -399,12 +400,29 @@ class DashboardViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["GET"])
     def get_layout(self, request, pk=None):
         dashboard = self.get_object()
-        components = []
-        for comp in dashboard.components.all():
-            model = self._LAYOUT_COMPONENT_MODELS.get(comp.component_name)
-            components.append(model.objects.get(id=comp.id) if model else comp)
+        components = self._downcast_components(dashboard.components.all())
         serializer = DashboardComponentPolymorphicSerializer(components, many=True)
         return Response(serializer.data)
+
+    @classmethod
+    def _downcast_components(cls, base_rows):
+        """``base_rows`` as their concrete models, in the same order.
+
+        One query per component *type* rather than one per row: the export and
+        the grid both load every widget, and a 200-widget dashboard should not
+        cost 200 round trips.
+        """
+        rows = list(base_rows)
+        ids_by_model = {}
+        for comp in rows:
+            model = cls._LAYOUT_COMPONENT_MODELS.get(comp.component_name)
+            if model is not None:
+                ids_by_model.setdefault(model, []).append(comp.id)
+        concrete = {}
+        for model, ids in ids_by_model.items():
+            for obj in model.objects.filter(id__in=ids):
+                concrete[obj.id] = obj
+        return [concrete.get(comp.id, comp) for comp in rows]
 
     @action(detail=True, methods=["POST"])
     def save_layout(self, request, pk=None):
@@ -579,7 +597,9 @@ class DashboardViewSet(viewsets.ModelViewSet):
         )
 
         for item in layout:
-            component_name = item["component_name"]
+            # A legacy spelling is stored under the current one, so old rows
+            # stop being dropped the first time they are saved again.
+            component_name = canonical_component_name(item["component_name"])
             if component_name == "TextBoxComponent":
                 # Formatting is presentational, but it lands in an inline
                 # style, so every value is validated down to a known-safe one

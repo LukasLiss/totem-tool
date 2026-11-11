@@ -55,6 +55,14 @@ type DashboardContextType = {
   setViewMode: (mode: ViewMode, options?: SetViewModeOptions) => void;
   /** Install the guard, or pass null to remove it. Only one can be active. */
   registerNavigationGuard?: (guard: NavigationGuard | null) => void;
+  /**
+   * Install a check for unsaved dashboard edits, or pass null to remove it.
+   * Separate from the guard, which also *asks* the user: some callers only
+   * need to know, e.g. an export that reads the last saved layout.
+   */
+  registerUnsavedChangesProbe?: (probe: (() => boolean) | null) => void;
+  /** Whether the open dashboard has edits that are not saved yet. */
+  hasUnsavedChanges?: () => boolean;
 };
 
 // eslint-disable-next-line react-refresh/only-export-components
@@ -62,6 +70,8 @@ export const DashboardContext = createContext<DashboardContextType>({
   viewMode: { type: "overview" },
   setViewMode: () => {},
   registerNavigationGuard: () => {},
+  registerUnsavedChangesProbe: () => {},
+  hasUnsavedChanges: () => false,
 });
 
 export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({
@@ -70,6 +80,7 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({
   const [viewMode, setViewModeState] = useState<ViewMode>({ type: "overview" });
   const navigate = useNavigate();
   const navigationGuard = useRef<NavigationGuard | null>(null);
+  const unsavedChangesProbe = useRef<(() => boolean) | null>(null);
 
   // Every view but the overview belongs to the project it was opened from: a
   // dashboard of one project is not in another's sidebar and its widgets would
@@ -101,6 +112,18 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({
     []
   );
 
+  const registerUnsavedChangesProbe = useCallback(
+    (probe: (() => boolean) | null) => {
+      unsavedChangesProbe.current = probe;
+    },
+    []
+  );
+
+  const hasUnsavedChanges = useCallback(
+    () => unsavedChangesProbe.current?.() ?? false,
+    []
+  );
+
   // Selecting any view from the navbar also navigates to the main process
   // view. This ensures full-page routes like Settings close automatically
   // when a navbar item is clicked. Navigating to the current route is a
@@ -122,7 +145,13 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({
 
   return (
     <DashboardContext.Provider
-      value={{ viewMode, setViewMode, registerNavigationGuard }}
+      value={{
+        viewMode,
+        setViewMode,
+        registerNavigationGuard,
+        registerUnsavedChangesProbe,
+        hasUnsavedChanges,
+      }}
     >
       {children}
     </DashboardContext.Provider>

@@ -80,6 +80,20 @@ KNOWN_COMPONENT_NAMES = frozenset(
     }
 )
 
+# Spellings older builds wrote to `component_name`, mapped to the one
+# `_replace_components` switches on. Early backends stored the Number of Events
+# widget as "NumberofEventsComponent"; such rows still exist, and without this
+# map they vanish on the next save and import as an "unknown" widget.
+LEGACY_COMPONENT_NAMES = {
+    "NumberofEventsComponent": "NumberOfEventsComponent",
+}
+
+
+def canonical_component_name(name):
+    """``name`` with any legacy spelling replaced by the current one."""
+    return LEGACY_COMPONENT_NAMES.get(name, name)
+
+
 # Warning codes returned by an import. Stable strings: the frontend groups on
 # them, so renaming one is a breaking change.
 WARN_QUERY_ASSET_MISSING = "query_asset_missing"
@@ -97,9 +111,11 @@ WARN_EVENT_LOG_MISSING = "event_log_missing"
 # nothing extra and would only be a second thing to keep in step.
 _CONTAINER_KEYS = ("id", "dashboard", "resourcetype")
 
-# Derived or project-local, never portable: `image_asset_url` is resolved from
-# the asset, and `image` is a legacy path confined to one project's media dir.
-_DERIVED_KEYS = ("image_asset_url", "image")
+# Derived, never portable: `image_asset_url` is resolved from the asset.
+# The legacy `image` path is *not* here: it is project-local, but dropping it
+# lost the picture even on a same-project round trip, so it travels and the
+# importer keeps it only where `_validated_legacy_image_path` accepts it.
+_DERIVED_KEYS = ("image_asset_url",)
 
 
 # Geometry a grid can actually lay out. GridStack runs at its default 12
@@ -128,6 +144,7 @@ LOG_COUPLED_FIELDS = {
     "ResourceProfilingComponent": ("resource_types", "business_object_types"),
     "OCAlignmentComponent": (
         "execution_column",
+        "execution_id",
         "business_object_types",
         "business_activities",
     ),
@@ -258,11 +275,9 @@ def _serialized_components(dashboard):
     from .serializers import DashboardComponentPolymorphicSerializer
     from .views.dashboards import DashboardViewSet
 
-    models_by_name = DashboardViewSet._LAYOUT_COMPONENT_MODELS
-    components = []
-    for comp in dashboard.components.all().order_by("order", "id"):
-        model = models_by_name.get(comp.component_name)
-        components.append(model.objects.get(id=comp.id) if model else comp)
+    components = DashboardViewSet._downcast_components(
+        dashboard.components.all().order_by("order", "id")
+    )
     return DashboardComponentPolymorphicSerializer(components, many=True).data
 
 
@@ -301,6 +316,7 @@ def _referenced_assets(rows):
 def _portable_component(row, queries, image_names, model_names, dashboard_names):
     """One serialized component, stripped of everything project-bound."""
     item = dict(row)
+    item["component_name"] = canonical_component_name(item.get("component_name"))
 
     for key in _CONTAINER_KEYS:
         item.pop(key, None)
@@ -346,6 +362,9 @@ def _portable_component(row, queries, image_names, model_names, dashboard_names)
 
     for key in _DERIVED_KEYS:
         item.pop(key, None)
+    # Only an image actually uploaded to the widget is worth carrying.
+    if not item.get("image"):
+        item.pop("image", None)
 
     return item
 
@@ -408,8 +427,9 @@ def validate_dashboard_bundle_dict(raw):
         isinstance(version, int) and not isinstance(version, bool),
         "The file's version must be a whole number.",
     )
+    _require(version >= 1, "The file's version is not valid; it may be corrupt.")
     _require(
-        1 <= version <= DASHBOARD_BUNDLE_VERSION,
+        version <= DASHBOARD_BUNDLE_VERSION,
         f"This file was written by a newer version of TOTeM (dashboard format "
         f"{version}; this build reads up to {DASHBOARD_BUNDLE_VERSION}).",
     )
@@ -477,9 +497,15 @@ def unique_dashboard_name(project, desired):
         if candidate not in taken:
             return candidate
 
-    # 99 collisions on one name: fall back to something certainly free rather
-    # than raising at the end of an otherwise valid import.
-    return base[: limit - 14].rstrip() + f" ({Dashboard.objects.count() + 1})"
+    # 99 collisions on one name: keep counting rather than raising at the end
+    # of an otherwise valid import. `taken` is finite, so this terminates.
+    n = 100
+    while True:
+        suffix = f" ({n})"
+        candidate = base[: limit - len(suffix)].rstrip() + suffix
+        if candidate not in taken:
+            return candidate
+        n += 1
 
 
 def resolve_bundle_components(
@@ -563,8 +589,11 @@ def resolve_bundle_components(
         dashboard_ids[self_name or self_dashboard.name] = self_dashboard.pk
         ambiguous_names.discard(self_name or self_dashboard.name)
 
+    # Lazy for the same reason as in `_serialized_components`.
+    from .views.dashboards import _validated_legacy_image_path
+
     for item in components:
-        name = item.get("component_name")
+        name = canonical_component_name(item.get("component_name"))
 
         if name not in KNOWN_COMPONENT_NAMES:
             warnings.append(
@@ -581,6 +610,7 @@ def resolve_bundle_components(
             continue
 
         resolved = dict(item)
+        resolved["component_name"] = name
 
         asset_name = resolved.pop("query_asset_name", None)
         if asset_name:
@@ -616,6 +646,25 @@ def resolve_bundle_components(
                             f'No image called "{image_name}" in this project, so the '
                             f"widget imported empty. Upload the image under Project "
                             f"Assets with that name, or pick another one."
+                        ),
+                    }
+                )
+
+        # A legacy upload path only survives inside the project that owns the
+        # file; anywhere else the widget would import empty, so say so.
+        legacy_image = resolved.get("image")
+        if legacy_image and not _validated_legacy_image_path(legacy_image, project):
+            resolved.pop("image", None)
+            if not resolved.get("image_asset"):
+                warnings.append(
+                    {
+                        "code": WARN_IMAGE_ASSET_MISSING,
+                        "component_name": name,
+                        "detail": (
+                            "The image was uploaded directly to the widget in the "
+                            "original project and is not available here, so the "
+                            "widget imported empty. Upload it under Project Assets "
+                            "and pick it in the widget."
                         ),
                     }
                 )
