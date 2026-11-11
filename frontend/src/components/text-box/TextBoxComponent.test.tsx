@@ -93,6 +93,13 @@ describe("TextBoxComponent edit mode", () => {
 
   // Background colour and vertical alignment stay box-level: neither can be
   // expressed per paragraph, so they still patch the node directly.
+  it("declares the default alignment on the editor wrapper too", () => {
+    const { container } = renderWidget({ text: "hello" });
+    const editor = container.querySelector(".tiptap-text-box") as HTMLElement;
+    const wrapper = editor.closest("[style*='text-align']") as HTMLElement | null;
+    expect(wrapper?.style.textAlign).toBe("left");
+  });
+
   it("applies a background colour change immediately and patches the node", () => {
     const { node } = renderWidget();
     fireEvent.click(screen.getByLabelText("Background colour"));
@@ -210,6 +217,22 @@ describe("TextBoxComponent view mode", () => {
     const paragraphs = container.querySelectorAll("p");
     expect(paragraphs[0].style.textAlign).toBe("");
     expect(paragraphs[1].style.textAlign).toBe("center");
+  });
+
+  it("gives an unaligned block the default alignment rather than the grid's", () => {
+    const { container } = renderWidget(
+      { rich_text: doc(para([run("no alignment of its own")])) },
+      false,
+    );
+    const p = screen.getByText("no alignment of its own");
+    // The block carries nothing itself -- ProseMirror makes paragraphs that
+    // way, including the one after a horizontal rule.
+    expect(p.style.textAlign).toBe("");
+    // So the wrapper has to say what "nothing" means. `.grid-stack-item-content`
+    // sets `text-align: center` for every widget (grid_demo.css), which would
+    // otherwise centre the block while the toolbar reported it left.
+    expect((p.parentElement as HTMLElement).style.textAlign).toBe("left");
+    void container;
   });
 
   it("renders a box that predates rich text from its plain text and block format", () => {

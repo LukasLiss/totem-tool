@@ -11,6 +11,8 @@ import {
 } from "@/components/ui/card";
 import ProcessArea from "@/react_component/ProcessArea";
 import NewOCDFGVariantsVisualizer from "@/react_component/NewOCDFGVariantsVisualizer";
+import { OCDFG_PROJECT_LAYOUT_KEY } from "@/react_component/ocdfg-layout/options";
+import { useProjectLayoutStorage } from "@/react_component/ocdfg-layout/useLayoutOptions";
 import OCCNVisualizer from "@/react_component/OCCNVisualizer";
 import VariantsExplorer from "@/react_component/VariantsExplorer";
 import DottedChart from "@/react_component/DottedChart";
@@ -24,6 +26,14 @@ import OCHandoverExplorer from "@/react_component/OCHandoverExplorer";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
+/**
+ * Height of the graph canvases. On a phone a 700px canvas is taller than the
+ * screen and leaves no page to grab for scrolling past it, so it is capped to
+ * a share of the viewport there.
+ */
+const CANVAS_HEIGHT = "min(700px, 70svh)";
+const CANVAS_HEIGHT_CLASS = "h-[min(700px,70svh)]";
+
 export function AnalysisView() {
   const { viewMode } = useContext(DashboardContext);
   const { selectedFile } = useContext(SelectedFileContext);
@@ -34,6 +44,11 @@ export function AnalysisView() {
   // Reset local filter when switching components or files
   const viewComponent = viewMode.type === "analysis" ? viewMode.component : null;
   React.useEffect(() => { setLocalFilterParams({}); }, [viewComponent, selectedFile?.id]);
+  // The OC-DFG layout is stored with the project (shared with the overview).
+  const ocdfgLayout = useProjectLayoutStorage(
+    viewComponent === "ocdfg" ? selectedFile?.project : undefined,
+    OCDFG_PROJECT_LAYOUT_KEY,
+  );
 
   if (viewMode.type !== "analysis") return null;
 
@@ -41,34 +56,41 @@ export function AnalysisView() {
     switch (viewMode.component) {
       case "processArea":
         return (
-          <div className="w-full max-w-7xl">
-            <ProcessArea fileId={selectedFile?.id} height={700} />
+          <div className="w-full min-w-0 max-w-7xl">
+            <ProcessArea
+              // A deep link from the asset store opens that composition.
+              key={viewMode.openAssetId ?? "process-area"}
+              fileId={selectedFile?.id}
+              height={CANVAS_HEIGHT}
+              initialCompositionAssetId={viewMode.openAssetId ?? null}
+            />
           </div>
         );
 
       case "ocdfg":
         return (
-          <div className="w-full max-w-7xl">
+          <div className="w-full min-w-0 max-w-7xl">
             <Card>
               <CardHeader>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <CardTitle>Object-Centric DFG</CardTitle>
                   <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={toggleFilter} />
                   <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setLocalFilterParams} />
                 </div>
                 <CardDescription>Directly-Follows Graph visualization</CardDescription>
               </CardHeader>
-              <CardContent className="h-[700px] p-0">
-                <ReactFlowProvider>
-                  <NewOCDFGVariantsVisualizer
-                    height="100%"
-                    fileId={selectedFile?.id}
-                    filterEnabled={filterEnabled}
-                    onToggleFilter={toggleFilter}
-                    showTitle={false}
-                    localFilterParams={localFilterParams}
-                  />
-                </ReactFlowProvider>
+              <CardContent className={`${CANVAS_HEIGHT_CLASS} p-0`}>
+                <NewOCDFGVariantsVisualizer
+                  height="100%"
+                  fileId={selectedFile?.id}
+                  filterEnabled={filterEnabled}
+                  onToggleFilter={toggleFilter}
+                  showTitle={false}
+                  localFilterParams={localFilterParams}
+                  storedLayout={ocdfgLayout.stored}
+                  onLayoutChange={ocdfgLayout.save}
+                  layoutScope={ocdfgLayout.scope}
+                />
               </CardContent>
             </Card>
           </div>
@@ -76,17 +98,17 @@ export function AnalysisView() {
 
       case "occn":
         return (
-          <div className="w-full max-w-7xl">
+          <div className="w-full min-w-0 max-w-7xl">
             <Card>
               <CardHeader>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <CardTitle>Object-Centric Causal Net</CardTitle>
                   <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={toggleFilter} />
                   <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setLocalFilterParams} />
                 </div>
                 <CardDescription>Causal net with activity bindings and automatic layout</CardDescription>
               </CardHeader>
-              <CardContent className="h-[700px] p-0">
+              <CardContent className={`${CANVAS_HEIGHT_CLASS} p-0`}>
                 <ReactFlowProvider>
                   <OCCNVisualizer
                     height="100%"
@@ -104,10 +126,10 @@ export function AnalysisView() {
 
       case "variants":
         return (
-          <div className="w-full max-w-7xl">
+          <div className="w-full min-w-0 max-w-7xl">
             <Card className="@container/card">
               <CardHeader className="items-center relative z-10 justify-between">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <CardTitle>Variants Explorer</CardTitle>
                   <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={toggleFilter} />
                   <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setLocalFilterParams} />
@@ -129,10 +151,10 @@ export function AnalysisView() {
 
       case "dottedChart":
         return (
-          <div className="w-full max-w-7xl">
+          <div className="w-full min-w-0 max-w-7xl">
             <Card className="@container/card">
               <CardHeader>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <CardTitle>OC Dotted Chart</CardTitle>
                   <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={toggleFilter} />
                   <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setLocalFilterParams} />
@@ -147,11 +169,12 @@ export function AnalysisView() {
                   colorBy={{ type: "activity" }}
                   shapeBy={{ type: "none" }}
                   rowOrder="first_occurrence"
+                  rowOrderDirection="asc"
                   maxPoints={10000}
                   showControls={true}
                   filterEnabled={filterEnabled}
                   localFilterParams={localFilterParams}
-                  className="min-h-[700px]"
+                  className="md:min-h-[700px]"
                 />
               </CardContent>
             </Card>
@@ -160,10 +183,10 @@ export function AnalysisView() {
 
       case 'ocPetriNet':
         return (
-          <div className="w-full max-w-7xl">
+          <div className="w-full min-w-0 max-w-7xl">
             <Card>
               <CardHeader>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <CardTitle>OC Petri Net</CardTitle>
                   <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={toggleFilter} />
                   <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setLocalFilterParams} />
@@ -172,7 +195,7 @@ export function AnalysisView() {
                   Object-Centric Petri Net discovered from the event log
                 </CardDescription>
               </CardHeader>
-              <CardContent className="h-[700px] p-0">
+              <CardContent className={`${CANVAS_HEIGHT_CLASS} p-0`}>
                 <OCPNVisualizer
                   height="100%"
                   fileId={selectedFile?.id}
@@ -188,10 +211,10 @@ export function AnalysisView() {
 
       case 'totemMiner':
         return (
-          <div className="w-full max-w-7xl">
+          <div className="w-full min-w-0 max-w-7xl">
             <TotemMiner
               fileId={selectedFile?.id}
-              height={700}
+              height={CANVAS_HEIGHT}
               filterEnabled={filterEnabled}
               onToggleFilter={toggleFilter}
             />
@@ -200,7 +223,7 @@ export function AnalysisView() {
 
       case 'sqlQuery':
         return (
-          <div className="w-full max-w-7xl">
+          <div className="w-full min-w-0 max-w-7xl">
             <SqlQueryAnalysis
               fileId={selectedFile?.id}
               projectId={selectedFile?.project}
@@ -224,7 +247,7 @@ export function AnalysisView() {
   };
 
   return (
-    <div className="flex flex-col min-h-screen">
+    <div className="flex flex-col md:min-h-screen">
       {/* Keyed by component: the cases share a tree shape, so without this
           React reuses the ReactFlowProvider across a switch and the incoming
           view briefly renders the outgoing view's nodes — which is where the

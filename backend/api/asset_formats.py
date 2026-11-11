@@ -217,3 +217,139 @@ def validate_sql_query_asset_dict(data):
         'Query asset "description" must be a string.',
     )
     return data
+
+
+# --------------------------------------------------------------------------
+# Process-area compositions
+# --------------------------------------------------------------------------
+
+PROCESS_AREAS_ASSET_SCHEMA = "process-areas"
+PROCESS_AREAS_ASSET_VERSION = 1
+PROCESS_AREAS_MAX_LEVELS = 50
+PROCESS_AREAS_MAX_AREAS = 200
+PROCESS_AREAS_NAME_MAX_LENGTH = 100
+
+
+def _string_list(value, label):
+    _require(isinstance(value, list), f"{label} must be a list.")
+    names = []
+    for entry in value:
+        name = _name(entry)
+        _require(name is not None, f"{label} must only contain non-empty strings.")
+        names.append(name)
+    _require(len(set(names)) == len(names), f"{label} must not contain duplicates.")
+    return names
+
+
+def validate_process_areas_asset_dict(data):
+    """Validate the ``content_json`` of a PROCESS_AREAS project asset.
+
+    A composition is a stack of levels (level 0 at the bottom, the core
+    business objects; resources higher up), each holding named process
+    areas. Shape::
+
+        {"schema": "process-areas", "version": 1,
+         "description": "optional free text",
+         "levels": [
+             {"level": 0, "areas": [
+                 {"id": "pa-1", "name": "Order handling",
+                  "objectTypes": ["order", "item"],
+                  "activities": ["place order", "pick item"]}]},
+             ...],
+         "unassignedObjectTypes": ["optional", "types in no area"],
+         "source": {optional provenance, free form}}
+
+    The asset's own name is the name of the composition; every area has a
+    stable ``id`` and a ``name`` unique within the composition so other parts
+    of the tool can refer to it. An object type belongs to at most one area.
+    """
+    _require(isinstance(data, dict), "Process-area asset JSON must be an object.")
+    _require(
+        data.get("schema") == PROCESS_AREAS_ASSET_SCHEMA,
+        f'Process-area asset JSON must declare "schema": "{PROCESS_AREAS_ASSET_SCHEMA}".',
+    )
+    version = data.get("version", PROCESS_AREAS_ASSET_VERSION)
+    _require(
+        version == PROCESS_AREAS_ASSET_VERSION,
+        f"Unsupported process-area asset version: {version!r}.",
+    )
+    description = data.get("description", "")
+    _require(
+        description is None or isinstance(description, str),
+        'Process-area asset "description" must be a string.',
+    )
+
+    levels = data.get("levels")
+    _require(isinstance(levels, list) and levels, '"levels" must be a non-empty list.')
+    _require(
+        len(levels) <= PROCESS_AREAS_MAX_LEVELS,
+        f"A composition can have at most {PROCESS_AREAS_MAX_LEVELS} levels.",
+    )
+
+    seen_levels = set()
+    area_ids = set()
+    area_names = set()
+    owner_of_type = {}
+    area_count = 0
+    for index, level in enumerate(levels):
+        _require(isinstance(level, dict), f"Level #{index + 1} must be an object.")
+        number = level.get("level", index)
+        _require(
+            isinstance(number, int) and not isinstance(number, bool) and number >= 0,
+            f"Level #{index + 1}: \"level\" must be a non-negative integer.",
+        )
+        _require(number not in seen_levels, f"Duplicate level {number}.")
+        seen_levels.add(number)
+
+        areas = level.get("areas", [])
+        _require(isinstance(areas, list), f"Level {number}: \"areas\" must be a list.")
+        for area_index, area in enumerate(areas):
+            where = f"Level {number}, area #{area_index + 1}"
+            _require(isinstance(area, dict), f"{where} must be an object.")
+            area_id = _name(area.get("id"))
+            _require(area_id is not None, f'{where} needs an "id".')
+            _require(area_id not in area_ids, f'Duplicate process area id "{area_id}".')
+            area_ids.add(area_id)
+
+            name = _name(area.get("name"))
+            _require(name is not None, f'{where} needs a non-empty "name".')
+            _require(
+                len(name) <= PROCESS_AREAS_NAME_MAX_LENGTH,
+                f'{where}: "name" must be at most {PROCESS_AREAS_NAME_MAX_LENGTH} characters.',
+            )
+            _require(
+                name.casefold() not in area_names,
+                f'Two process areas are called "{name}"; area names must be unique.',
+            )
+            area_names.add(name.casefold())
+
+            object_types = _string_list(area.get("objectTypes"), f'Process area "{name}": "objectTypes"')
+            _require(object_types, f'Process area "{name}" needs at least one object type.')
+            for object_type in object_types:
+                _require(
+                    object_type not in owner_of_type,
+                    f'Object type "{object_type}" is in both "{owner_of_type.get(object_type)}" '
+                    f'and "{name}"; an object type belongs to at most one process area.',
+                )
+                owner_of_type[object_type] = name
+            _string_list(area.get("activities", []), f'Process area "{name}": "activities"')
+            area_count += 1
+
+    _require(area_count > 0, "A composition needs at least one process area.")
+    _require(
+        area_count <= PROCESS_AREAS_MAX_AREAS,
+        f"A composition can have at most {PROCESS_AREAS_MAX_AREAS} process areas.",
+    )
+
+    unassigned = _string_list(
+        data.get("unassignedObjectTypes", []), '"unassignedObjectTypes"'
+    )
+    for object_type in unassigned:
+        _require(
+            object_type not in owner_of_type,
+            f'Object type "{object_type}" is both unassigned and in "{owner_of_type.get(object_type)}".',
+        )
+
+    source = data.get("source")
+    _require(source is None or isinstance(source, dict), '"source" must be an object when present.')
+    return data

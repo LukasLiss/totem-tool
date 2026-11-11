@@ -19,17 +19,25 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { MultiSelectPopover } from "@/react_component/variants/MultiSelectPopover";
+import { ProcessAreaSourceSelect } from "@/react_component/variants/ProcessAreaSettingsPanel";
 import {
   EXTRACTION_OPTIONS,
   ISO_OPTIONS,
   type Extraction,
   type IsoStrategy,
+  type VariantsMode,
 } from "@/react_component/variants/types";
+import type { ProjectAsset } from "@/api/assetsApi";
 import { ChartSettingsLayout } from "./sql-widgets/chartSettings";
 import VariantsSketch from "./VariantsSketch";
 
 type VariantsSettings = {
   automaticLoading: boolean;
+  variantsMode: VariantsMode;
+  /** Stored process-area composition to use; null = the one shown in the Process Area component. */
+  areaAssetId: number | null;
+  areaExecutionColumn: string;
+  areaVariantColumn: string;
   leadingType: string;
   extraction: Extraction;
   iso: IsoStrategy;
@@ -45,18 +53,36 @@ const VariantsSettingsBody: React.FC<{
   availableActivities: string[];
   loadingTypes: boolean;
   fileId?: number;
+  /** Process-area compositions stored in the project assets. */
+  storedCompositions: Pick<ProjectAsset, "id" | "name">[];
   /** Explanation of the draft, the same as in the edit tile. */
   sketchHint: string;
   onApply: (settings: VariantsSettings) => void;
   onCancel: () => void;
-}> = ({ id, initial, availableTypes, availableActivities, loadingTypes, fileId, sketchHint, onApply, onCancel }) => {
+}> = ({
+  id,
+  initial,
+  availableTypes,
+  availableActivities,
+  loadingTypes,
+  fileId,
+  storedCompositions,
+  sketchHint,
+  onApply,
+  onCancel,
+}) => {
   const [automaticLoading, setAutomaticLoading] = useState(initial.automaticLoading);
+  const [variantsMode, setVariantsMode] = useState(initial.variantsMode);
+  const [areaAssetId, setAreaAssetId] = useState(initial.areaAssetId);
+  const [areaExecutionColumn, setAreaExecutionColumn] = useState(initial.areaExecutionColumn);
+  const [areaVariantColumn, setAreaVariantColumn] = useState(initial.areaVariantColumn);
   const [leadingType, setLeadingType] = useState(initial.leadingType);
   const [extraction, setExtraction] = useState(initial.extraction);
   const [iso, setIso] = useState(initial.iso);
   const [timeoutS, setTimeoutS] = useState(initial.timeoutS);
   const [businessObjectTypes, setBusinessObjectTypes] = useState(initial.businessObjectTypes);
   const [businessActivities, setBusinessActivities] = useState(initial.businessActivities);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   const extractionOpt = EXTRACTION_OPTIONS.find((o) => o.value === extraction);
   const isoOpt = ISO_OPTIONS.find((o) => o.value === iso);
@@ -68,7 +94,19 @@ const VariantsSettingsBody: React.FC<{
       heading="Variants Explorer settings"
       idPrefix={id}
       onApply={() =>
-        onApply({ automaticLoading, leadingType, extraction, iso, timeoutS, businessObjectTypes, businessActivities })
+        onApply({
+          automaticLoading,
+          variantsMode,
+          areaAssetId,
+          areaExecutionColumn,
+          areaVariantColumn,
+          leadingType,
+          extraction,
+          iso,
+          timeoutS,
+          businessObjectTypes,
+          businessActivities,
+        })
       }
       onCancel={onCancel}
       dataTab={
@@ -83,6 +121,90 @@ const VariantsSettingsBody: React.FC<{
             />
           </div>
 
+          {variantsMode === 'process_areas' && (
+            <div className="space-y-2">
+              <Label htmlFor={`${id}-area-source`}>Process areas</Label>
+              <ProcessAreaSourceSelect
+                id={`${id}-area-source`}
+                value={areaAssetId}
+                onChange={setAreaAssetId}
+                storedCompositions={storedCompositions}
+              />
+              <p className="text-xs text-muted-foreground">
+                Pick a composition stored in the project assets to always use its named areas.
+              </p>
+            </div>
+          )}
+
+          {variantsMode === 'process_areas' && (
+            <p className="text-sm text-muted-foreground">
+              Computes the connected components of every process area and shows one
+              variant list per area. Results are stored in the event log columns
+              "{areaExecutionColumn}" and "{areaVariantColumn}".
+            </p>
+          )}
+
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setShowAdvanced((open) => !open)}
+            aria-expanded={showAdvanced}
+          >
+            {showAdvanced ? 'Hide advanced options' : 'Advanced options'}
+          </Button>
+
+          {showAdvanced && (
+          <>
+          <div className="space-y-2">
+            <Label>Method</Label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="w-full justify-between font-normal">
+                  <span className="truncate">
+                    {variantsMode === 'process_areas'
+                      ? 'Connected components per process area'
+                      : 'Custom extraction'}
+                  </span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-[320px]">
+                <DropdownMenuRadioGroup
+                  value={variantsMode}
+                  onValueChange={(value) => setVariantsMode(value as VariantsMode)}
+                >
+                  <DropdownMenuRadioItem value="process_areas">
+                    Connected components per process area
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="custom">Custom extraction</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+
+          {variantsMode === 'process_areas' && (
+            <>
+              <div className="space-y-2">
+                <Label htmlFor={`${id}-area-execution-column`}>Execution column</Label>
+                <Input
+                  id={`${id}-area-execution-column`}
+                  value={areaExecutionColumn}
+                  onChange={(e) => setAreaExecutionColumn(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor={`${id}-area-variant-column`}>Variant column</Label>
+                <Input
+                  id={`${id}-area-variant-column`}
+                  value={areaVariantColumn}
+                  onChange={(e) => setAreaVariantColumn(e.target.value)}
+                />
+              </div>
+            </>
+          )}
+
+          {variantsMode === 'custom' && (
+          <>
           {/* Leading Object Type Dropdown */}
           <div className="space-y-2">
             <Label>Leading object type</Label>
@@ -188,6 +310,9 @@ const VariantsSettingsBody: React.FC<{
             </>
           )}
 
+          </>
+          )}
+
           {/* Isomorphism strategy */}
           <div className="space-y-2">
             <Label>Isomorphism strategy</Label>
@@ -243,6 +368,8 @@ const VariantsSettingsBody: React.FC<{
               against runaway runs on hard combinations.
             </p>
           </div>
+          </>
+          )}
         </div>
       }
       sketch={<VariantsSketch className="w-full max-w-xs md:max-w-md" />}

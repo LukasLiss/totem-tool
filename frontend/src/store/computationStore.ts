@@ -146,6 +146,9 @@ const FILE_ACTIONS: Record<string, string> = {
   totem_conformance: "TOTeM conformance",
   occn_conformance: "OCCN conformance",
   occn_replay_unit_detail: "Replay detail",
+  oc_alignment: "Object-centric alignment",
+  oc_alignment_executions: "Process executions",
+  oc_alignment_batch: "Object-centric alignments",
   process_executions: "Process executions",
   execute_query: "SQL query",
   event_distribution: "Event distribution",
@@ -154,6 +157,7 @@ const FILE_ACTIONS: Record<string, string> = {
 
 const ROOT_ENDPOINTS: Record<string, string> = {
   "new-ocdfg": "Directly-follows graph",
+  "ocdfg-block-structure": "Inductive miner (block structure)",
   occn: "Causal net",
   variants: "Variants",
   handover: "Handover of work",

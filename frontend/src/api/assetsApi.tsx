@@ -1,6 +1,6 @@
 import axios, { AxiosError } from "axios";
 
-export type AssetType = "TOTEM" | "OCCN" | "OCPN" | "OCDFG" | "QUERY";
+export type AssetType = "TOTEM" | "OCCN" | "OCPN" | "OCDFG" | "QUERY" | "PROCESS_AREAS";
 
 /** Model asset types (everything the Model Assets view manages). */
 export const MODEL_ASSET_TYPES: AssetType[] = ["TOTEM", "OCCN", "OCPN", "OCDFG"];

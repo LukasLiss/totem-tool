@@ -10,6 +10,7 @@ frontend/src/react_component/oldVariantsExplorer.tsx
 !.claude/**/*.md
 !totem_lib/evaluation/results/*.md
 totem_lib/evaluation/results/*.json
+!docs/RELEASING.md
 !docs/MODEL_ASSETS.md
 !docs/OCCN_REPLAY_FITNESS.md
 !docs/RESOURCE_AWARE_VARIANTS.md
@@ -17,6 +18,7 @@ totem_lib/evaluation/results/*.json
 !docs/DOCKER.md
 !docs/EDGE_CASE_TAXONOMY.md
 !docs/ORGANIZATIONAL_MINING.md
+!docs/OC_ALIGNMENTS.md
 !docs/Quality_Assurance_Report.md
 !docs/user-guide/*.md
 !totem_lib/test_data/edge_cases/README.md

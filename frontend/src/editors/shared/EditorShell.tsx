@@ -216,8 +216,10 @@ export function EditorShell({
         </div>
       </div>
 
-      <div className="flex flex-1 min-h-0">
-        <div className="relative flex-1 min-w-0">
+      {/* Phone: canvas on top at a fixed share of the screen, panel below at
+          its natural height (the page scrolls). From md up: side by side. */}
+      <div className="flex flex-col md:flex-row md:flex-1 md:min-h-0">
+        <div className="relative h-[60svh] min-w-0 md:h-auto md:flex-1">
           {toolbar && (
             <div className="absolute left-3 top-3 z-10 flex flex-col gap-1 rounded-lg border bg-background/95 p-1 shadow-sm backdrop-blur">
               {toolbar}
@@ -226,7 +228,7 @@ export function EditorShell({
           {children}
         </div>
         {sidePanel && (
-          <div className="w-60 lg:w-72 shrink-0 border-l bg-background/50 overflow-y-auto">
+          <div className="shrink-0 border-t bg-background/50 md:w-60 md:border-l md:border-t-0 md:overflow-y-auto lg:w-72">
             {sidePanel}
           </div>
         )}

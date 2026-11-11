@@ -321,6 +321,29 @@ SIMPLE_JWT = {
 MEDIA_ROOT = DATA_DIR / "user_files"
 MEDIA_URL = "/files/"
 
+
+def _optional_limit(name):
+    """A positive integer from the environment, or None (no limit) if unset."""
+    value = os.environ.get(name, '').strip()
+    if not value:
+        return None
+    if not value.isdigit() or int(value) == 0:
+        from django.core.exceptions import ImproperlyConfigured
+        raise ImproperlyConfigured(f'{name} must be a positive whole number, got {value!r}.')
+    return int(value)
+
+
+# Limits for hosted installs (see docs/DOCKER.md). Unset means no limit.
+_max_upload_mb = _optional_limit('TOTEM_MAX_UPLOAD_MB')
+MAX_UPLOAD_BYTES = _max_upload_mb * 1024 * 1024 if _max_upload_mb else None
+MAX_PROJECTS_PER_USER = _optional_limit('TOTEM_MAX_PROJECTS_PER_USER')
+
+FILE_UPLOAD_HANDLERS = [
+    'api.limits.MaxSizeUploadHandler',
+    'django.core.files.uploadhandler.MemoryFileUploadHandler',
+    'django.core.files.uploadhandler.TemporaryFileUploadHandler',
+]
+
 # ---------------------------------------------------------------------------
 # Request result cache (filesystem-backed, size-capped)  — Epic #71
 # ---------------------------------------------------------------------------
@@ -358,6 +381,20 @@ if LOCAL_MODE:
 LOCAL_GUEST_USERNAME = 'Guest'
 LOCAL_GUEST_PASSWORD = 'guest'
 SEED_GUEST_USER = LOCAL_MODE or os.environ.get('SEED_GUEST_USER', '0') == '1'
+
+# True while the Django test runner is building/using the test database. The
+# sample-project seed below runs on post_migrate, which also fires during test
+# database setup -- without this a developer running the suite with LOCAL_MODE=1
+# would copy the sample event log into their real MEDIA_ROOT on every run. Tests
+# that exercise the seed re-enable the flag with override_settings.
+TESTING = 'test' in sys.argv or 'pytest' in sys.modules
+
+# The first-launch sample project (api/sample_project.py): a container-logistics
+# event log and a ready-made dashboard, so a fresh install has something to show.
+# Gated like SEED_GUEST_USER -- desktop installs only, never hosted deployments.
+SEED_SAMPLE_PROJECT = (
+    LOCAL_MODE or os.environ.get('SEED_SAMPLE_PROJECT', '0') == '1'
+) and not TESTING
 
 # ---------------------------------------------------------------------------
 # Login page mode

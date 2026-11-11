@@ -26,6 +26,11 @@ docker run -d -p 8000:8000 -v totem-data:/data \
   ghcr.io/lukasliss/totem-tool:latest
 ```
 
+`latest` is the newest release; pin a version such as `:0.9.2` to control
+upgrades, or use `:main` for the unreleased development state. Images are
+published for both `linux/amd64` and `linux/arm64` (e.g. Apple Silicon, ARM
+servers).
+
 ## Logins
 
 You need at least one of the following; the container logs a warning if none is set.
@@ -68,13 +73,32 @@ provider can register this way.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PUBLIC_URL` | `http://localhost:8000` | Address users open. Builds the OAuth callback URL and the allowed host name. |
+| `PUBLIC_URL` | `http://localhost:<TOTEM_PORT>` | Address users open. Builds the OAuth callback URL and the allowed host name. |
 | `TOTEM_PORT` | `8000` | Host port (docker compose only). |
 
 Put the container behind a reverse proxy that terminates HTTPS and set
 `PUBLIC_URL=https://your.domain`. OAuth needs HTTPS on anything but
 `localhost`: its login cookie is marked Secure and browsers drop it on plain
 http.
+
+## Limits for a shared server
+
+Both limits are off by default. Set a variable to turn its limit on.
+
+| Variable | Meaning |
+|---|---|
+| `TOTEM_MAX_UPLOAD_MB` | Largest file a user can upload, in MB. Applies to each file, on every upload (event logs, models, images). |
+| `TOTEM_MAX_PROJECTS_PER_USER` | Most projects one user can have. Applies to uploads and to saving from the OCEL editor. Deleting a project frees a slot. |
+
+The value must be a positive whole number; anything else stops the server from
+starting, so a typo cannot silently leave a limit off. Lowering a limit does
+not remove anything: a user already over the project limit keeps their
+projects but cannot add new ones.
+
+The upload limit applies to the file as uploaded, so a stored log can end up
+larger once it is converted to DuckDB. Your reverse proxy may have an upload
+limit of its own; for example, nginx rejects anything over
+`client_max_body_size` (1 MB by default). Set it above `TOTEM_MAX_UPLOAD_MB`.
 
 ## Advanced settings
 

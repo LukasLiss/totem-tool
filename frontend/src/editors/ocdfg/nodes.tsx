@@ -76,11 +76,9 @@ export const ActivityNode = memo(function ActivityNode({
 });
 
 /**
- * START (▶) / END (●) marker node of one object type — the same visual
- * language as the analysis views' OC-DFG terminal nodes
- * (react_component/OcdfgTerminalNode.tsx): a rounded square filled with the
- * type color, a triangle (start) or dot (end) in the readable contrast
- * color, and the object type name inside the tile.
+ * START (▶) / END (●) marker node of one object type: a rounded square
+ * filled with the type color, a triangle (start) or dot (end) in the readable
+ * contrast color, and the object type name inside the tile.
  */
 export const ControlNode = memo(function ControlNode({
   data,

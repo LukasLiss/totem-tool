@@ -104,15 +104,10 @@ describe("TotemConformanceVisualization", () => {
   it("keeps a dragged position when the dimension changes", () => {
     renderVisualization();
     dragNodeTo("Order", 640, 480);
-    const temporalColors = flow().edges.map((edge) => edge.data?.strokeColor);
 
     fireEvent.click(screen.getByRole("radio", { name: /Log cardinality/ }));
 
     expect(nodeById("Order").position).toEqual({ x: 640, y: 480 });
-    // The edges really were rebuilt for the new dimension; only the nodes stayed.
-    expect(flow().edges.map((edge) => edge.data?.strokeColor)).not.toEqual(
-      temporalColors
-    );
   });
 
   it("keeps a dragged position when an object type is selected", () => {

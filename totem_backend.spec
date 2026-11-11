@@ -24,7 +24,13 @@ a = Analysis(
     ['backend/manage.py'],
     pathex=[],
     binaries=[],
-    datas=[('backend/initial_user.json', '.')] + pulp_solver_files,
+    datas=[
+        ('backend/initial_user.json', '.'),
+        # The first-launch sample event log (api/sample_project.py). Resolved at
+        # runtime relative to sys._MEIPASS, which is what this destination is
+        # relative to as well.
+        ('backend/sample_data/container_logistics.duckdb', 'sample_data'),
+    ] + pulp_solver_files,
     hiddenimports=simplejwt_hidden_imports + whitenoise_hidden_imports,
     hookspath=[],
     hooksconfig={},

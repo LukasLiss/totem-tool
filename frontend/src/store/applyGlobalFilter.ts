@@ -62,7 +62,7 @@ export async function applyGlobalFilterRules(fileId: number, rules: FilterRule[]
 
 
 /** Logs with more events than this get a time-range filter proposed on selection. */
-export const LARGE_LOG_EVENT_LIMIT = 25_000;
+export const LARGE_LOG_EVENT_LIMIT = 40_000;
 
 export type SuggestedTimeWindow = {
   needed: boolean;

@@ -41,14 +41,14 @@ import advances; the upload endpoint forwards it to the client (see below).
 
 ## 2. Automatic time-range filter for large logs
 
-When a log with more than `LARGE_LOG_EVENT_LIMIT` (25 000) events is
+When a log with more than `LARGE_LOG_EVENT_LIMIT` (40 000) events is
 selected, the frontend applies a global **time-range filter** covering the
-first 25 000 events before the overview mounts, so no view starts computing
+first 40 000 events before the overview mounts, so no view starts computing
 over the whole log. The rule appears in the filter bar like any other filter
 and can be adjusted or removed; it is proposed once per log and browser
 session (`sessionStorage`).
 
-- Backend: `GET /api/files/<id>/suggested_time_window/?max_events=25000`
+- Backend: `GET /api/files/<id>/suggested_time_window/?max_events=40000`
   returns `{needed, total_events, max_events, selected_events, after,
   before}`. For the default limit the window is computed when the log is
   loaded and served without waiting for the per-file algorithm lock.

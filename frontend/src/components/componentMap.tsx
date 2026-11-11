@@ -21,8 +21,15 @@ import {
   type ImageAsset as ImageAssetInfo,
 } from '@/api/imageAssetsApi';
 import VariantsExplorer from '@/react_component/VariantsExplorer';
-import type { Extraction, IsoStrategy } from '@/react_component/variants/types';
+import {
+  DEFAULT_PROCESS_AREA_COLUMNS,
+  DEFAULT_VARIANTS_MODE,
+  type Extraction,
+  type IsoStrategy,
+  type VariantsMode,
+} from '@/react_component/variants/types';
 import { fetchActivities, fetchObjectTypes } from '@/react_component/variants/variantsApi';
+import { useProcessAreaAssets } from '@/store/processAreaAssetsStore';
 import ProcessArea from '@/react_component/ProcessArea';
 import {
   clampProcessAreaParams,
@@ -53,13 +60,18 @@ import { ChartSettingsDialog } from './sql-widgets/chartSettings';
 import {
   axisOptionToParam,
   type AxisOption,
+  type RowOrderDirection,
   type RowOrderOption,
 } from '@/react_component/dottedChart/dottedChartUtils';
 import TotemMiner from '@/react_component/TotemMiner';
 import NewOCDFGVisualizer from '@/react_component/NewOCDFGVisualizer';
 import NewOCDFGVariantsVisualizer from '@/react_component/NewOCDFGVariantsVisualizer';
 import OCPNVisualizer from '@/react_component/OCPNVisualizer';
+import OcpnFlattenedReplay from '@/components/ocpn-flattened-replay/OcpnFlattenedReplay';
+import { listAssets, type ProjectAsset } from '@/api/assetsApi';
 import { toast } from "sonner";
+import { saveOcdfgWidgetLayout } from "@/api/dashboardApi";
+import type { SaveLayout } from "@/react_component/ocdfg-layout/useLayoutOptions";
 import OCCNVisualizer from '@/react_component/OCCNVisualizer';
 import LogStatistics from './LogStatistics';
 import LogStatisticsSketch from './LogStatisticsSketch';
@@ -70,6 +82,7 @@ import SqlTableSketch from './SqlTableSketch';
 import { discoveryKey, useColumnDiscovery } from './sql-widgets/sqlWidgetUtils';
 import SqlTableSettingsDialog, { type SqlTableSettings } from './SqlTableSettingsDialog';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -166,11 +179,16 @@ export interface ComponentProps {
     automatic_loading?: boolean;
     leading_object_type?: string;
     // Persisted advanced settings for the Variants Explorer
+    variants_mode?: VariantsMode;
+    area_execution_column?: string;
+    area_variant_column?: string;
     extraction?: Extraction;
     iso?: IsoStrategy;
     timeout_s?: number;
     business_object_types?: string[];
     business_activities?: string[];
+    // Stored process-area composition of the process-area mode (asset id)
+    process_area_asset?: number | null;
     // LogStatisticsComponent properties
     show_num_events?: boolean;
     show_num_activities?: boolean;
@@ -189,6 +207,7 @@ export interface ComponentProps {
     color_by?: string;
     shape_by?: string;
     row_order?: RowOrderOption;
+    row_order_direction?: RowOrderDirection;
     max_points?: number;
     show_minimap?: boolean;
     // NewOCDFGComponent / OCCNComponent properties
@@ -203,6 +222,15 @@ export interface ComponentProps {
     w_divergence?: number;
     alpha?: number;
     beta?: number;
+    // Stored composition shown instead of the discovery (asset id)
+    composition_asset?: number | null;
+    // OCAlignmentComponent properties
+    model_asset?: number | null;
+    execution_source?: 'area' | 'stored';
+    execution_column?: string;
+    execution_id?: string;
+    max_states?: number;
+    show_silent_moves?: boolean;
     // OCHandoverComponent / ResourceProfilingComponent properties
     resource_types?: string[];
     businessobject_types?: string[];
@@ -221,6 +249,8 @@ export interface ComponentProps {
     n_clusters?: number;
     min_cluster_size?: number;
     distance_metric?: 'euclidean' | 'hellinger';
+    // OCPNFlattenedReplayComponent properties
+    ocpn_asset_id?: number | null;
     // SqlQueryComponent properties
     name?: string;
     query?: string;
@@ -365,6 +395,9 @@ export const TextBoxComponent: React.FC<ComponentProps> = ({
                   fontSize: TEXT_BOX_FORMAT_DEFAULTS.font_size,
                   color: TEXT_BOX_FORMAT_DEFAULTS.text_color,
                   lineHeight: TEXT_BOX_FORMAT_DEFAULTS.line_height,
+                  // Mirrors TextBoxEditor: without it an unaligned block
+                  // inherits `text-align: center` from `.grid-stack-item-content`.
+                  textAlign: TEXT_BOX_FORMAT_DEFAULTS.text_align,
                 }}
               >
                 <RichTextRenderer
@@ -779,6 +812,17 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
   // Local state for form values
   const [automaticLoading, setAutomaticLoading] = useState(node.automatic_loading ?? false);
   const [leadingType, setLeadingType] = useState(node.leading_object_type ?? '');
+  const [variantsMode, setVariantsMode] = useState<VariantsMode>(
+    node.variants_mode ?? DEFAULT_VARIANTS_MODE
+  );
+  const [areaExecutionColumn, setAreaExecutionColumn] = useState(
+    node.area_execution_column ?? DEFAULT_PROCESS_AREA_COLUMNS.executionColumn
+  );
+  const [areaVariantColumn, setAreaVariantColumn] = useState(
+    node.area_variant_column ?? DEFAULT_PROCESS_AREA_COLUMNS.variantColumn
+  );
+  const [areaAssetId, setAreaAssetId] = useState<number | null>(node.process_area_asset ?? null);
+  const storedCompositions = useProcessAreaAssets(selectedFile?.project ?? null);
   const [extraction, setExtraction] = useState<Extraction>(
     (node.extraction as Extraction) ?? 'leading_1hop'
   );
@@ -803,6 +847,10 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
   useEffect(() => {
     setAutomaticLoading(node.automatic_loading ?? false);
     setLeadingType(node.leading_object_type ?? '');
+    setVariantsMode(node.variants_mode ?? DEFAULT_VARIANTS_MODE);
+    setAreaExecutionColumn(node.area_execution_column ?? DEFAULT_PROCESS_AREA_COLUMNS.executionColumn);
+    setAreaVariantColumn(node.area_variant_column ?? DEFAULT_PROCESS_AREA_COLUMNS.variantColumn);
+    setAreaAssetId(node.process_area_asset ?? null);
     setExtraction((node.extraction as Extraction) ?? 'leading_1hop');
     setIso((node.iso as IsoStrategy) ?? 'wl+vf2');
     setTimeoutS(node.timeout_s ?? 10);
@@ -811,6 +859,10 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
   }, [
     node.automatic_loading,
     node.leading_object_type,
+    node.variants_mode,
+    node.area_execution_column,
+    node.area_variant_column,
+    node.process_area_asset,
     node.extraction,
     node.iso,
     node.timeout_s,
@@ -849,6 +901,12 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
   const handleLeadingTypeChange = (value: string) => {
     setLeadingType(value);
     onUpdate?.({ leading_object_type: value });
+  };
+
+  const handleVariantsModeChange = (value: string) => {
+    const v = value as VariantsMode;
+    setVariantsMode(v);
+    onUpdate?.({ variants_mode: v });
   };
 
   const handleExtractionChange = (value: string) => {
@@ -892,14 +950,36 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
         <ChartSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen}>
           <VariantsSettingsBody
             id={`variants-${node.component_id}`}
-            initial={{ automaticLoading, leadingType, extraction, iso, timeoutS, businessObjectTypes, businessActivities }}
+            initial={{
+              automaticLoading,
+              variantsMode,
+              areaAssetId,
+              areaExecutionColumn,
+              areaVariantColumn,
+              leadingType,
+              extraction,
+              iso,
+              timeoutS,
+              businessObjectTypes,
+              businessActivities,
+            }}
             availableTypes={availableTypes}
             availableActivities={availableActivities}
             loadingTypes={loadingTypes}
             fileId={selectedFile?.id}
+            storedCompositions={storedCompositions.assets}
             sketchHint={VARIANTS_SKETCH_HINT}
             onApply={(next) => {
               handleAutomaticLoadingChange(next.automaticLoading);
+              handleVariantsModeChange(next.variantsMode);
+              setAreaAssetId(next.areaAssetId);
+              setAreaExecutionColumn(next.areaExecutionColumn);
+              setAreaVariantColumn(next.areaVariantColumn);
+              onUpdate?.({
+                process_area_asset: next.areaAssetId,
+                area_execution_column: next.areaExecutionColumn,
+                area_variant_column: next.areaVariantColumn,
+              });
               handleLeadingTypeChange(next.leadingType);
               handleExtractionChange(next.extraction);
               handleIsoChange(next.iso);
@@ -916,6 +996,7 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
   }
 
   // VIEW MODE: Render VariantsExplorer with stored settings
+  const areaColumns = { executionColumn: areaExecutionColumn, variantColumn: areaVariantColumn };
   return (
     <Card className="w-full h-full rounded-none overflow-auto">
       <CardContent className="p-0 h-full">
@@ -924,6 +1005,9 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
           embedded={true}
           automaticLoading={automaticLoading}
           defaultLeadingType={leadingType || undefined}
+          defaultMode={variantsMode}
+          defaultProcessAreaColumns={areaColumns}
+          defaultProcessAreaAssetId={areaAssetId}
           defaultExtraction={extraction}
           defaultIso={iso}
           defaultTimeoutS={timeoutS}
@@ -938,7 +1022,15 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
             setLeadingType(s.leading_type);
             setBusinessObjectTypes(s.business_object_types);
             setBusinessActivities(s.business_activities);
+            setVariantsMode(s.mode);
+            setAreaExecutionColumn(s.area_execution_column);
+            setAreaVariantColumn(s.area_variant_column);
+            setAreaAssetId(s.process_area_asset);
             onUpdate?.({
+              process_area_asset: s.process_area_asset,
+              variants_mode: s.mode,
+              area_execution_column: s.area_execution_column,
+              area_variant_column: s.area_variant_column,
               extraction: s.extraction,
               iso: s.iso,
               timeout_s: s.timeout_s,
@@ -989,6 +1081,22 @@ export const ProcessAreaComponent: React.FC<ComponentProps> = ({
 
   const [params, setParams] = useState<ProcessAreaParams>(paramsFromNode);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [compositionAssetId, setCompositionAssetId] = useState<number | null>(
+    node.composition_asset ?? null,
+  );
+  const storedCompositions = useProcessAreaAssets(selectedFile?.project ?? null);
+
+  useEffect(() => {
+    setCompositionAssetId(node.composition_asset ?? null);
+  }, [node.composition_asset]);
+
+  const handleCompositionAssetChange = useCallback(
+    (assetId: number | null) => {
+      setCompositionAssetId(assetId);
+      onUpdate?.({ composition_asset: assetId });
+    },
+    [onUpdate],
+  );
 
   useEffect(() => {
     setAlgorithm(node.algorithm ?? DEFAULT_PROCESS_AREA_ALGORITHM);
@@ -1032,10 +1140,12 @@ export const ProcessAreaComponent: React.FC<ComponentProps> = ({
         <ChartSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen}>
           <ProcessAreaSettingsBody
             id={`process-area-${node.component_id}`}
-            initial={{ algorithm, params }}
+            initial={{ algorithm, params, compositionAssetId }}
+            storedCompositions={storedCompositions.assets}
             sketchHint={PROCESS_AREA_SKETCH_HINT}
-            onApply={(settings) => {
+            onApply={({ compositionAssetId: nextComposition, ...settings }) => {
               handleSettingsChange(settings);
+              handleCompositionAssetChange(nextComposition);
               setSettingsOpen(false);
             }}
             onCancel={() => setSettingsOpen(false)}
@@ -1054,6 +1164,8 @@ export const ProcessAreaComponent: React.FC<ComponentProps> = ({
       initialAlgorithm={algorithm}
       initialParams={params}
       onSettingsChange={handleSettingsChange}
+      initialCompositionAssetId={compositionAssetId}
+      onCompositionAssetChange={handleCompositionAssetChange}
     />
   );
 };
@@ -1157,6 +1269,7 @@ const DOTTED_CHART_DEFAULT_CONFIG: DottedChartConfig = {
   colorBy: { type: "activity" },
   shapeBy: { type: "none" },
   rowOrder: "first_occurrence",
+  rowOrderDirection: "asc",
   maxPoints: 10000,
 };
 
@@ -1190,6 +1303,7 @@ export const OCDottedChartComponent: React.FC<ComponentProps> = ({
       color_by: axisOptionToPersistedValue(nextConfig.colorBy),
       shape_by: axisOptionToPersistedValue(nextConfig.shapeBy),
       row_order: nextConfig.rowOrder,
+      row_order_direction: nextConfig.rowOrderDirection,
       max_points: nextConfig.maxPoints,
     });
   };
@@ -1243,6 +1357,7 @@ export const OCDottedChartComponent: React.FC<ComponentProps> = ({
           colorBy={config.colorBy}
           shapeBy={config.shapeBy}
           rowOrder={config.rowOrder}
+          rowOrderDirection={config.rowOrderDirection}
           maxPoints={config.maxPoints}
           showControls={false}
           showMinimap={true}
@@ -1262,6 +1377,7 @@ function nodeToDottedChartConfig(node: ComponentProps["node"]): DottedChartConfi
     colorBy: persistedValueToAxisOption(node.color_by, DOTTED_CHART_DEFAULT_CONFIG.colorBy),
     shapeBy: persistedValueToAxisOption(node.shape_by, DOTTED_CHART_DEFAULT_CONFIG.shapeBy),
     rowOrder: node.row_order ?? DOTTED_CHART_DEFAULT_CONFIG.rowOrder,
+    rowOrderDirection: node.row_order_direction ?? DOTTED_CHART_DEFAULT_CONFIG.rowOrderDirection,
     maxPoints: node.max_points ?? DOTTED_CHART_DEFAULT_CONFIG.maxPoints,
   };
 }
@@ -1284,42 +1400,57 @@ function isBuiltinDottedChartAxis(
 
 
 const OCDFG_SKETCH_HINT =
-  "Layout preview: a colored start and end per object type, activities with their type dots, and one colored arc per object type, in the chosen direction. The graph itself comes from the log; names are placeholders.";
+  "Layout preview: a colored start and end per object type, activities with their type dots, and one colored arc per object type. The graph itself comes from the log; names are placeholders.";
 
-// NewOCDFGComponent: Dashboard wrapper for the new Object-Centric Directly Follows Graph (ELK layout)
+/**
+ * Layout panel settings of an OC-DFG widget, stored with the widget. While
+ * the dashboard is viewed they are saved right away (by grid position, see
+ * `saveOcdfgWidgetLayout`); the node is updated too, so a later save of the
+ * dashboard in edit mode keeps them.
+ */
+function useDashboardOcdfgLayout(
+  node: ComponentProps["node"],
+  dashboardId: number | undefined,
+  onUpdate: ComponentProps["onUpdate"],
+) {
+  const save = useCallback<SaveLayout>(
+    async (entry) => {
+      onUpdate?.({ layout_options: entry });
+      if (!dashboardId || node.x == null || node.y == null) return;
+      try {
+        await saveOcdfgWidgetLayout(dashboardId, node.x, node.y, entry);
+      } catch {
+        toast.error("The OC-DFG layout could not be saved");
+      }
+    },
+    [dashboardId, node, onUpdate],
+  );
+  return {
+    storedLayout: node.layout_options ?? null,
+    onLayoutChange: save,
+    layoutScope: `dashboard:${dashboardId ?? ""}:${node.x ?? ""}:${node.y ?? ""}`,
+  };
+}
+
+// NewOCDFGComponent: Dashboard wrapper for the Object-Centric DFG (arc weight)
 export const NewOCDFGComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
-  selectedFile
+  selectedFile,
+  dashboardId,
 }) => {
   const [filterEnabled, setFilterEnabled] = useState(true);
   const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>({});
   const [showControls, setShowControls] = useState(node.show_controls ?? true);
   const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
-  const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>(node.layout_direction ?? 'TB');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const layout = useDashboardOcdfgLayout(node, dashboardId, onUpdate);
 
   useEffect(() => {
     setShowControls(node.show_controls ?? true);
     setInitialInteractionLocked(node.initial_interaction_locked ?? true);
-    setLayoutDirection(node.layout_direction ?? 'TB');
-  }, [node.show_controls, node.initial_interaction_locked, node.layout_direction]);
-
-  const handleShowControlsChange = (checked: boolean) => {
-    setShowControls(checked);
-    onUpdate?.({ show_controls: checked });
-  };
-
-  const handleInitialInteractionLockedChange = (checked: boolean) => {
-    setInitialInteractionLocked(checked);
-    onUpdate?.({ initial_interaction_locked: checked });
-  };
-
-  const handleLayoutDirectionChange = (value: string) => {
-    setLayoutDirection(value as 'TB' | 'LR');
-    onUpdate?.({ layout_direction: value as "TB" | "LR" });
-  };
+  }, [node.show_controls, node.initial_interaction_locked]);
 
   if (isEditMode) {
     // EDIT MODE: the tile shows a draft of the graph; the settings open in a popup.
@@ -1331,7 +1462,7 @@ export const NewOCDFGComponent: React.FC<ComponentProps> = ({
         onConfigure={() => setSettingsOpen(true)}
         sketch={
           <OcdfgSketch
-            layoutDirection={layoutDirection}
+            layoutDirection={node.layout_direction ?? 'TB'}
             showControls={showControls}
             interactionLocked={initialInteractionLocked}
             className="h-full w-full"
@@ -1341,14 +1472,18 @@ export const NewOCDFGComponent: React.FC<ComponentProps> = ({
         <ChartSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen}>
           <OcdfgSettingsBody
             id={`ocdfg-${node.component_id}`}
-            heading="OCDFG settings"
-            description="New Object-Centric Directly Follows Graph (OCDFG) visualization with ELK layout."
-            initial={{ showControls, initialInteractionLocked, layoutDirection }}
+            heading="Object-Centric DFG (Arc Weight) settings"
+            description="Object-Centric Directly Follows Graph with a minimum arc weight per object type."
+            initial={{ showControls, initialInteractionLocked }}
+            layoutDirection={node.layout_direction ?? 'TB'}
             sketchHint={OCDFG_SKETCH_HINT}
             onApply={(next) => {
-              handleShowControlsChange(next.showControls);
-              handleInitialInteractionLockedChange(next.initialInteractionLocked);
-              handleLayoutDirectionChange(next.layoutDirection);
+              setShowControls(next.showControls);
+              setInitialInteractionLocked(next.initialInteractionLocked);
+              onUpdate?.({
+                show_controls: next.showControls,
+                initial_interaction_locked: next.initialInteractionLocked,
+              });
               setSettingsOpen(false);
             }}
             onCancel={() => setSettingsOpen(false)}
@@ -1358,22 +1493,20 @@ export const NewOCDFGComponent: React.FC<ComponentProps> = ({
     );
   }
 
-  // VIEW MODE: Render NewOCDFGVisualizer
   return (
     <div className="w-full h-full flex flex-col">
       <WidgetFilterHeader title="Object-Centric DFG (Arc Weight)" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={setLocalFilterParams} />
       <div style={{ flex: 1, minHeight: 0, background: '#fff' }}>
-        <ReactFlowProvider>
-          <NewOCDFGVisualizer
-            height="100%"
-            fileId={selectedFile?.id}
-            showControls={showControls}
-            initialInteractionLocked={initialInteractionLocked}
-            layoutDirection={layoutDirection}
-            filterEnabled={filterEnabled}
-            localFilterParams={localFilterParams}
-          />
-        </ReactFlowProvider>
+        <NewOCDFGVisualizer
+          height="100%"
+          fileId={selectedFile?.id}
+          showControls={showControls}
+          initialInteractionLocked={initialInteractionLocked}
+          layoutDirection={node.layout_direction ?? 'TB'}
+          filterEnabled={filterEnabled}
+          localFilterParams={localFilterParams}
+          {...layout}
+        />
       </div>
     </div>
   );
@@ -1384,34 +1517,19 @@ export const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
-  selectedFile
+  selectedFile,
+  dashboardId,
 }) => {
   const [filterEnabled, setFilterEnabled] = useState(true);
   const [showControls, setShowControls] = useState(node.show_controls ?? true);
   const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
-  const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>(node.layout_direction ?? 'TB');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const layout = useDashboardOcdfgLayout(node, dashboardId, onUpdate);
 
   useEffect(() => {
     setShowControls(node.show_controls ?? true);
     setInitialInteractionLocked(node.initial_interaction_locked ?? true);
-    setLayoutDirection(node.layout_direction ?? 'TB');
-  }, [node.show_controls, node.initial_interaction_locked, node.layout_direction]);
-
-  const handleShowControlsChange = (checked: boolean) => {
-    setShowControls(checked);
-    onUpdate?.({ show_controls: checked });
-  };
-
-  const handleInitialInteractionLockedChange = (checked: boolean) => {
-    setInitialInteractionLocked(checked);
-    onUpdate?.({ initial_interaction_locked: checked });
-  };
-
-  const handleLayoutDirectionChange = (value: string) => {
-    setLayoutDirection(value as 'TB' | 'LR');
-    onUpdate?.({ layout_direction: value as "TB" | "LR" });
-  };
+  }, [node.show_controls, node.initial_interaction_locked]);
 
   if (isEditMode) {
     // EDIT MODE: the tile shows a draft of the graph; the settings open in a popup.
@@ -1423,7 +1541,7 @@ export const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
         onConfigure={() => setSettingsOpen(true)}
         sketch={
           <OcdfgSketch
-            layoutDirection={layoutDirection}
+            layoutDirection={node.layout_direction ?? 'TB'}
             showControls={showControls}
             interactionLocked={initialInteractionLocked}
             className="h-full w-full"
@@ -1435,12 +1553,16 @@ export const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
             id={`ocdfg-variants-${node.component_id}`}
             heading="OCDFG (variants) settings"
             description="Object-Centric Directly Follows Graph (OCDFG) visualization with Variant/Trace filtering."
-            initial={{ showControls, initialInteractionLocked, layoutDirection }}
+            initial={{ showControls, initialInteractionLocked }}
+            layoutDirection={node.layout_direction ?? 'TB'}
             sketchHint={OCDFG_SKETCH_HINT}
             onApply={(next) => {
-              handleShowControlsChange(next.showControls);
-              handleInitialInteractionLockedChange(next.initialInteractionLocked);
-              handleLayoutDirectionChange(next.layoutDirection);
+              setShowControls(next.showControls);
+              setInitialInteractionLocked(next.initialInteractionLocked);
+              onUpdate?.({
+                show_controls: next.showControls,
+                initial_interaction_locked: next.initialInteractionLocked,
+              });
               setSettingsOpen(false);
             }}
             onCancel={() => setSettingsOpen(false)}
@@ -1450,20 +1572,18 @@ export const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
     );
   }
 
-  // VIEW MODE: Render NewOCDFGVariantsVisualizer
   return (
     <div className="w-full h-full">
-      <ReactFlowProvider>
-        <NewOCDFGVariantsVisualizer
-          height="100%"
-          fileId={selectedFile?.id}
-          showControls={showControls}
-          initialInteractionLocked={initialInteractionLocked}
-          layoutDirection={layoutDirection}
-          filterEnabled={filterEnabled}
-          onToggleFilter={() => setFilterEnabled(p => !p)}
-        />
-      </ReactFlowProvider>
+      <NewOCDFGVariantsVisualizer
+        height="100%"
+        fileId={selectedFile?.id}
+        showControls={showControls}
+        initialInteractionLocked={initialInteractionLocked}
+        layoutDirection={node.layout_direction ?? 'TB'}
+        filterEnabled={filterEnabled}
+        onToggleFilter={() => setFilterEnabled(p => !p)}
+        {...layout}
+      />
     </div>
   );
 };
@@ -1677,6 +1797,126 @@ export const OCPNComponent: React.FC<ComponentProps> = ({
   );
 };
 
+
+
+// OCPNFlattenedReplayComponent: Dashboard wrapper for the OCPN flattened
+// replay. Settings: the stored OCPN model and automatic loading.
+export const OCPNFlattenedReplayComponent: React.FC<ComponentProps> = ({
+  node,
+  onUpdate,
+  isEditMode = false,
+  selectedFile,
+}) => {
+  const [assetId, setAssetId] = useState<number | null>(node.ocpn_asset_id ?? null);
+  const [automaticLoading, setAutomaticLoading] = useState(node.automatic_loading ?? false);
+  const [filterEnabled, setFilterEnabled] = useState(true);
+  const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>({});
+  const [assets, setAssets] = useState<ProjectAsset[]>([]);
+  const projectId = selectedFile?.project;
+
+  useEffect(() => {
+    setAssetId(node.ocpn_asset_id ?? null);
+    setAutomaticLoading(node.automatic_loading ?? false);
+  }, [node.ocpn_asset_id, node.automatic_loading]);
+
+  // The settings form lists the project's OCPN models.
+  useEffect(() => {
+    if (!isEditMode || !projectId) return;
+    let cancelled = false;
+    listAssets({ projectId, assetType: 'OCPN' })
+      .then((list) => {
+        if (!cancelled) setAssets(Array.isArray(list) ? list : []);
+      })
+      .catch(() => {
+        if (!cancelled) setAssets([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isEditMode, projectId]);
+
+  const changeAsset = (id: number | null) => {
+    setAssetId(id);
+    onUpdate?.({ ocpn_asset_id: id } as Partial<typeof node>);
+  };
+
+  if (isEditMode) {
+    return (
+      <Card className="w-full h-full rounded-none overflow-auto">
+        <CardHeader>
+          <CardTitle>OCPN Flattened Replay Settings</CardTitle>
+          <CardDescription>
+            Replays every object type of a stored OC Petri net on the selected event log.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label>OCPN model</Label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="w-full justify-between">
+                  <span className="truncate">
+                    {assets.find((a) => a.id === assetId)?.name ??
+                      (assets.length === 0 ? 'No OCPN models in this project' : 'Select a stored OCPN model')}
+                  </span>
+                  <ChevronDown className="h-4 w-4 opacity-60" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-64">
+                <DropdownMenuLabel>OCPN models</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuRadioGroup
+                  value={assetId === null ? '' : String(assetId)}
+                  onValueChange={(value) => changeAsset(value ? Number(value) : null)}
+                >
+                  {assets.map((asset) => (
+                    <DropdownMenuRadioItem key={asset.id} value={String(asset.id)}>
+                      {asset.name}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label htmlFor={`ocpn-replay-auto-${node.id}`}>Run replay automatically</Label>
+              <p className="text-xs text-muted-foreground">
+                Start the replay as soon as the dashboard loads.
+              </p>
+            </div>
+            <Switch
+              id={`ocpn-replay-auto-${node.id}`}
+              checked={automaticLoading}
+              onCheckedChange={(checked) => {
+                setAutomaticLoading(checked);
+                onUpdate?.({ automatic_loading: checked });
+              }}
+            />
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="w-full h-full flex flex-col bg-white">
+      <WidgetFilterHeader title="OCPN Flattened Replay" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={setLocalFilterParams} />
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <OcpnFlattenedReplay
+          height="100%"
+          fileId={selectedFile?.id}
+          projectId={projectId}
+          initialAssetId={assetId}
+          onAssetChange={changeAsset}
+          autoStart={automaticLoading}
+          filterEnabled={filterEnabled}
+          localFilterParams={localFilterParams}
+        />
+      </div>
+    </div>
+  );
+};
 
 
 // SqlQueryComponent: dashboard-grid adapter around the standalone

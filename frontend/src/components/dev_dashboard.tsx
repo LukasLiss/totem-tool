@@ -8,10 +8,11 @@ import {
 } from "@/components/ui/card"
 import { GlobalFilterToggle } from "@/components/ui/GlobalFilterToggle";
 import { LocalFilterDropdown } from "@/components/ui/LocalFilterDropdown";
-import { ReactFlowProvider } from "@xyflow/react";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import ProcessArea from "@/react_component/ProcessArea";
-import NewOCDFGVisualizer from "@/react_component/NewOCDFGVisualizer";
+import NewOCDFGVariantsVisualizer from "@/react_component/NewOCDFGVariantsVisualizer";
+import { OCDFG_PROJECT_LAYOUT_KEY } from "@/react_component/ocdfg-layout/options";
+import { useProjectLayoutStorage } from "@/react_component/ocdfg-layout/useLayoutOptions";
 import LogStatistics from "@/components/LogStatistics";
 
 /**
@@ -28,10 +29,12 @@ export function DevDashboard() {
   const { selectedFile } = useContext(SelectedFileContext);
   const [dfgFilterEnabled, setDfgFilterEnabled] = useState(true);
   const [dfgLocalFilter, setDfgLocalFilter] = useState<Record<string, string>>({});
+  // Same project-stored layout as Analysis → OC-DFG.
+  const ocdfgLayout = useProjectLayoutStorage(selectedFile?.project, OCDFG_PROJECT_LAYOUT_KEY);
 
   return (
     <div>
-      <div className="flex flex-1 flex-col gap-4 p-4 pt-4">
+      <div className="flex min-w-0 flex-1 flex-col gap-4 p-4 pt-4">
         <LogStatistics
           fileId={selectedFile?.id}
           showNumEvents={true}
@@ -42,25 +45,28 @@ export function DevDashboard() {
         <ProcessArea fileId={selectedFile?.id} />
         <Card className="@container/card" data-testid="overview-dfg-card">
           <CardHeader className="items-center relative z-10 justify-between">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <CardTitle>Object-Centric Directly-Follows Graph</CardTitle>
               <GlobalFilterToggle filterEnabled={dfgFilterEnabled} onToggle={() => setDfgFilterEnabled(p => !p)} />
               <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setDfgLocalFilter} />
             </div>
             <CardDescription>Directly-follows relations per object type with arc weights and automatic layout</CardDescription>
           </CardHeader>
-          <CardContent className="h-[640px] p-0">
-            <ReactFlowProvider>
-              <NewOCDFGVisualizer
-                height="100%"
-                fileId={selectedFile?.id}
-                showControls={true}
-                initialInteractionLocked={true}
-                layoutDirection="TB"
-                filterEnabled={dfgFilterEnabled}
-                localFilterParams={dfgLocalFilter}
-              />
-            </ReactFlowProvider>
+          <CardContent className="h-[min(640px,70svh)] p-0">
+            <NewOCDFGVariantsVisualizer
+              height="100%"
+              fileId={selectedFile?.id}
+              showControls={true}
+              initialInteractionLocked={true}
+              layoutDirection="TB"
+              filterEnabled={dfgFilterEnabled}
+              onToggleFilter={() => setDfgFilterEnabled(p => !p)}
+              showTitle={false}
+              localFilterParams={dfgLocalFilter}
+              storedLayout={ocdfgLayout.stored}
+              onLayoutChange={ocdfgLayout.save}
+              layoutScope={ocdfgLayout.scope}
+            />
           </CardContent>
         </Card>
       </div>

@@ -16,7 +16,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
+import type { ProjectAsset } from "@/api/assetsApi";
 import {
   PROCESS_AREA_ALGORITHM_LABELS,
   PROCESS_AREA_PARAM_RANGES,
@@ -38,24 +40,32 @@ const PROCESS_AREA_PARAM_FIELDS: Array<{
   { nodeKey: 'beta', paramKey: 'beta', label: 'Cohesion (β)' },
 ];
 
-type ProcessAreaSettings = { algorithm: ProcessAreaAlgorithm; params: ProcessAreaParams };
+type ProcessAreaSettings = {
+  algorithm: ProcessAreaAlgorithm;
+  params: ProcessAreaParams;
+  /** Stored composition to show; null = the discovered process areas. */
+  compositionAssetId: number | null;
+};
 
 const ProcessAreaSettingsBody: React.FC<{
   id: string;
   initial: ProcessAreaSettings;
+  /** Process-area compositions stored in the project assets. */
+  storedCompositions: Pick<ProjectAsset, "id" | "name">[];
   /** Explanation of the draft, the same as in the edit tile. */
   sketchHint: string;
   onApply: (settings: ProcessAreaSettings) => void;
   onCancel: () => void;
-}> = ({ id, initial, sketchHint, onApply, onCancel }) => {
+}> = ({ id, initial, storedCompositions, sketchHint, onApply, onCancel }) => {
   const [algorithm, setAlgorithm] = useState(initial.algorithm);
   const [params, setParams] = useState(initial.params);
+  const [compositionAssetId, setCompositionAssetId] = useState(initial.compositionAssetId);
 
   return (
     <ChartSettingsLayout
       heading="Process area settings"
       idPrefix={id}
-      onApply={() => onApply({ algorithm, params })}
+      onApply={() => onApply({ algorithm, params, compositionAssetId })}
       onCancel={onCancel}
       dataTab={
         <div className="space-y-4 text-left">
@@ -63,6 +73,30 @@ const ProcessAreaSettingsBody: React.FC<{
             The Process Area visualizes the object-type hierarchy of your event log.
             Select an event log file to see the visualization.
           </p>
+          <div className="space-y-2">
+            <Label htmlFor={`${id}-composition`}>Shown process areas</Label>
+            <Select
+              value={compositionAssetId === null ? 'discovered' : String(compositionAssetId)}
+              onValueChange={(value) =>
+                setCompositionAssetId(value === 'discovered' ? null : Number(value))
+              }
+            >
+              <SelectTrigger id={`${id}-composition`} className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="discovered">Discovered (algorithm below)</SelectItem>
+                {storedCompositions.map((asset) => (
+                  <SelectItem key={asset.id} value={String(asset.id)}>
+                    {asset.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Compositions are adjusted with “Adjust” in view mode and stored in the project assets.
+            </p>
+          </div>
           <div className="flex items-center justify-between">
             <Label>Discovery algorithm</Label>
             <DropdownMenu>

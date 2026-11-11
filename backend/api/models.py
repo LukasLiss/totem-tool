@@ -45,6 +45,11 @@ class Project(models.Model):
     # existed.
     display_name = models.CharField(max_length=120, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
+    # Per-project preferences of analysis views, keyed by view (e.g. the
+    # OC-DFG layout under "ocdfg-variants"). Written through
+    # /api/projects/<id>/view-settings/<key>/; the frontend validates what it
+    # reads and falls back to its defaults when an entry is unusable.
+    view_settings = models.JSONField(default=dict, blank=True)
 
     def __str__(self):
         return f"{self.display_name or self.name}"
@@ -99,6 +104,11 @@ class ProjectAsset(models.Model):
         # "query": "...", "description": "..."}). Dashboard components can link
         # one so that editing the stored query updates every consumer.
         QUERY = "QUERY", "SQL Query"
+        # A named composition of process areas (content_json: {"schema":
+        # "process-areas", "version": 1, "levels": [...]}), discovered and/or
+        # adjusted by hand in the Process Area view. Variants and alignment
+        # components can pick its areas by name.
+        PROCESS_AREAS = "PROCESS_AREAS", "Process Areas"
 
     project = models.ForeignKey(
         Project,
@@ -304,6 +314,25 @@ class VariantsComponent(DashboardComponent):
     # lists mean "not chosen yet".
     business_object_types = models.JSONField(default=list, blank=True)
     business_activities = models.JSONField(default=list, blank=True)
+    # "process_areas" (default: connected components per process area,
+    # stored in the two columns below) or "custom" (the settings above).
+    variants_mode = models.CharField(max_length=32, default="process_areas", blank=True)
+    area_execution_column = models.CharField(
+        max_length=64, default="process-executions-cc-process-areas", blank=True
+    )
+    area_variant_column = models.CharField(
+        max_length=64, default="variant-cc-process-areas", blank=True
+    )
+    # Stored process-area composition the "process_areas" mode runs on.
+    # Null: the areas currently shown by the Process Area component (or a
+    # default discovery). Deleting the asset falls back to that (SET_NULL).
+    process_area_asset = models.ForeignKey(
+        "ProjectAsset",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
 
 
 class ProcessAreaComponent(DashboardComponent):
@@ -328,6 +357,16 @@ class ProcessAreaComponent(DashboardComponent):
     w_divergence = models.FloatField(default=1.0, validators=[MinValueValidator(0.0)])
     alpha = models.FloatField(default=2.0, validators=[MinValueValidator(0.0)])
     beta = models.FloatField(default=1.0, validators=[MinValueValidator(0.0)])
+
+    # Stored process-area composition to show instead of the discovered one
+    # (a ProjectAsset of type PROCESS_AREAS). Null shows the discovery.
+    composition_asset = models.ForeignKey(
+        "ProjectAsset",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
 
 
 class TotemMinerComponent(DashboardComponent):
@@ -383,6 +422,7 @@ class OCDottedChartComponent(DashboardComponent):
     color_by = models.CharField(max_length=255, default="activity")
     shape_by = models.CharField(max_length=255, default="none")
     row_order = models.CharField(max_length=32, default="first_occurrence")
+    row_order_direction = models.CharField(max_length=4, default="asc")
     max_points = models.PositiveIntegerField(default=10000)
     show_minimap = models.BooleanField(default=True)
     show_controls = models.BooleanField(default=True)
@@ -396,6 +436,9 @@ class NewOCDFGComponent(DashboardComponent):
         choices=[('TB', 'Top to Bottom'), ('LR', 'Left to Right')],
         default='TB',
     )
+    # Layout preferences chosen in the widget's layout panel
+    # ({"version": 1, "options": {...}}); null means the defaults.
+    layout_options = models.JSONField(null=True, blank=True, default=None)
 
 class PieChartComponent(DashboardComponent):
     query = models.TextField(default="SELECT * FROM events LIMIT 10")
@@ -469,6 +512,17 @@ class OCPNComponent(DashboardComponent):
     automatic_loading = models.BooleanField(default=False, null=True, blank=True)
     # Discovery budget in seconds (<= 0 disables the timeout).
     timeout_s = models.FloatField(default=30.0, null=True, blank=True)
+
+
+class OCPNFlattenedReplayComponent(DashboardComponent):
+    """Dashboard widget for the OCPN flattened (per object type) token-based replay."""
+
+    # Stored OCPN asset (ProjectAsset of type OCPN) the log is replayed on;
+    # null = none selected yet. Kept as a plain id like OCDottedChart's
+    # file_id: a deleted asset simply shows the selector again.
+    ocpn_asset_id = models.PositiveIntegerField(null=True, blank=True)
+    # Run the replay as soon as the dashboard opens.
+    automatic_loading = models.BooleanField(default=False)
 
 
 class OCCNComponent(DashboardComponent):
@@ -575,3 +629,57 @@ class ResourceProfilingComponent(DashboardComponent):
         default="medium",
     )
     transparent_points = models.BooleanField(default=False)
+
+
+class SeedState(models.Model):
+    """Records one-off provisioning that must never run twice.
+
+    ``migrate`` runs on every desktop-app launch (electron/main.js), so a seed
+    that only checked "does this row exist?" would resurrect itself the moment
+    the user deleted what it created. A row here means that seed has happened;
+    it is written in the same transaction as the objects it describes, and it
+    is deliberately never cleaned up when those objects are deleted.
+
+    Wiping the local database (a full reset) clears this table too, which is
+    the intended way to get a seed to run again. See api/sample_project.py.
+    """
+    key = models.CharField(max_length=64, unique=True)
+    completed_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.key
+
+
+class OCAlignmentComponent(DashboardComponent):
+    """Dashboard widget for object-centric alignments (Liss, 2023).
+
+    Aligns one process execution against a stored OCPN asset. The execution
+    comes either from execution ids stored in an events column
+    (``execution_source="stored"``) or from the connected components of a set
+    of business object types and activities (``"area"``, e.g. a process
+    area). All fields preselect what the view mode opens with.
+    """
+
+    # Show the source / execution picker in the dashboard's view mode.
+    show_controls = models.BooleanField(default=True)
+    # Compute the alignment as soon as the dashboard opens.
+    automatic_loading = models.BooleanField(default=False)
+    model_asset = models.ForeignKey(
+        ProjectAsset,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    execution_source = models.CharField(
+        max_length=8,
+        choices=[("area", "Process area / manual"), ("stored", "Stored executions")],
+        default="area",
+    )
+    execution_column = models.CharField(max_length=200, blank=True, default="")
+    business_object_types = models.JSONField(default=list, blank=True)
+    business_activities = models.JSONField(default=list, blank=True)
+    execution_id = models.CharField(max_length=500, blank=True, default="")
+    max_states = models.PositiveIntegerField(default=200_000)
+    timeout_s = models.FloatField(default=60.0)
+    show_silent_moves = models.BooleanField(default=False)

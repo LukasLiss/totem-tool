@@ -1,44 +1,75 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, Play, Settings, ZoomIn, ZoomOut } from "lucide-react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, ChevronUp, Database, Play, SlidersHorizontal, ZoomIn, ZoomOut } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import ComputationStatus from "@/components/ComputationStatus";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { VisualizerEmptyState } from "@/components/ui/VisualizerEmptyState";
 import { useFilterVersion } from "@/store/filterStore";
 import { useProcessAreaStore, useProcessAreasForFile } from "@/store/processAreaStore";
+import { useProcessAreaAssets } from "@/store/processAreaAssetsStore";
+import { SelectedFileContext } from "@/contexts/SelectedFileContext";
+import { assetSnapshotAreas } from "./process-area/processAreaGroups";
 
+import { ProcessAreaSettingsPanel, ProcessAreaSourceSelect } from "./variants/ProcessAreaSettingsPanel";
+import { ProcessAreaVariantTabs } from "./variants/ProcessAreaVariantTabs";
 import { ProcessExecutionStoreSummary } from "./variants/ProcessExecutionStoreSummary";
 import { VariantRow } from "./variants/VariantRow";
 import { VariantsSettingsPanel } from "./variants/VariantsSettingsPanel";
 import {
+  existingColumns,
   isLeadingExtraction,
+  processAreaColumnsBlocker,
   settingsBlocker,
   summarizeSettings,
   toAdvancedSettings,
 } from "./variants/settings";
 import {
+  computeProcessAreaVariants,
   describeRequestError,
   fetchActivities,
+  fetchEventColumnNames,
   fetchObjectTypes,
   fetchProcessAreas,
   fetchVariants,
+  orderProcessAreas,
   storeProcessExecutions,
+  toProcessAreaRequest,
 } from "./variants/variantsApi";
 import {
+  DEFAULT_PROCESS_AREA_COLUMNS,
   DEFAULT_STORE_SETTINGS,
+  DEFAULT_VARIANTS_MODE,
   type AdvancedSettings,
   type ExecutionSettings,
   type Extraction,
   type GroupingSettings,
   type IsoStrategy,
+  type ProcessAreaColumns,
+  type ProcessAreaVariantsResponse,
   type StoredExecutionsResponse,
   type StoreSettings,
   type Variant,
+  type VariantsMode,
 } from "./variants/types";
 
 // Re-exported for other callers that used to import these from this file.
@@ -47,6 +78,7 @@ export type {
   Extraction,
   IsoStrategy,
   Variant,
+  VariantsMode,
   VariantEventNode,
   VariantGraph,
   VariantObject,
@@ -61,6 +93,9 @@ type VariantsExplorerProps = {
   colWidth?: number;                              // Column width (default: 120)
   embedded?: boolean;                             // When true, removes outer Card wrapper
   defaultLeadingType?: string;                    // Pre-select this type if provided and valid
+  defaultMode?: VariantsMode;                     // "process_areas" (default) or "custom"
+  defaultProcessAreaColumns?: ProcessAreaColumns; // Columns the process-area mode writes
+  defaultProcessAreaAssetId?: number | null;      // Stored composition the process-area mode runs on
   defaultExtraction?: Extraction;                 // Persisted settings (dashboard)
   defaultIso?: IsoStrategy;
   defaultTimeoutS?: number;
@@ -77,6 +112,19 @@ type Status = "idle" | "loading" | "ready" | "empty" | "stored" | "error";
 
 const AUTO_RUN_DEBOUNCE_MS = 400;
 
+const MODE_OPTIONS: { value: VariantsMode; label: string; hint: string }[] = [
+  {
+    value: "process_areas",
+    label: "Connected components per process area",
+    hint: "Recommended. One variant list per process area; results are stored in the event log.",
+  },
+  {
+    value: "custom",
+    label: "Custom extraction",
+    hint: "Choose the extraction technique, leading type, grouping and storing yourself.",
+  },
+];
+
 export default function VariantsExplorer({
   fileId,
   automaticLoading = false,
@@ -85,6 +133,9 @@ export default function VariantsExplorer({
   colWidth = 120,
   embedded = false,
   defaultLeadingType,
+  defaultMode = DEFAULT_VARIANTS_MODE,
+  defaultProcessAreaColumns,
+  defaultProcessAreaAssetId = null,
   defaultExtraction = "leading_1hop",
   defaultIso = "wl+vf2",
   defaultTimeoutS = 10,
@@ -111,7 +162,19 @@ export default function VariantsExplorer({
     timeoutS: defaultTimeoutS,
   });
   const [store, setStore] = useState<StoreSettings>(DEFAULT_STORE_SETTINGS);
-  const [settingsOpen, setSettingsOpen] = useState(!automaticLoading);
+  const [mode, setMode] = useState<VariantsMode>(defaultMode);
+  const [areaColumns, setAreaColumns] = useState<ProcessAreaColumns>(
+    defaultProcessAreaColumns ?? DEFAULT_PROCESS_AREA_COLUMNS,
+  );
+  /** Stored composition (PROCESS_AREAS asset) to use; null = the areas shown now. */
+  const [areaAssetId, setAreaAssetId] = useState<number | null>(defaultProcessAreaAssetId);
+  const { selectedFile } = useContext(SelectedFileContext);
+  const storedCompositions = useProcessAreaAssets(selectedFile?.project ?? null);
+  const areaAsset = areaAssetId ? storedCompositions.assets.find((a) => a.id === areaAssetId) ?? null : null;
+  const isAreaMode = mode === "process_areas";
+  // The advanced options stay hidden unless the user asks for them (or the
+  // persisted settings already use a custom extraction that needs input).
+  const [settingsOpen, setSettingsOpen] = useState(defaultMode === "custom" && !automaticLoading);
 
   // Re-seed from the persisted defaults when they change (a dashboard
   // finishing its load). Compared by value so the echo of our own
@@ -119,6 +182,7 @@ export default function VariantsExplorer({
   const defaultsKey = JSON.stringify([
     defaultExtraction, defaultIso, defaultTimeoutS, defaultLeadingType ?? "",
     defaultBusinessObjectTypes ?? [], defaultBusinessActivities ?? [],
+    defaultMode, defaultProcessAreaColumns ?? null, defaultProcessAreaAssetId,
   ]);
   const seededKeyRef = useRef(defaultsKey);
   useEffect(() => {
@@ -131,8 +195,12 @@ export default function VariantsExplorer({
       businessActivities: defaultBusinessActivities ?? [],
     }));
     setGrouping({ iso: defaultIso, timeoutS: defaultTimeoutS });
+    setMode(defaultMode);
+    if (defaultProcessAreaColumns) setAreaColumns(defaultProcessAreaColumns);
+    setAreaAssetId(defaultProcessAreaAssetId);
   }, [defaultsKey, defaultExtraction, defaultIso, defaultTimeoutS, defaultLeadingType,
-      defaultBusinessObjectTypes, defaultBusinessActivities]);
+      defaultBusinessObjectTypes, defaultBusinessActivities, defaultMode, defaultProcessAreaColumns,
+      defaultProcessAreaAssetId]);
 
   // Persist whenever a setting changes. Skipped on the initial mount so we
   // don't echo back the values the parent just gave us.
@@ -142,9 +210,11 @@ export default function VariantsExplorer({
       isFirstAdvSync.current = false;
       return;
     }
-    onAdvancedChange?.(toAdvancedSettings(execution, grouping.iso, grouping.timeoutS));
+    onAdvancedChange?.(
+      toAdvancedSettings(execution, grouping.iso, grouping.timeoutS, mode, areaColumns, areaAssetId),
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [execution, grouping]);
+  }, [execution, grouping, mode, areaColumns, areaAssetId]);
 
   // ---- log metadata ---------------------------------------------------------
   const [availableTypes, setAvailableTypes] = useState<string[]>([]);
@@ -158,6 +228,9 @@ export default function VariantsExplorer({
   // ---- results --------------------------------------------------------------
   const [variants, setVariants] = useState<Variant[]>([]);
   const [storeResult, setStoreResult] = useState<StoredExecutionsResponse | null>(null);
+  const [areaResult, setAreaResult] = useState<ProcessAreaVariantsResponse | null>(null);
+  /** Existing columns the user must confirm overwriting before a store run. */
+  const [pendingOverwrite, setPendingOverwrite] = useState<string[] | null>(null);
   const [status, setStatus] = useState<Status>("idle");
   const [errorMsg, setErrorMsg] = useState("");
   const [lastRunKey, setLastRunKey] = useState<string | null>(null);
@@ -176,6 +249,8 @@ export default function VariantsExplorer({
     runIdRef.current += 1;
     setVariants([]);
     setStoreResult(null);
+    setAreaResult(null);
+    setPendingOverwrite(null);
     setStatus("idle");
     setErrorMsg("");
     setLastRunKey(null);
@@ -223,16 +298,154 @@ export default function VariantsExplorer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileId, resetResults]);
 
-  const blocker = useMemo(() => settingsBlocker(execution, store), [execution, store]);
+  const missingAreaAsset = Boolean(areaAssetId) && storedCompositions.loaded && !areaAsset;
+  const blocker = useMemo(
+    () =>
+      isAreaMode
+        ? missingAreaAsset
+          ? "The selected stored process areas no longer exist. Pick other process areas in the advanced options."
+          : processAreaColumnsBlocker(areaColumns)
+        : settingsBlocker(execution, store),
+    [isAreaMode, missingAreaAsset, areaColumns, execution, store],
+  );
+  // The process areas take part in the key so recomputing them in the
+  // Process Area component marks the shown variants as outdated.
   const runKey = useMemo(
-    () => JSON.stringify({ fileId, execution, grouping, store, filterEnabled, effectiveFilterVersion, localFilterParams }),
-    [fileId, execution, grouping, store, filterEnabled, effectiveFilterVersion, localFilterParams],
+    () =>
+      JSON.stringify(
+        isAreaMode
+          ? {
+              mode, fileId, areaColumns, grouping, filterEnabled, effectiveFilterVersion, localFilterParams,
+              areas: areaAssetId ? `asset:${areaAssetId}:${areaAsset?.updated_at ?? ""}` : processAreas?.computedAt ?? null,
+            }
+          : { mode, fileId, execution, grouping, store, filterEnabled, effectiveFilterVersion, localFilterParams },
+      ),
+    [isAreaMode, mode, fileId, areaColumns, areaAssetId, areaAsset?.updated_at, processAreas?.computedAt, execution, grouping, store, filterEnabled, effectiveFilterVersion, localFilterParams],
   );
   const stale = lastRunKey !== null && lastRunKey !== runKey;
-  const optionsReady = !optionsLoading && (availableTypes.length > 0 || !isLeadingExtraction(execution.extraction));
+  const optionsReady = isAreaMode
+    ? !areaAssetId || storedCompositions.loaded
+    : (!optionsLoading && (availableTypes.length > 0 || !isLeadingExtraction(execution.extraction)));
   const canRun = Boolean(fileId) && status !== "loading" && blocker === null && optionsReady;
 
+  /**
+   * Connected components per process area. ``store`` writes the result into
+   * the log; unless ``confirmed``, existing columns are first shown to the
+   * user, who can cancel.
+   */
+  const runProcessAreas = useCallback(async (storeInLog: boolean, confirmed: boolean) => {
+    const currentFileId = fileId;
+    if (!currentFileId || blocker !== null) return;
+    const runId = ++runIdRef.current;
+    const key = runKey;
+    const isCurrent = () => runId === runIdRef.current && fileIdRef.current === currentFileId;
+
+    setPendingOverwrite(null);
+    setStatus("loading");
+    setErrorMsg("");
+    try {
+      if (storeInLog && !confirmed) {
+        const present = existingColumns(areaColumns, await fetchEventColumnNames(currentFileId));
+        if (!isCurrent()) return;
+        if (present.length > 0) {
+          setPendingOverwrite(present);
+          // Back to what was shown before; the dialog decides what happens next.
+          setStatus(areaResult ? "ready" : "idle");
+          return;
+        }
+      }
+
+      if (areaAsset) {
+        // A stored composition: its areas, named, exactly as saved.
+        const storedAreas = orderProcessAreas(assetSnapshotAreas(areaAsset)).map(toProcessAreaRequest);
+        if (storedAreas.length === 0) {
+          setAreaResult(null);
+          setStatus("empty");
+          setLastRunKey(key);
+          return;
+        }
+        const result = await computeProcessAreaVariants(
+          currentFileId,
+          storedAreas,
+          grouping,
+          { store: storeInLog, columns: areaColumns },
+          filterEnabled,
+          localFilterParams,
+        );
+        if (!isCurrent()) return;
+        setStoreResult(null);
+        setAreaResult(result);
+        const all = result.areas.flatMap((area) => area.variants);
+        setVariants(all);
+        setStatus("ready");
+        onVariantsLoad?.(all);
+        setLastRunKey(key);
+        if (result.stored) {
+          toast.success(
+            `Stored ${result.execution_count} process execution${result.execution_count === 1 ? "" : "s"} in "${result.execution_column}" and their variants in "${result.variant_column}".`,
+          );
+        }
+        return;
+      }
+
+      let snapshot = processAreas;
+      if (!snapshot || snapshot.areas.length === 0) {
+        setProcessAreasLoading(true);
+        try {
+          const computed = await fetchProcessAreas(currentFileId, filterEnabled, localFilterParams);
+          if (!isCurrent()) return;
+          useProcessAreaStore.getState().publish(computed);
+          snapshot = useProcessAreaStore.getState().byFile[currentFileId] ?? { ...computed, computedAt: Date.now() };
+        } finally {
+          setProcessAreasLoading(false);
+        }
+      }
+      const areas = orderProcessAreas(snapshot.areas).map(toProcessAreaRequest);
+      if (areas.length === 0) {
+        setAreaResult(null);
+        setStatus("empty");
+        setLastRunKey(key);
+        return;
+      }
+
+      const result = await computeProcessAreaVariants(
+        currentFileId,
+        areas,
+        grouping,
+        { store: storeInLog, columns: areaColumns },
+        filterEnabled,
+        localFilterParams,
+      );
+      if (!isCurrent()) return;
+      setStoreResult(null);
+      setAreaResult(result);
+      const all = result.areas.flatMap((area) => area.variants);
+      setVariants(all);
+      setStatus("ready");
+      onVariantsLoad?.(all);
+      // Recomputing the areas changes the key; remember the one actually used.
+      setLastRunKey(
+        snapshot === processAreas
+          ? key
+          : JSON.stringify({ ...JSON.parse(key), areas: snapshot.computedAt }),
+      );
+      if (result.stored) {
+        toast.success(
+          `Stored ${result.execution_count} process execution${result.execution_count === 1 ? "" : "s"} in "${result.execution_column}" and their variants in "${result.variant_column}".`,
+        );
+      }
+    } catch (e: unknown) {
+      if (!isCurrent()) return;
+      setStatus("error");
+      setErrorMsg(describeRequestError(e, "Computing the process area variants failed."));
+    }
+  }, [fileId, blocker, runKey, areaColumns, areaResult, areaAsset, processAreas, grouping, filterEnabled, localFilterParams, onVariantsLoad]);
+
   const run = useCallback(async () => {
+    if (isAreaMode) {
+      await runProcessAreas(true, false);
+      return;
+    }
     const currentFileId = fileId;
     if (!currentFileId || blocker !== null) return;
     const runId = ++runIdRef.current;
@@ -241,6 +454,7 @@ export default function VariantsExplorer({
 
     setStatus("loading");
     setErrorMsg("");
+    setAreaResult(null);
     try {
       if (store.enabled) {
         const result = await storeProcessExecutions(currentFileId, execution, grouping, store, filterEnabled, localFilterParams);
@@ -272,21 +486,26 @@ export default function VariantsExplorer({
         ),
       );
     }
-  }, [fileId, blocker, runKey, store, execution, grouping, filterEnabled, localFilterParams, onVariantsLoad]);
+  }, [isAreaMode, runProcessAreas, fileId, blocker, runKey, store, execution, grouping, filterEnabled, localFilterParams, onVariantsLoad]);
 
   // Automatic mode: (re)compute after every settings change, debounced so a
   // multi-select does not fire one request per click. Storing into the log
-  // is always an explicit action.
-  const runRef = useRef(run);
+  // is always an explicit action, so the process-area mode only computes.
+  const autoRun = useCallback(
+    () => (isAreaMode ? runProcessAreas(false, false) : run()),
+    [isAreaMode, runProcessAreas, run],
+  );
+  const runRef = useRef(autoRun);
   useEffect(() => {
-    runRef.current = run;
-  }, [run]);
+    runRef.current = autoRun;
+  }, [autoRun]);
+  const autoBlocked = !isAreaMode && store.enabled;
   useEffect(() => {
-    if (!automaticLoading || store.enabled || !fileId || blocker !== null || !optionsReady) return;
+    if (!automaticLoading || autoBlocked || !fileId || blocker !== null || !optionsReady) return;
     if (lastRunKey === runKey) return;
     const timer = setTimeout(() => void runRef.current(), AUTO_RUN_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [automaticLoading, store.enabled, fileId, blocker, optionsReady, runKey, lastRunKey]);
+  }, [automaticLoading, autoBlocked, fileId, blocker, optionsReady, runKey, lastRunKey]);
 
   const computeProcessAreas = useCallback(async () => {
     if (!fileId) return;
@@ -310,15 +529,24 @@ export default function VariantsExplorer({
     [variants],
   );
   const totalSupport = useMemo(() => variants.reduce((s, v) => s + v.support, 0), [variants]);
-  const summary = summarizeSettings(execution, grouping.iso, store);
+  const areaSourceName = areaAsset?.name ?? processAreas?.composition?.name ?? null;
+  const summary = isAreaMode
+    ? `Connected components per process area${areaSourceName ? ` · ${areaSourceName}` : ""} · stored in "${areaColumns.variantColumn.trim()}"`
+    : summarizeSettings(execution, grouping.iso, store);
 
-  const runLabel = store.enabled
-    ? store.computeVariants
-      ? "Compute & store"
-      : "Store executions"
-    : lastRunKey !== null && stale
+  const runLabel = isAreaMode
+    ? lastRunKey !== null && stale
       ? "Recompute variants"
-      : "Compute variants";
+      : "Compute variants"
+    : store.enabled
+      ? store.computeVariants
+        ? "Compute & store"
+        : "Store executions"
+      : lastRunKey !== null && stale
+        ? "Recompute variants"
+        : "Compute variants";
+  const storesInLog = isAreaMode || store.enabled;
+  const modeOption = MODE_OPTIONS.find((o) => o.value === mode);
 
   const Wrapper = embedded ? "div" : Card;
 
@@ -326,7 +554,7 @@ export default function VariantsExplorer({
     <Wrapper className="w-full min-w-0">
       <CardHeader className="pb-2">
         {/* Toolbar: wraps on narrow widths instead of overflowing. */}
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
           <Button
             type="button"
             variant="outline"
@@ -336,8 +564,8 @@ export default function VariantsExplorer({
             aria-controls="variants-settings-panel"
             className="shrink-0"
           >
-            <Settings className="h-4 w-4" />
-            Settings
+            <SlidersHorizontal className="h-4 w-4" />
+            Advanced options
             {settingsOpen ? <ChevronUp className="h-4 w-4 opacity-60" /> : <ChevronDown className="h-4 w-4 opacity-60" />}
           </Button>
           <p
@@ -353,6 +581,17 @@ export default function VariantsExplorer({
           </p>
 
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            {isAreaMode && storedCompositions.assets.length > 0 ? (
+              <ProcessAreaSourceSelect
+                id="variants-area-source-toolbar"
+                className="h-8 w-[220px]"
+                value={areaAssetId}
+                onChange={setAreaAssetId}
+                storedCompositions={storedCompositions.assets}
+                currentProcessAreas={processAreas}
+                disabled={status === "loading"}
+              />
+            ) : null}
             <div className="flex items-center gap-2" title="Zoom">
               <ZoomOut size={16} className="text-muted-foreground" />
               <Slider
@@ -391,7 +630,40 @@ export default function VariantsExplorer({
         </div>
 
         {settingsOpen ? (
-          <div id="variants-settings-panel">
+          <div id="variants-settings-panel" className="mt-3 min-w-0 space-y-3 rounded-md border bg-muted/30 p-3">
+            <div className="max-w-md space-y-1.5">
+              <Label htmlFor="variants-mode" className="text-xs">Method</Label>
+              <Select
+                value={mode}
+                onValueChange={(value) => setMode(value as VariantsMode)}
+                disabled={status === "loading"}
+              >
+                <SelectTrigger id="variants-mode" aria-label="Method" className="w-full bg-background">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {MODE_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] leading-snug text-muted-foreground">{modeOption?.hint}</p>
+            </div>
+            {isAreaMode ? (
+              <ProcessAreaSettingsPanel
+                areaAssetId={areaAssetId}
+                onAreaAssetChange={setAreaAssetId}
+                storedCompositions={storedCompositions.assets}
+                currentProcessAreas={processAreas}
+                columns={areaColumns}
+                onColumnsChange={setAreaColumns}
+                grouping={grouping}
+                onGroupingChange={setGrouping}
+                disabled={status === "loading"}
+              />
+            ) : (
             <VariantsSettingsPanel
               execution={execution}
               onExecutionChange={setExecution}
@@ -408,6 +680,7 @@ export default function VariantsExplorer({
               onComputeProcessAreas={() => void computeProcessAreas()}
               disabled={status === "loading"}
             />
+            )}
             {blocker ? (
               <p className="mt-2 text-xs text-amber-700 dark:text-amber-400" role="status">
                 {blocker}
@@ -429,11 +702,26 @@ export default function VariantsExplorer({
         {fileId && status === "idle" ? (
           <div className="flex flex-col items-center gap-3 py-4">
             <div className="text-center text-sm text-muted-foreground">
-              {store.enabled
+              {isAreaMode ? (
+                <>
+                  For every process area, the log is split into connected process executions,
+                  and executions with the same structure are grouped into variants.
+                  <br />
+                  The results are written into the event log columns{" "}
+                  <code className="rounded bg-muted px-1 text-xs">{areaColumns.executionColumn.trim()}</code> and{" "}
+                  <code className="rounded bg-muted px-1 text-xs">{areaColumns.variantColumn.trim()}</code>.
+                </>
+              ) : store.enabled
                 ? "Computing process executions and writing them into the event log is an explicit step."
                 : automaticLoading && blocker
                   ? "Complete the settings above to start the computation."
                   : "Variant computation can take some time for large event logs."}
+              {blocker ? (
+                <>
+                  <br />
+                  <span className="text-amber-700 dark:text-amber-400">{blocker}</span>
+                </>
+              ) : null}
               <br />
               Click below when ready to start.
             </div>
@@ -447,13 +735,17 @@ export default function VariantsExplorer({
         {status === "loading" ? (
           <ComputationStatus
             fileId={fileId}
-            urlIncludes={["/variants/", "/process_executions/"]}
+            urlIncludes={["/variants/", "/process_executions/", "/process_area_variants/", "/discover_process_areas/"]}
             className="mx-0"
             fallback={(
               <div className="flex items-center gap-2">
                 <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
                 <span className="text-sm">
-                  {store.enabled ? "Computing and storing process executions…" : "Loading variants…"}
+                  {processAreasLoading
+                    ? "Computing process areas…"
+                    : storesInLog
+                      ? "Computing and storing process executions…"
+                      : "Loading variants…"}
                 </span>
               </div>
             )}
@@ -463,7 +755,7 @@ export default function VariantsExplorer({
         {status === "error" ? (
           <div className="flex flex-col gap-2" role="alert">
             <div className="text-sm font-semibold text-red-600">
-              {store.enabled ? "Storing process executions failed" : "Failed to load variants"}
+              {storesInLog ? "Storing process executions failed" : "Failed to load variants"}
             </div>
             {errorMsg ? <div className="text-xs text-red-500">{errorMsg}</div> : null}
             <Button variant="outline" size="sm" onClick={() => void run()} className="w-fit" disabled={!canRun}>
@@ -478,6 +770,37 @@ export default function VariantsExplorer({
           </div>
         ) : null}
 
+        {areaResult && status !== "loading" && status !== "error" ? (
+          <div className="mb-3">
+            {areaResult.stored ? (
+              <ProcessExecutionStoreSummary
+                result={areaResult}
+                ambiguousHint="This happens when process areas share an activity."
+              />
+            ) : (
+              <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 p-2 text-sm text-muted-foreground">
+                <span className="min-w-0 flex-1">
+                  These variants are not stored in the event log yet.
+                </span>
+                <Button size="sm" variant="outline" onClick={() => void run()} disabled={!canRun}>
+                  <Database className="h-4 w-4" />
+                  Store in event log
+                </Button>
+              </div>
+            )}
+          </div>
+        ) : null}
+
+        {status === "ready" && areaResult ? (
+          <ProcessAreaVariantTabs
+            areas={areaResult.areas}
+            zoom={zoom}
+            labelMode={labelMode}
+            colWidth={colWidth}
+            typeColors={typeColors}
+          />
+        ) : null}
+
         {status === "stored" ? (
           <div className="text-sm text-muted-foreground">
             Variants were not computed. Enable "Also compute variants" in the settings to group the
@@ -486,10 +809,12 @@ export default function VariantsExplorer({
         ) : null}
 
         {status === "empty" ? (
-          <div className="text-sm text-muted-foreground">No variants found for this file</div>
+          <div className="text-sm text-muted-foreground">
+            {isAreaMode ? "No process areas found for this file" : "No variants found for this file"}
+          </div>
         ) : null}
 
-        {status === "ready" ? (
+        {status === "ready" && !areaResult ? (
           <div className="flex flex-col gap-3">
             <div className="text-sm text-muted-foreground" aria-live="polite">
               Found <span className="font-medium text-foreground">{sortedVariants.length}</span>{" "}
@@ -511,6 +836,37 @@ export default function VariantsExplorer({
           </div>
         ) : null}
       </CardContent>
+
+      <Dialog
+        open={pendingOverwrite !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingOverwrite(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Overwrite existing columns?</DialogTitle>
+            <DialogDescription>
+              The event log already has{" "}
+              {pendingOverwrite?.length === 1 ? "a column" : "columns"} named{" "}
+              {pendingOverwrite?.map((column, i) => (
+                <span key={column}>
+                  {i > 0 ? " and " : ""}
+                  <code className="rounded bg-muted px-1 text-xs text-foreground">{column}</code>
+                </span>
+              ))}
+              . Computing the variants replaces {pendingOverwrite?.length === 1 ? "its" : "their"} values.
+              Rename the columns in the advanced options to keep the old values.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPendingOverwrite(null)}>
+              Cancel
+            </Button>
+            <Button onClick={() => void runProcessAreas(true, true)}>Overwrite</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Wrapper>
   );
 }

@@ -5,6 +5,8 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
+from django.conf import settings
+
 from .. import jobs
 from ..models import Project, UserSettings
 
@@ -118,6 +120,19 @@ def user_settings(request):
             settings_obj.save(update_fields=["bypass_cache"])
 
     return Response({"bypass_cache": settings_obj.bypass_cache})
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def upload_limits(request):
+    """The limits the upload page checks up front; null means no limit."""
+    return Response(
+        {
+            "max_upload_bytes": settings.MAX_UPLOAD_BYTES,
+            "max_projects_per_user": settings.MAX_PROJECTS_PER_USER,
+            "project_count": Project.objects.filter(users=request.user).count(),
+        }
+    )
 
 
 # ---------------------------------------------------------------------------

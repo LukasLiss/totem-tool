@@ -11,7 +11,7 @@ export type AnalysisComponent =
   | "totemMiner"
   | "sqlQuery"
   | "orgaMining";
-export type ConformanceComponent = "totem" | "occn";
+export type ConformanceComponent = "totem" | "occn" | "ocpnReplay" | "ocAlignment";
 
 export type EditorComponent = "totem" | "occn" | "ocpn" | "ocdfg" | "ocel";
 
@@ -20,7 +20,9 @@ export type ViewMode =
   | { type: "modelAssets" }
   | { type: "imageAssets" }
   | { type: "queryAssets"; openAssetId?: number }
-  | { type: "analysis"; component: AnalysisComponent }
+  | { type: "processAreaAssets" }
+  // `openAssetId` opens a stored composition in the Process Area view.
+  | { type: "analysis"; component: AnalysisComponent; openAssetId?: number }
   | { type: "conformance"; component: ConformanceComponent; assetId?: number }
   | { type: "editor"; component: EditorComponent; openAssetId?: number }
   | { type: "playout" }

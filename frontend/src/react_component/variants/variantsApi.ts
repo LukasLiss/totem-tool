@@ -7,6 +7,9 @@ import { isLeadingExtraction, isResourceAware } from "./settings";
 import type {
   ExecutionSettings,
   GroupingSettings,
+  ProcessAreaColumns,
+  ProcessAreaRequest,
+  ProcessAreaVariantsResponse,
   StoredExecutionsResponse,
   StoreSettings,
   VariantsResponse,
@@ -120,10 +123,120 @@ export async function storeProcessExecutions(
   return data;
 }
 
+/** Names of the attribute / derived columns of the events table. */
+export async function fetchEventColumnNames(fileId: number): Promise<string[]> {
+  const { data } = await axios.get<Array<{ name: string }>>(`/api/files/${fileId}/event_columns/`, {
+    _skipGlobalFilter: true,
+  });
+  return data.map((column) => column.name);
+}
+
+/**
+ * The request payload for one process area. A named area (of a stored or
+ * hand-edited composition) is labelled by its name, others by their types.
+ */
+export function toProcessAreaRequest(
+  area: Pick<ProcessAreaSnapshot, "objectTypes" | "activities"> & { name?: string },
+): ProcessAreaRequest {
+  const objectTypes = [...area.objectTypes].sort((a, b) => a.localeCompare(b));
+  return {
+    label: area.name?.trim() || objectTypes.join(", "),
+    object_types: objectTypes,
+    activities: [...area.activities].sort((a, b) => a.localeCompare(b)),
+  };
+}
+
+/**
+ * Process areas in tab order: the bottom layer (the core business objects)
+ * first, resources last; ties by name.
+ */
+export function orderProcessAreas<T extends Pick<ProcessAreaSnapshot, "level" | "objectTypes">>(
+  areas: T[],
+): T[] {
+  return [...areas].sort(
+    (a, b) =>
+      a.level - b.level ||
+      a.objectTypes.join(", ").localeCompare(b.objectTypes.join(", ")),
+  );
+}
+
+/**
+ * Connected components per process area: one variant list per area, and
+ * (when ``store``) the execution / variant ids written into two columns.
+ */
+export async function computeProcessAreaVariants(
+  fileId: number,
+  areas: ProcessAreaRequest[],
+  grouping: GroupingSettings,
+  options: { store: boolean; columns: ProcessAreaColumns },
+  filterEnabled: boolean,
+  localFilterParams?: Record<string, string>,
+): Promise<ProcessAreaVariantsResponse> {
+  const filterConfig = getEffectiveFilterConfig(localFilterParams, filterEnabled);
+  if (filterConfig._noResults) {
+    return {
+      file_id: fileId,
+      stored: false,
+      execution_column: null,
+      variant_column: null,
+      execution_count: 0,
+      variant_count: 0,
+      total_event_count: 0,
+      assigned_event_count: 0,
+      ambiguous_event_count: 0,
+      unassigned_event_count: 0,
+      areas: areas.map((area) => ({
+        ...area,
+        execution_count: 0,
+        variant_count: 0,
+        variants: [],
+        skipped_reason: "The filter leaves no events.",
+      })),
+      object_types: [],
+    };
+  }
+  const body: Record<string, unknown> = {
+    areas,
+    iso: grouping.iso,
+    timeout_s: grouping.timeoutS,
+    store: options.store,
+  };
+  if (options.store) {
+    body.execution_column = options.columns.executionColumn.trim();
+    body.variant_column = options.columns.variantColumn.trim();
+  }
+  const { data } = await axios.post<ProcessAreaVariantsResponse>(
+    `/api/files/${fileId}/process_area_variants/`,
+    body,
+    // Filters go in the query string, where the backend reads them.
+    { params: filterConfig.params, _skipGlobalFilter: filterConfig._skipGlobalFilter },
+  );
+  return data;
+}
+
 type ProcessAreaPayload = {
   layers?: Array<{ level: number; areas: Array<{ objectTypes: string[]; eventTypes?: string[] }> }>;
   object_type_to_event_types?: Record<string, string[]>;
 };
+
+/**
+ * The areas of a discovery result as snapshot entries (highest level first).
+ * The ids mirror `buildLayersFromBackend` in TotemVisualizer so every
+ * component agrees on what an area is called.
+ */
+export function discoveredSnapshotAreas(layers: NonNullable<ProcessAreaPayload["layers"]>): ProcessAreaSnapshot[] {
+  return [...layers]
+    .sort((a, b) => b.level - a.level)
+    .flatMap((layer) =>
+      layer.areas.map((area, index) => ({
+        id: `level-${layer.level}-area-${index}-${area.objectTypes.join("-")}`,
+        level: layer.level,
+        label: area.objectTypes.length === 1 ? area.objectTypes[0] : area.objectTypes.join(" & "),
+        objectTypes: area.objectTypes,
+        activities: area.eventTypes ?? [],
+      })),
+    );
+}
 
 /**
  * Compute process areas with the default (advanced) algorithm.
@@ -143,21 +256,11 @@ export async function fetchProcessAreas(
     `/api/files/${fileId}/discover_process_areas/`,
     filterConfig,
   );
-  const layers = [...(data.layers ?? [])].sort((a, b) => b.level - a.level);
-  const areas: ProcessAreaSnapshot[] = layers.flatMap((layer) =>
-    layer.areas.map((area, index) => ({
-      id: `level-${layer.level}-area-${index}-${area.objectTypes.join("-")}`,
-      level: layer.level,
-      label: area.objectTypes.length === 1 ? area.objectTypes[0] : area.objectTypes.join(" & "),
-      objectTypes: area.objectTypes,
-      activities: area.eventTypes ?? [],
-    })),
-  );
   return {
     fileId,
     algorithm: "advanced",
     filtered: filterEnabled,
-    areas,
+    areas: discoveredSnapshotAreas(data.layers ?? []),
     objectTypeToActivities: data.object_type_to_event_types ?? {},
   };
 }
