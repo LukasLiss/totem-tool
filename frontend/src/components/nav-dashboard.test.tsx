@@ -11,10 +11,11 @@ const exportDashboard = vi.fn();
 const importDashboard = vi.fn();
 const downloadJson = vi.fn();
 const openJsonFile = vi.fn();
+const deleteDashboard = vi.fn();
 
 vi.mock("@/api/dashboardApi", () => ({
   addDashboard: vi.fn(),
-  deleteDashboard: vi.fn(),
+  deleteDashboard: (...args: unknown[]) => deleteDashboard(...args),
   renameDashboard: vi.fn(),
   exportDashboard: (...args: unknown[]) => exportDashboard(...args),
   importDashboard: (...args: unknown[]) => importDashboard(...args),
@@ -223,6 +224,52 @@ describe("import", () => {
     // Nothing to fix, so it opens straight away.
     await waitFor(() =>
       expect(setViewMode).toHaveBeenCalledWith({ type: "dashboard", id: 5 })
+    );
+  });
+
+  it("does not hold the submit lock while the file picker is open", async () => {
+    // The lock used to be taken before the picker and released only in
+    // `finally`. `openJsonFile` settles on the input's change or cancel event,
+    // so anywhere `oncancel` does not fire the promise never settles and every
+    // locking action — Add, Rename, Delete — stays dead until a reload.
+    // Delete is used here precisely because it takes the lock; export does not.
+    let settle: (value: unknown) => void = () => {};
+    openJsonFile.mockReturnValue(new Promise((resolve) => { settle = resolve; }));
+    renderNav();
+
+    clickImport();
+    await waitFor(() => expect(openJsonFile).toHaveBeenCalled());
+
+    await openRowMenu("beta");
+    fireEvent.click(screen.getByText("Delete"));
+    await waitFor(() => screen.getByText("Delete Dashboard"));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => expect(deleteDashboard).toHaveBeenCalledWith(2));
+
+    settle(null);
+  });
+
+  it("does not call the API for a file that is not a dashboard", async () => {
+    openJsonFile.mockResolvedValue({ schema: "totem", version: 1 });
+    renderNav();
+
+    clickImport();
+
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    expect(importDashboard).not.toHaveBeenCalled();
+  });
+
+  it("calls a file with no version corrupt, not from the future", async () => {
+    openJsonFile.mockResolvedValue({ schema: "totem-dashboard" });
+    renderNav();
+
+    clickImport();
+
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith(
+        expect.stringMatching(/incomplete or corrupt/)
+      )
     );
   });
 

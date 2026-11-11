@@ -51,6 +51,10 @@ what to fix:
 - **Links to other dashboards** in a Text Box only work inside one project. The words stay, the
   link is removed.
 - A **dotted chart** is re-pointed at the event log you imported into, so check its axis settings.
+- Widgets configured against **particular object types, activities or resources** — the variants
+  explorer, a filter stack, OC Causal Net, handover and resource profiling, object-centric
+  alignments — keep those names. The new log may not have them, in which case the widget shows
+  nothing until you open it and pick again. The import lists the widget types affected.
 
 Discovery components — OC-DFG, OC Causal Net, OC Petri Net, Process Areas, variants — need nothing
 from the old project and work immediately.

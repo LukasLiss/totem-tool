@@ -6306,6 +6306,34 @@ class DashboardBundleFormatTests(SimpleTestCase):
         with self.assertRaises(ValueError):
             validate_dashboard_bundle_dict(self._bundle(components={}))
 
+    def test_rejects_geometry_a_grid_cannot_lay_out(self):
+        """A file is less trusted than a grid the user dragged into shape."""
+        for geometry, why in (
+            ({"x": 0, "y": 0, "w": 1000000000, "h": 2}, "absurd width"),
+            ({"x": 0, "y": -5000, "w": 2, "h": 2}, "negative origin"),
+            ({"x": -1, "y": 0, "w": 2, "h": 2}, "negative x"),
+            ({"x": 0, "y": 0, "w": 0, "h": 2}, "zero-width span"),
+        ):
+            with self.subTest(why=why):
+                with self.assertRaises(ValueError):
+                    validate_dashboard_bundle_dict(
+                        self._bundle(
+                            components=[
+                                {"component_name": "TotemMinerComponent", **geometry}
+                            ]
+                        )
+                    )
+
+    def test_accepts_ordinary_geometry(self):
+        validate_dashboard_bundle_dict(
+            self._bundle(
+                components=[
+                    {"component_name": "TotemMinerComponent",
+                     "x": 0, "y": 0, "w": 12, "h": 8}
+                ]
+            )
+        )
+
     def test_rejects_too_many_components(self):
         many = [
             {"component_name": "TotemMinerComponent", "x": 0, "y": 0, "w": 1, "h": 1}
@@ -6985,6 +7013,161 @@ class DashboardExportImportApiTests(TestCase):
         self.assertEqual(len(name), limit)
 
     # -- import: refusals --------------------------------------------------
+
+    def test_a_non_numeric_project_is_refused_without_a_server_error(self):
+        """The id comes from a body a user can hand-write.
+
+        Straight into `filter(pk=...)` it makes the ORM raise, which DRF turns
+        into a 500 — on the one endpoint whose whole job is reading a file.
+        """
+        before = Dashboard.objects.count()
+        for project in ("abc", {}, [], 1.5):
+            with self.subTest(project=project):
+                response = self.client.post(
+                    "/api/dashboard/import/",
+                    {"project": project, "bundle": self._export()},
+                    format="json",
+                )
+                self.assertEqual(response.status_code, 400, response.data)
+        self.assertEqual(Dashboard.objects.count(), before)
+
+    def test_a_non_numeric_event_log_imports_unbound(self):
+        """Same outcome as a log of another project: unbound, and said so."""
+        self._save(
+            [{"component_name": "OCDottedChartComponent",
+              "x": 0, "y": 0, "w": 6, "h": 6}]
+        )
+        response = self.client.post(
+            "/api/dashboard/import/",
+            {"project": self.target.pk, "event_log": "nope",
+             "bundle": self._export()},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertIn(
+            "event_log_missing", [w["code"] for w in response.data["warnings"]]
+        )
+
+    def test_a_bad_field_value_is_a_four_hundred_not_a_five_hundred(self):
+        """`_replace_components` validates many fields, but not all of them.
+
+        Both of these reach `objects.create()` and are rejected by the model
+        itself — a ValueError and a Django ValidationError, neither of which
+        DRF translates on its own.
+        """
+        before = Dashboard.objects.count()
+        for component, why in (
+            ({"component_name": "ProcessAreaComponent",
+              "x": 0, "y": 0, "w": 2, "h": 2, "alpha": "x"}, "float field"),
+            ({"component_name": "OCDottedChartComponent",
+              "x": 0, "y": 0, "w": 2, "h": 2, "show_minimap": "maybe"}, "bool field"),
+        ):
+            with self.subTest(why=why):
+                response = self._import(
+                    {
+                        "schema": DASHBOARD_BUNDLE_SCHEMA,
+                        "version": DASHBOARD_BUNDLE_VERSION,
+                        "dashboard": {"name": "Bad"},
+                        "components": [component],
+                    },
+                    expect=400,
+                )
+                self.assertIn("error", response)
+        # The atomic block rolled back: no half-built dashboard survives.
+        self.assertEqual(Dashboard.objects.count(), before)
+
+    def test_rename_rejects_a_name_over_the_field_limit(self):
+        """`rename` bypasses the serializer, so nothing else enforces this.
+
+        SQLite stores an over-long name silently; Postgres raises DataError,
+        which is a 500.
+        """
+        limit = Dashboard._meta.get_field("name").max_length
+        response = self.client.patch(
+            f"/api/dashboard/{self.dashboard.pk}/rename/",
+            {"name": "x" * (limit + 1)},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+        self.dashboard.refresh_from_db()
+        self.assertEqual(self.dashboard.name, "Ops")
+
+    def test_rename_accepts_a_name_at_the_limit(self):
+        limit = Dashboard._meta.get_field("name").max_length
+        response = self.client.patch(
+            f"/api/dashboard/{self.dashboard.pk}/rename/",
+            {"name": "y" * limit},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+
+    def test_an_ambiguous_link_target_resolves_to_the_oldest_and_warns(self):
+        """Dashboard names are not unique within a project.
+
+        Resolving a link through a plain {name: pk} dict let an unordered
+        queryset decide which row it landed on, so the same file could import
+        differently twice.
+        """
+        first = Dashboard.objects.create(
+            project=self.target, name="Twin", order_in_project=1
+        )
+        Dashboard.objects.create(
+            project=self.target, name="Twin", order_in_project=2
+        )
+        bundle = {
+            "schema": DASHBOARD_BUNDLE_SCHEMA,
+            "version": DASHBOARD_BUNDLE_VERSION,
+            "dashboard": {"name": "Linker"},
+            "components": [
+                {
+                    "component_name": "TextBoxComponent",
+                    "x": 0, "y": 0, "w": 4, "h": 2,
+                    "text": "see twin",
+                    "rich_text": {
+                        "type": "doc",
+                        "content": [{"type": "paragraph", "content": [{
+                            "type": "text", "text": "twin",
+                            "marks": [{"type": "dashboardLink",
+                                       "attrs": {"dashboardName": "Twin"}}],
+                        }]}],
+                    },
+                }
+            ],
+        }
+
+        imported = self._import(bundle)
+        self.assertIn(
+            "dashboard_link_ambiguous",
+            [w["code"] for w in imported["warnings"]],
+        )
+        created = Dashboard.objects.get(pk=imported["dashboard"]["id"])
+        box = TextBoxComponent.objects.get(dashboard=created)
+        self.assertIn(f'"dashboardId": {first.pk}', json.dumps(box.rich_text))
+
+    def test_log_coupled_settings_are_reported_once_for_the_whole_import(self):
+        """Advisory, and about a class of widget — so not one row per widget."""
+        self._save(
+            [
+                {"component_name": "VariantsComponent", "x": 0, "y": 0, "w": 4, "h": 4,
+                 "leading_object_type": "Order"},
+                {"component_name": "OCCNComponent", "x": 4, "y": 0, "w": 4, "h": 4,
+                 "object_types": "Order,Item"},
+            ]
+        )
+        warnings = self._import(self._export())["warnings"]
+        coupled = [w for w in warnings if w["code"] == "log_coupled_settings"]
+        self.assertEqual(len(coupled), 1, warnings)
+        self.assertIn("VariantsComponent", coupled[0]["detail"])
+        self.assertIn("OCCNComponent", coupled[0]["detail"])
+
+    def test_an_untouched_widget_does_not_raise_the_log_coupled_warning(self):
+        self._save(
+            [{"component_name": "VariantsComponent", "x": 0, "y": 0, "w": 4, "h": 4}]
+        )
+        warnings = self._import(self._export())["warnings"]
+        self.assertEqual(
+            [w for w in warnings if w["code"] == "log_coupled_settings"], []
+        )
 
     def test_cannot_import_into_a_foreign_project(self):
         self._save(

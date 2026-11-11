@@ -64,7 +64,13 @@ function wrongFormatMessage(parsed: unknown): string | null {
       ? `That is a "${schema}" file, not a dashboard.`
       : "That file does not contain a dashboard.";
   }
-  if (typeof version !== "number" || version > DASHBOARD_BUNDLE_VERSION) {
+  // Two different faults, two different messages — as the backend already
+  // does. A missing or non-numeric version means a truncated or corrupt file,
+  // not one from the future.
+  if (typeof version !== "number" || !Number.isFinite(version)) {
+    return "That dashboard file looks incomplete or corrupt.";
+  }
+  if (version > DASHBOARD_BUNDLE_VERSION) {
     return "That file was written by a newer version of TOTeM.";
   }
   return null;
@@ -177,25 +183,30 @@ export function NavDashboard({
       toast.warning("Open an event log first — an imported dashboard needs a project.");
       return;
     }
+    // Deliberately *not* holding the submit lock across the file picker:
+    // `openJsonFile` settles on the input's change or cancel event, and where
+    // `oncancel` does not fire the promise never settles at all — which would
+    // leave Add, Rename and Delete disabled for the rest of the session. The
+    // lock covers the request, which is what it is for.
+    let parsed: unknown;
+    try {
+      parsed = await openJsonFile();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "The file could not be read.");
+      return;
+    }
+    // The picker was cancelled: not an error, and nothing to say about it.
+    if (parsed === null) return;
+
+    const wrongFormat = wrongFormatMessage(parsed);
+    if (wrongFormat) {
+      toast.error(wrongFormat);
+      return;
+    }
+
     if (!beginSubmit()) return;
 
     try {
-      let parsed: unknown;
-      try {
-        parsed = await openJsonFile();
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : "The file could not be read.");
-        return;
-      }
-      // The picker was cancelled: not an error, and nothing to say about it.
-      if (parsed === null) return;
-
-      const wrongFormat = wrongFormatMessage(parsed);
-      if (wrongFormat) {
-        toast.error(wrongFormat);
-        return;
-      }
-
       const result = await importDashboard(
         selectedFile.project,
         selectedFile.id ?? null,

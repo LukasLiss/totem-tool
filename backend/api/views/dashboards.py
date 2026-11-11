@@ -6,6 +6,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 from django.conf import settings
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.db.models import Max
 from django.utils.text import slugify
@@ -55,6 +56,7 @@ from totem_lib.orgamining import (
 )
 
 from ..dashboard_bundle import (
+    WARN_COMPONENT_UNKNOWN,
     build_dashboard_bundle,
     resolve_bundle_components,
     unique_dashboard_name,
@@ -203,6 +205,26 @@ def _ocpn_asset_for(item, dashboard, request):
     ).first()
 
 
+def _optional_int(raw):
+    """``raw`` as an int, or None when it is not one.
+
+    Reference ids on the import endpoint come from a request body a user can
+    hand-write, and the ORM raises ValueError/TypeError — a 500 — when a
+    non-numeric value reaches ``filter(pk=...)``. Bools are excluded because
+    ``int(True)`` is 1, which would silently mean "project 1".
+    """
+    if raw is None or isinstance(raw, bool):
+        return None
+    # 1.5 must not become project 1: truncating a fractional id would silently
+    # resolve to a *different* project than the one asked for.
+    if isinstance(raw, float) and not raw.is_integer():
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def _bounded_int(item, key: str, default: int, lo: int, hi: int) -> int:
     try:
         value = int(item.get(key, default))
@@ -280,10 +302,19 @@ class DashboardViewSet(viewsets.ModelViewSet):
         Rename a dashboard. Only accepts `name` in the body.
         """
         dashboard = self.get_object()
-        new_name = request.data.get("name")
+        new_name = (request.data.get("name") or "").strip()
         if not new_name:
             return Response(
                 {"error": "Name is required"}, status=status.HTTP_400_BAD_REQUEST
+            )
+        # This action bypasses the serializer, so nothing else enforces the
+        # column width: SQLite stores an over-long name silently and Postgres
+        # raises DataError, a 500. Same guard as `EventLogViewSet.rename`.
+        limit = Dashboard._meta.get_field("name").max_length
+        if len(new_name) > limit:
+            return Response(
+                {"error": f"Name must be at most {limit} characters"},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         dashboard.name = new_name
@@ -435,7 +466,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
         comes back in `warnings` rather than failing the import, because a
         dashboard that is 90% right and says what to fix beats a refusal.
         """
-        project_id = request.data.get("project")
+        project_id = _optional_int(request.data.get("project"))
         project = Project.objects.filter(
             pk=project_id, users=request.user
         ).first()
@@ -453,7 +484,9 @@ class DashboardViewSet(viewsets.ModelViewSet):
         except ValueError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
-        event_log_id = request.data.get("event_log")
+        # A value that is not an id at all lands on the same path as a log of
+        # another project: the chart imports unbound and says so.
+        event_log_id = _optional_int(request.data.get("event_log"))
         if event_log_id is not None:
             # Only a log of this project: a dotted chart must never be pointed
             # at somebody else's data.
@@ -497,7 +530,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                 if stored < len(layout):
                     warnings.append(
                         {
-                            "code": "component_unknown",
+                            "code": WARN_COMPONENT_UNKNOWN,
                             "component_name": None,
                             "detail": (
                                 f"{len(layout) - stored} widget(s) could not be "
@@ -508,6 +541,20 @@ class DashboardViewSet(viewsets.ModelViewSet):
         except RichTextTooLarge as exc:
             return Response(
                 {"error": f"a text box's content is too large: {exc}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except (ValueError, TypeError, DjangoValidationError) as exc:
+            # `validate_dashboard_bundle_dict` checks the envelope and the
+            # geometry; the remaining per-widget fields are handed to
+            # `_replace_components`, which validates many but not all of them,
+            # so a hand-edited value like {"alpha": "x"} surfaces here as the
+            # model rejecting it. Raised out of the atomic block above, so the
+            # half-built dashboard is already rolled back.
+            detail = "; ".join(exc.messages) if isinstance(
+                exc, DjangoValidationError
+            ) else str(exc)
+            return Response(
+                {"error": f"The file contains a value this build cannot read: {detail}"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

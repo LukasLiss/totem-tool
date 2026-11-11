@@ -30,8 +30,11 @@ Three kinds of field need care, and they are the only ones:
    the whole point of a file, so names it is.
 
 The import path deliberately produces a plain ``layout`` list in the shape
-``DashboardViewSet.save_layout`` already accepts, so the whole per-field
-validation and clamping chain in ``_replace_components`` is reused unchanged.
+``DashboardViewSet.save_layout`` already accepts, so the per-field validation
+and clamping ``_replace_components`` does is reused unchanged. That chain
+covers many fields but not all of them — it was written for a payload built by
+the grid, not by hand — so ``import_bundle`` also translates the model errors
+the remaining fields can raise into a 400 rather than a 500.
 A future whole-project importer should call :func:`resolve_bundle_components`
 per dashboard for the same reason.
 """
@@ -83,6 +86,8 @@ WARN_QUERY_ASSET_MISSING = "query_asset_missing"
 WARN_IMAGE_ASSET_MISSING = "image_asset_missing"
 WARN_MODEL_ASSET_MISSING = "model_asset_missing"
 WARN_DASHBOARD_LINK_DROPPED = "dashboard_link_dropped"
+WARN_DASHBOARD_LINK_AMBIGUOUS = "dashboard_link_ambiguous"
+WARN_LOG_COUPLED_SETTINGS = "log_coupled_settings"
 WARN_COMPONENT_UNKNOWN = "component_unknown"
 WARN_EVENT_LOG_REBOUND = "event_log_rebound"
 WARN_EVENT_LOG_MISSING = "event_log_missing"
@@ -95,6 +100,38 @@ _CONTAINER_KEYS = ("id", "dashboard", "resourcetype")
 # Derived or project-local, never portable: `image_asset_url` is resolved from
 # the asset, and `image` is a legacy path confined to one project's media dir.
 _DERIVED_KEYS = ("image_asset_url", "image")
+
+
+# Geometry a grid can actually lay out. GridStack runs at its default 12
+# columns here, so these are far wider than any real dashboard while still
+# being finite — `_replace_components` writes x/y/w/h verbatim, and a widget
+# a billion columns wide leaves a dashboard with no way back through the UI.
+MAX_GRID_ORIGIN = 1000
+MAX_GRID_SPAN = 100
+
+# Settings that name object types, activities, resources or event-log columns
+# *of the source log*. They are carried verbatim because there is nothing to
+# translate them to, and against a different log they simply match nothing —
+# so the import says so rather than letting the widget render empty in silence.
+# The chart/KPI `*_column` fields are deliberately absent: those name columns
+# of a SQL result, which the query warning and the widgets' own error box
+# already cover.
+LOG_COUPLED_FIELDS = {
+    "VariantsComponent": (
+        "leading_object_type",
+        "business_object_types",
+        "business_activities",
+    ),
+    "FilterStackComponent": ("filter_stack_json",),
+    "OCCNComponent": ("object_types",),
+    "OCHandoverComponent": ("resource_types", "businessobject_types"),
+    "ResourceProfilingComponent": ("resource_types", "business_object_types"),
+    "OCAlignmentComponent": (
+        "execution_column",
+        "business_object_types",
+        "business_activities",
+    ),
+}
 
 
 # A hand-edited file should not be able to ask for a hundred thousand rows.
@@ -163,6 +200,27 @@ def links_to_names(rich_text, id_to_name):
         return {"dashboardName": name} if name else None
 
     return _map_dashboard_links(rich_text, rewrite)
+
+
+def _linked_names(rich_text):
+    """Every ``dashboardName`` a document links, as a set.
+
+    Read-only: `_map_dashboard_links` is reused with a rewrite that returns the
+    attrs untouched, so this cannot drift from what `links_to_ids` resolves.
+    """
+    if not isinstance(rich_text, (dict, list)):
+        return set()
+
+    names = set()
+
+    def record(attrs):
+        name = attrs.get("dashboardName")
+        if isinstance(name, str):
+            names.add(name)
+        return attrs
+
+    _map_dashboard_links(rich_text, record)
+    return names
 
 
 def links_to_ids(rich_text, name_to_id):
@@ -383,6 +441,14 @@ def validate_dashboard_bundle_dict(raw):
                 isinstance(value, int) and not isinstance(value, bool),
                 f"Component {index + 1} has a non-numeric {key}.",
             )
+            # A span starts at 1; an origin may sit at 0.
+            low = 1 if key in ("w", "h") else 0
+            high = MAX_GRID_SPAN if key in ("w", "h") else MAX_GRID_ORIGIN
+            _require(
+                low <= value <= high,
+                f"Component {index + 1} has {key}={value}, outside the "
+                f"{low}-{high} a dashboard grid can lay out.",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -443,6 +509,12 @@ def resolve_bundle_components(
     """
     layout = []
     warnings = []
+    # Widget types that brought settings naming the source log's object types,
+    # activities, resources or columns. Collected across the whole import and
+    # reported once at the end: unlike the other warnings this one is advisory
+    # — nothing failed to resolve — and it applies to a class of widget, so a
+    # row per component would pad the dialog without adding information.
+    log_coupled_types = set()
 
     # Scoped exactly as `_query_asset_for` scopes its id lookup: an asset of
     # this project that this user can see.
@@ -471,14 +543,25 @@ def resolve_bundle_components(
             asset_type=ProjectAsset.AssetType.OCPN,
         ).values_list("pk", "name")
     }
-    dashboard_ids = {
-        name: pk
-        for pk, name in Dashboard.objects.filter(project=project).values_list(
-            "pk", "name"
-        )
-    }
+    # Dashboard names are not unique within a project — `rename` enforces
+    # nothing and the serializer declares nothing — so a name can match several
+    # rows. Resolve to the oldest and say so, rather than letting an unordered
+    # queryset decide which one a link lands on. Export cannot do better: the
+    # id is already gone by the time the file is written.
+    dashboard_ids = {}
+    ambiguous_names = set()
+    for pk, name in Dashboard.objects.filter(project=project).order_by("pk").values_list(
+        "pk", "name"
+    ):
+        if name in dashboard_ids:
+            ambiguous_names.add(name)
+        else:
+            dashboard_ids[name] = pk
     if self_dashboard is not None:
+        # The copy just created is the right target for a self-link, whatever
+        # else holds that name.
         dashboard_ids[self_name or self_dashboard.name] = self_dashboard.pk
+        ambiguous_names.discard(self_name or self_dashboard.name)
 
     for item in components:
         name = item.get("component_name")
@@ -588,10 +671,33 @@ def resolve_bundle_components(
                     }
                 )
 
+        for field in LOG_COUPLED_FIELDS.get(name, ()):
+            value = resolved.get(field)
+            # Only when the user actually configured something: an untouched
+            # widget has nothing bound to the old log.
+            if value not in (None, "", [], {}):
+                log_coupled_types.add(name)
+                break
+
         if "rich_text" in resolved:
+            linked_names = _linked_names(resolved["rich_text"])
             resolved["rich_text"], dropped = links_to_ids(
                 resolved["rich_text"], dashboard_ids
             )
+            shared = sorted(linked_names & ambiguous_names)
+            if shared:
+                warnings.append(
+                    {
+                        "code": WARN_DASHBOARD_LINK_AMBIGUOUS,
+                        "component_name": name,
+                        "detail": (
+                            f"This project has more than one dashboard called "
+                            f"{', '.join(repr(n) for n in shared)}. A link can only "
+                            f"name one, so it points at the oldest — open the text "
+                            f"box and check it."
+                        ),
+                    }
+                )
             if dropped:
                 warnings.append(
                     {
@@ -606,5 +712,20 @@ def resolve_bundle_components(
                 )
 
         layout.append(resolved)
+
+    if log_coupled_types:
+        warnings.append(
+            {
+                "code": WARN_LOG_COUPLED_SETTINGS,
+                "component_name": None,
+                "detail": (
+                    f"Some widgets ({', '.join(sorted(log_coupled_types))}) keep "
+                    f"settings that name object types, activities or columns of the "
+                    f"original event log. Against a different log those match "
+                    f"nothing and the widget renders empty, so open each one and "
+                    f"reselect."
+                ),
+            }
+        )
 
     return layout, warnings
