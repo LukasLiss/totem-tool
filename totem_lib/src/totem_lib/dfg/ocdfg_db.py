@@ -233,7 +233,7 @@ class NewOCDFGDb(nx.MultiDiGraph):
                 {obj_type: {
                     "variants": [
                         {"trace": ["a", "b", ...], "count": N, "objects": ["o1", ...]},
-                        ...   # sorted most-frequent first
+                        ...   # sorted most-frequent first; ties by trace
                     ],
                     "total_objects": M,
                 }}
@@ -282,7 +282,9 @@ class NewOCDFGDb(nx.MultiDiGraph):
                 LIST(obj_id ORDER BY obj_id) AS objects
             FROM per_obj_traces
             GROUP BY obj_type, trace
-            ORDER BY obj_type, cnt DESC
+            -- `trace` breaks ties, so equally frequent variants always get
+            -- the same ranks (the graph and its animation rank separately).
+            ORDER BY obj_type, cnt DESC, trace
             """,
             types_list,
         ).fetchall()

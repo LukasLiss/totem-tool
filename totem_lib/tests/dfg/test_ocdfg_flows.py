@@ -103,11 +103,42 @@ def test_variant_ranks(small_db):
     ranks = {}
     for index, (type_index, rank) in enumerate(zip(objects["type"], objects["variant_rank"])):
         ranks.setdefault(types[type_index], []).append(rank)
-    # order: one variant. items with steps: i1 (pack, ship) and i2 (pick, pack, ship)
-    # are each one object of their variant; i3 (pick) has no step.
+    # order: one variant. The three item variants occur once each, so the
+    # tie is broken by trace: "pack|ship" (i1) < "pick" (i3) < "pick|pack|ship" (i2).
+    # i3 has no step, so only i1 (rank 1) and i2 (rank 3) are returned.
     assert ranks["order"] == [1]
-    assert sorted(ranks["item"]) in ([1, 2], [1, 3], [2, 3])
-    assert all(r >= 1 for r in objects["variant_rank"])
+    assert sorted(ranks["item"]) == [1, 3]
+
+
+@pytest.fixture
+def tied_db():
+    """Three item variants, two objects each: a→b, a→c, a→d (listed out of order)."""
+    events, relations = [], []
+    for n, (obj, second) in enumerate([("x1", "d"), ("x2", "b"), ("x3", "c"), ("x4", "d"), ("x5", "b"), ("x6", "c")]):
+        events += [(f"{obj}-1", "a", n), (f"{obj}-2", second, n + 10)]
+        relations += [(f"{obj}-1", obj), (f"{obj}-2", obj)]
+    db = _db(events=events, objects=[(f"x{i}", "item") for i in range(1, 7)], relations=relations)
+    yield db
+    db.conn.close()
+
+
+def test_equally_frequent_variants_are_ranked_by_trace(tied_db):
+    variants = NewOCDFGDb.compute_variants(tied_db)["item"]["variants"]
+    assert [v["trace"] for v in variants] == [["a", "b"], ["a", "c"], ["a", "d"]]
+    assert [v["count"] for v in variants] == [2, 2, 2]
+
+
+def test_graph_and_animation_rank_ties_alike(tied_db):
+    graph, _ = NewOCDFGDb.from_ocel_db_with_variant_ranks(tied_db)
+    arc_rank = {v: graph.edges["a", v, "item"]["variant_rank"] for v in ("b", "c", "d")}
+    assert arc_rank == {"b": 1, "c": 2, "d": 3}
+
+    result = ocdfg_flows_from_ocel_db(tied_db, variant_ranks=True)
+    acts = result["activities"]
+    flows = result["flows"]
+    for obj, target in zip(flows["object"], flows["target"]):
+        # Every variant here has one arc of its own, so the ranks must match.
+        assert result["objects"]["variant_rank"][obj] == arc_rank[acts[target]]
 
 
 def test_empty_result():
