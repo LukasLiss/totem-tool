@@ -1,6 +1,3 @@
-import { ReactFlowProvider } from '@xyflow/react';
-import { useId } from 'react';
-
 import NewOCDFGVisualizer, { type OcdfgGraph } from './NewOCDFGVisualizer';
 
 type OCDFGDetailVisualizerProps = {
@@ -12,8 +9,11 @@ type OCDFGDetailVisualizerProps = {
   onSizeChange?: (size: { width: number; height: number }) => void;
 };
 
-// Lightweight wrapper to keep the detail-node OCDFG isolated from the primary visualizer
-// while still reusing the shared layout and rendering logic.
+/**
+ * The OC-DFG of one process area inside the process-area view: the graph
+ * only, laid out left to right with the default OC-DFG layout, reporting its
+ * size so the area's box can follow it.
+ */
 function OCDFGDetailVisualizer({
   height,
   data,
@@ -22,21 +22,16 @@ function OCDFGDetailVisualizer({
   typeColorOverrides,
   onSizeChange,
 }: OCDFGDetailVisualizerProps) {
-  const generatedId = useId();
-  const providerId = instanceId ?? `detail-flow-${generatedId}`;
-
   return (
-    <ReactFlowProvider>
-      <NewOCDFGVisualizer
-        height={height}
-        data={data}
-        variant="detail"
-        instanceId={providerId}
-        layoutDirection={layoutDirection ?? 'LR'}
-        typeColorOverrides={typeColorOverrides}
-        onSizeChange={onSizeChange}
-      />
-    </ReactFlowProvider>
+    <NewOCDFGVisualizer
+      height={height}
+      data={data}
+      variant="detail"
+      instanceId={instanceId}
+      layoutDirection={layoutDirection ?? 'LR'}
+      typeColorOverrides={typeColorOverrides}
+      onSizeChange={onSizeChange}
+    />
   );
 }
 

@@ -2,7 +2,7 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from rest_framework.routers import DefaultRouter
-from .views import EventLogViewSet, ImageAssetViewSet, ProjectAssetViewSet, greeting, variants, DashboardViewSet, delete_user_data, NewOCDFGViewSet, OCCNViewSet, health_check, playout, playout_export_ocel, cache_stats, cache_clear, user_settings, ochandover, profile_matrix, event_log_table, jobs_status, job_cancel, component_filters
+from .views import EventLogViewSet, ImageAssetViewSet, ProjectAssetViewSet, greeting, variants, DashboardViewSet, delete_user_data, NewOCDFGViewSet, OCDFGBlockStructureView, OCCNViewSet, health_check, playout, playout_export_ocel, cache_stats, cache_clear, upload_limits, user_settings, ochandover, profile_matrix, event_log_table, jobs_status, job_cancel, component_filters, project_view_settings
 from . import views_ocel_editor
 from . import views_process_executions
 
@@ -16,11 +16,14 @@ urlpatterns = [
     path('health-check/', health_check, name='health-check'),
     path('greeting/', greeting, name='greeting'),
     path('new-ocdfg/', NewOCDFGViewSet, name='new-ocdfg'),
+    path('ocdfg-block-structure/', OCDFGBlockStructureView, name='ocdfg-block-structure'),
+    path('projects/<int:project_id>/view-settings/<str:key>/', project_view_settings, name='project-view-settings'),
     path('occn/', OCCNViewSet, name='occn'),
     # Process executions stored as event columns (see views_process_executions.py).
     # Registered before the router so the explicit paths win over `files/<pk>/`.
     path("files/<int:pk>/event_columns/", views_process_executions.event_columns, name="event-columns"),
     path("files/<int:pk>/process_executions/", views_process_executions.process_executions, name="process-executions"),
+    path("files/<int:pk>/process_area_variants/", views_process_executions.process_area_variants, name="process-area-variants"),
     path("", include(router.urls)),
     path("variants/", variants, name="variants"),
     path("handover/", ochandover, name="handover"),
@@ -43,6 +46,7 @@ urlpatterns = [
     path("cache/stats/", cache_stats, name="cache-stats"),
     path("cache/clear/", cache_clear, name="cache-clear"),
     path("settings/", user_settings, name="user-settings"),
+    path("upload-limits/", upload_limits, name="upload-limits"),
     # Cancellable computations: progress and cancellation by client job id.
     path("jobs/", jobs_status, name="jobs-status"),
     path("jobs/<str:job_id>/cancel/", job_cancel, name="job-cancel"),

@@ -76,7 +76,7 @@ _OCEL_OBJECT_TYPES_REGISTRY: dict[int, tuple[tuple[str, int], ...]] = {}
 _OCEL_TIME_WINDOW_REGISTRY: dict[int, dict] = {}
 
 # Logs with more events than this get a global time-range filter proposed.
-LARGE_LOG_EVENT_LIMIT = 25_000
+LARGE_LOG_EVENT_LIMIT = 40_000
 _OCEL_DB_REGISTRY_LOCK = threading.Lock()  # guards the dicts themselves
 # Per-file locks that outlive the connection objects. `_with_ocel_db` takes
 # this lock *before* looking the connection up, so a writer that has to close

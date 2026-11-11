@@ -16,6 +16,9 @@ import { GridContext, GridModeContext, type GridLayoutItem } from "./gridContext
 import { toast } from "sonner";
 import { resolveTextBoxFormat } from "../../components/text-box/textBoxFormat";
 
+/** Widest window that still gets the one-column dashboard (matches useIsMobile). */
+const MOBILE_MAX_WIDTH = 767;
+
 type GridWidgetElement = HTMLElement & {
   _reactRoot?: Root;
   gridstackNode?: GridStackNode;
@@ -41,6 +44,7 @@ const MIN_SIZES: Record<string, { minW: number; minH: number }> = {
   ScatterPlotComponent: { minW: 3, minH: 3 },
   OCHandoverComponent: { minW: 6, minH: 6 },
   ResourceProfilingComponent: { minW: 6, minH: 6 },
+  OCAlignmentComponent: { minW: 6, minH: 6 },
 };
 const DEFAULT_MIN_SIZE = { minW: 2, minH: 2 };
 
@@ -84,6 +88,13 @@ export const GridProvider: React.FC<GridProviderProps> = ({
     acceptWidgets: true,
     removable: "#trash",
     float: true,
+    // Phones show the dashboard as a single column, widgets stacked in
+    // reading order. GridStack keeps the 12-column layout cached and puts it
+    // back when the window is wide again.
+    columnOpts: {
+      breakpointForWindow: true,
+      breakpoints: [{ w: MOBILE_MAX_WIDTH, c: 1 }],
+    },
     ...(options || {}),
   };
 
@@ -308,6 +319,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           timeout_s: node.timeout_s ?? 10.0,
           business_object_types: node.business_object_types ?? [],
           business_activities: node.business_activities ?? [],
+          variants_mode: node.variants_mode ?? 'process_areas',
+          area_execution_column: node.area_execution_column ?? 'process-executions-cc-process-areas',
+          area_variant_column: node.area_variant_column ?? 'variant-cc-process-areas',
         };
       } else if (component_name === "LogStatisticsComponent") {
         props = {
@@ -326,6 +340,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           color_by: node.color_by ?? "activity",
           shape_by: node.shape_by ?? "none",
           row_order: node.row_order ?? "first_occurrence",
+          row_order_direction: node.row_order_direction ?? "asc",
           max_points: node.max_points ?? 10000,
         };
       } else if (component_name === "NewOCDFGComponent" || component_name === "NewOCDFGVariantsComponent") {
@@ -333,6 +348,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           show_controls: node.show_controls ?? true,
           initial_interaction_locked: node.initial_interaction_locked ?? true,
           layout_direction: node.layout_direction ?? 'TB',
+          // Layout panel settings; saved as is (null = the defaults).
+          layout_options: node.layout_options ?? null,
         };
       } else if (component_name === "ProcessAreaComponent") {
         props = {
@@ -355,6 +372,11 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         props = {
           automatic_loading: node.automatic_loading ?? false,
           timeout_s: node.timeout_s ?? 30.0,
+        };
+      } else if (component_name === "OCPNFlattenedReplayComponent") {
+        props = {
+          ocpn_asset_id: node.ocpn_asset_id ?? null,
+          automatic_loading: node.automatic_loading ?? false,
         };
       } else if (component_name === "SqlQueryComponent") {
         props = {
@@ -436,6 +458,20 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           distance_metric: node.distance_metric ?? 'euclidean',
           view_mode: node.view_mode ?? 'graph',
         };
+      } else if (component_name === "OCAlignmentComponent") {
+        props = {
+          show_controls: node.show_controls ?? true,
+          automatic_loading: node.automatic_loading ?? false,
+          model_asset: node.model_asset ?? null,
+          execution_source: node.execution_source ?? 'area',
+          execution_column: node.execution_column ?? '',
+          business_object_types: node.business_object_types ?? [],
+          business_activities: node.business_activities ?? [],
+          execution_id: node.execution_id ?? '',
+          max_states: node.max_states ?? 200000,
+          timeout_s: node.timeout_s ?? 60,
+          show_silent_moves: node.show_silent_moves ?? false,
+        };
       } else {
         props = {
           text: node.el ? node.el.innerHTML.trim() : "",
@@ -510,6 +546,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "Object-Centric DFG (Variants)";
         } else if (item.component_name === "OCPNComponent") {
           content = "OC Petri Net";
+        } else if (item.component_name === "OCPNFlattenedReplayComponent") {
+          content = "OCPN Flattened Replay";
         } else if (item.component_name === "OCCNComponent") {
           content = "Object-Centric Causal Net (OCCN)";
         } else if (item.component_name === "SqlQueryComponent") {
@@ -526,6 +564,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "Handover of Work";
         } else if (item.component_name === "ResourceProfilingComponent") {
           content = "Resource Profiling";
+        } else if (item.component_name === "OCAlignmentComponent") {
+          content = "Object-Centric Alignment";
         } else {
           content = "Unknown";
         }
@@ -573,6 +613,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             timeout_s: item.timeout_s,
             business_object_types: item.business_object_types,
             business_activities: item.business_activities,
+            variants_mode: item.variants_mode,
+            area_execution_column: item.area_execution_column,
+            area_variant_column: item.area_variant_column,
             // LogStatisticsComponent properties
             show_num_events: item.show_num_events,
             show_num_activities: item.show_num_activities,
@@ -590,8 +633,10 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             color_by: item.color_by,
             shape_by: item.shape_by,
             row_order: item.row_order,
+            row_order_direction: item.row_order_direction,
             max_points: item.max_points,
             layout_direction: item.layout_direction,
+            layout_options: item.layout_options,
             // PieChartComponent properties
             query: item.query,
             ring_text: item.ring_text,
@@ -601,6 +646,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             value_column: item.value_column,
             show_legend: item.show_legend,
             show_tooltip: item.show_tooltip,
+            // OCPNFlattenedReplayComponent properties
+            ocpn_asset_id: item.ocpn_asset_id,
             // OCCNComponent properties
             relative_occurrence_threshold: item.relative_occurrence_threshold,
             object_types: item.object_types,
@@ -646,6 +693,13 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             min_cluster_size: item.min_cluster_size,
             distance_metric: item.distance_metric,
             local_filter_params: item.local_filter_params ?? null,
+            // OCAlignmentComponent
+            model_asset: item.model_asset,
+            execution_source: item.execution_source,
+            execution_column: item.execution_column,
+            execution_id: item.execution_id,
+            max_states: item.max_states,
+            show_silent_moves: item.show_silent_moves,
           });
           // After adding, ensure custom properties are on the node
           if (widgetEl) {
@@ -681,6 +735,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node.timeout_s = item.timeout_s;     // For VariantsComponent advanced settings
               node.business_object_types = item.business_object_types; // VariantsComponent resource-aware
               node.business_activities = item.business_activities;     // VariantsComponent resource-aware
+              node.variants_mode = item.variants_mode;                 // VariantsComponent method
+              node.area_execution_column = item.area_execution_column; // VariantsComponent process-area mode
+              node.area_variant_column = item.area_variant_column;     // VariantsComponent process-area mode
               // LogStatisticsComponent properties
               node.show_num_events = item.show_num_events;
               node.show_num_activities = item.show_num_activities;
@@ -707,8 +764,12 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node.color_by = item.color_by;
               node.shape_by = item.shape_by;
               node.row_order = item.row_order;
+              node.row_order_direction = item.row_order_direction;
               node.max_points = item.max_points;
               node.layout_direction = item.layout_direction;
+              node.layout_options = item.layout_options;
+              // OCPNFlattenedReplayComponent properties
+              node.ocpn_asset_id = item.ocpn_asset_id;
               // OCCNComponent properties
               node.relative_occurrence_threshold = item.relative_occurrence_threshold;
               node.object_types = item.object_types;
@@ -754,6 +815,13 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node.min_cluster_size = item.min_cluster_size;
               node.distance_metric = item.distance_metric;
               node.local_filter_params = item.local_filter_params ?? null;
+              // OCAlignmentComponent
+              node.model_asset = item.model_asset;
+              node.execution_source = item.execution_source;
+              node.execution_column = item.execution_column;
+              node.execution_id = item.execution_id;
+              node.max_states = item.max_states;
+              node.show_silent_moves = item.show_silent_moves;
             }
           }
           // Set data attribute for persistence

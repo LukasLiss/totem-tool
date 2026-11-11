@@ -35,6 +35,9 @@ declare module 'gridstack' {
     timeout_s?: number;
     business_object_types?: string[];
     business_activities?: string[];
+    variants_mode?: 'process_areas' | 'custom';
+    area_execution_column?: string;
+    area_variant_column?: string;
     show_num_events?: boolean;
     show_num_activities?: boolean;
     show_num_objects?: boolean;
@@ -50,14 +53,19 @@ declare module 'gridstack' {
     color_by?: string;
     shape_by?: string;
     row_order?: 'first_occurrence' | 'last_occurrence';
+    row_order_direction?: 'asc' | 'desc';
     max_points?: number;
     show_minimap?: boolean;
     layout_direction?: 'TB' | 'LR';
+    // NewOCDFGComponent: layout panel settings ({version, options}), null = defaults
+    layout_options?: unknown;
     // ImageComponent (asset store)
     image_asset?: number | null;
     image_asset_url?: string | null;
     image_fit?: string;
     image_alignment?: string;
+    // OCPNFlattenedReplayComponent
+    ocpn_asset_id?: number | null;
     // OCCNComponent
     relative_occurrence_threshold?: number;
     object_types?: string;
@@ -102,6 +110,14 @@ declare module 'gridstack' {
     min_parallel_observations?: number;
     cluster_by_ot?: boolean;
     view_mode?: 'graph' | 'table' | 'log';
+    // OCAlignmentComponent (show_controls, automatic_loading, business_object_types,
+    // business_activities and timeout_s are shared above)
+    model_asset?: number | null;
+    execution_source?: 'area' | 'stored';
+    execution_column?: string;
+    execution_id?: string;
+    max_states?: number;
+    show_silent_moves?: boolean;
     // ResourceProfilingComponent (business_object_types / resource_types shared)
     feature_groups?: string[];
     tooltip_feature_groups?: string[];

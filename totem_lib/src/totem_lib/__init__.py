@@ -17,7 +17,7 @@ from .totem import (
     validate_totem_dict,
 )
 from .process_areas import discover_process_areas, discover_process_areas_db, ProcessAreas
-from .ocpn import ocpns_are_similar, discover_ocpn_db, OCPN
+from .ocpn import ocpns_are_similar, discover_ocpn_db, discover_process_trees_db, OCPN
 from .visualization import plot, to_graphviz
 from .occn import (
     CONNECTED_COMPONENTS_REPLAY_STRATEGY,
@@ -119,6 +119,7 @@ __all__ = [
     "discover_occn",
     "extract_occn_input",
     "discover_ocpn_db",
+    "discover_process_trees_db",
     "discover_process_areas",
     "discover_process_areas_db",
     "discover_resource_profiles",

@@ -1,7 +1,7 @@
 import { useState, useRef, useContext } from "react";
 import axios from "axios";
 import { fileTypeFromBlob } from "file-type";
-import { uploadFile } from "../api/fileApi";
+import { getUploadLimits, uploadFile } from "../api/fileApi";
 import { Loader2, CheckCircle2, XCircle } from "lucide-react";
 import {useDropzone} from 'react-dropzone';
 import { Button } from "@/components/ui/button";
@@ -27,6 +27,8 @@ import { isCancelledError, useComputationStore } from "@/store/computationStore"
 import { prepareLargeLogFilter } from "@/store/applyGlobalFilter";
 import { ProgressBar } from "@/components/ComputationPanel";
 
+const UNLIMITED_VERSION_HINT =
+  "At totem-tool.com, you can download the local or self-hosted version that has no limitations.";
 
 export function FileUploadValidator() {
     const { setSelectedFile } = useContext(SelectedFileContext);
@@ -89,6 +91,27 @@ export function FileUploadValidator() {
     if (!(isJson || isXml || isSqlite || isCsv || isDuckDB)){
         toast.error("Invalid file type", {description:"Please enter 'json', 'xml', 'sqlite', 'csv', or 'duckdb'."});
         return false;
+    }
+
+    // Checked here because a rejected upload can surface as a bare network
+    // error: the server stops reading the file. It still enforces both limits.
+    try {
+      const limits = await getUploadLimits();
+      const { max_upload_bytes: maxBytes, max_projects_per_user: maxProjects } = limits;
+      if (maxProjects !== null && limits.project_count >= maxProjects) {
+        toast.error("Project limit reached", {
+          description: `You can have at most ${maxProjects} project${maxProjects === 1 ? "" : "s"}. Delete a project to add a new one. ${UNLIMITED_VERSION_HINT}`,
+        });
+        return false;
+      }
+      if (maxBytes !== null && file.size > maxBytes) {
+        toast.error("File too large", {
+          description: `Files can be at most ${Math.floor(maxBytes / (1024 * 1024))} MB. ${UNLIMITED_VERSION_HINT}`,
+        });
+        return false;
+      }
+    } catch {
+      // Not knowing the limits must not block an upload.
     }
 
     return true;
@@ -179,17 +202,17 @@ export function FileUploadValidator() {
 
 
   return (
-  <div>
-    <Card className="w-full max-w-sm m-6">
+  <div className="w-full max-w-sm p-4 md:p-6">
+    <Card className="w-full">
       <CardHeader>
         <CardTitle>
-          Upload new file
+          Upload a new file
         </CardTitle>
       </CardHeader>
         <CardContent>
           <form className="flex flex-col" onSubmit={handleSubmit}>
             <div {...getRootProps({ className:
-              "dropzone font-sans border flex flex-col items-center justify-center rounded-md pt-15 pb-20 pr-10 pl-10 text-center cursor-pointer transition hover:shadow-lg" })}>
+              "dropzone font-sans border flex flex-col items-center justify-center rounded-md px-6 pt-10 pb-12 md:px-10 md:pt-15 md:pb-20 text-center cursor-pointer transition hover:shadow-lg" })}>
               <input
                 type="file"
                 name="my-file"
@@ -203,7 +226,7 @@ export function FileUploadValidator() {
         <CardFooter className="flex-col gap-6 text-sm w-full mt-6 p-0">
           <div className="flex flex-col justify-center w-full">
             <div className="flex border rounded-md justify-center pr-2 pl-2 text-primary gap-2 w-full h-9 px-4 py-2 has-[>svg]:px-3">
-                <span>{file?.name ?? "No file chosen"}</span>
+                <span className="min-w-0 truncate">{file?.name ?? "No file chosen"}</span>
             </div>
               <Button 
                 className="w-full flex mt-2 md:flex-row cursor-pointer transition hover:shadow-lg gap-2" 

@@ -2,6 +2,7 @@ import { createContext, useContext, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useEffect } from "react";
 import axios from "axios";
+import { LOCAL_MODE } from "@/lib/env";
 
 type AuthState = "authenticated" | "anonymous" | "expired";
 
@@ -31,7 +32,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (authState !== "expired") return;
 
-    if (import.meta.env.VITE_LOCAL_MODE) {
+    if (LOCAL_MODE) {
       guestReAuth()
         .then(() => setAuthState("authenticated"))
         .catch(() => setAuthState("anonymous"));

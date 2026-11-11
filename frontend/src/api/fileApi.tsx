@@ -13,6 +13,18 @@ export async function uploadFile(
   return data;
 }
 
+export interface UploadLimits {
+  max_upload_bytes: number | null;
+  max_projects_per_user: number | null;
+  project_count: number;
+}
+
+/** Limits set by a hosted install; null means no limit. */
+export async function getUploadLimits(): Promise<UploadLimits> {
+  const { data } = await axios.get("/api/upload-limits/", { _skipGlobalFilter: true });
+  return data;
+}
+
 export async function getUserFiles() {
   const { data } = await axios.get("/api/files/", { _skipGlobalFilter: true });
   return data;

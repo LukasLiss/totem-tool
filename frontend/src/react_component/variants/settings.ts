@@ -4,6 +4,9 @@ import {
   type AdvancedSettings,
   type ExecutionSettings,
   EXTRACTION_OPTIONS,
+  DEFAULT_PROCESS_AREA_COLUMNS,
+  type ProcessAreaColumns,
+  type VariantsMode,
   ISO_OPTIONS,
   LEADING_EXTRACTIONS,
   RESOURCE_AWARE_EXTRACTION,
@@ -132,13 +135,36 @@ export function summarizeSettings(
   return parts.join(" · ");
 }
 
+/** Why the process-area columns cannot be used, or `null` when they can. */
+export function processAreaColumnsBlocker(columns: ProcessAreaColumns): string | null {
+  const executionError = columnNameError(columns.executionColumn);
+  if (executionError) return `Execution column: ${executionError}`;
+  const variantError = columnNameError(columns.variantColumn);
+  if (variantError) return `Variant column: ${variantError}`;
+  if (columns.executionColumn.trim() === columns.variantColumn.trim()) {
+    return "The execution column and the variant column must differ.";
+  }
+  return null;
+}
+
+/** The requested columns that already exist in the events table. */
+export function existingColumns(columns: ProcessAreaColumns, existing: string[]): string[] {
+  const present = new Set(existing);
+  return [columns.executionColumn.trim(), columns.variantColumn.trim()].filter((c) => present.has(c));
+}
+
 /** The dashboard-persisted shape of the current settings. */
 export function toAdvancedSettings(
   execution: ExecutionSettings,
   iso: AdvancedSettings["iso"],
   timeoutS: number,
+  mode: VariantsMode = "process_areas",
+  areaColumns: ProcessAreaColumns = DEFAULT_PROCESS_AREA_COLUMNS,
 ): AdvancedSettings {
   return {
+    mode,
+    area_execution_column: areaColumns.executionColumn,
+    area_variant_column: areaColumns.variantColumn,
     extraction: execution.extraction,
     iso,
     timeout_s: timeoutS,

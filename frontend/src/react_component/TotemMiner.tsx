@@ -77,7 +77,7 @@ export default function TotemMiner({
       className={`@container/card w-full flex flex-col ${fillContainer ? 'h-full rounded-none' : ''}`}
     >
       {/* Custom inline header matching thesis layout */}
-      <div className="flex flex-row items-center justify-between relative z-10 flex-shrink-0 w-full px-4 py-2 border-b bg-card text-left">
+      <div className="flex flex-row flex-wrap items-center justify-between gap-x-4 gap-y-2 relative z-10 flex-shrink-0 w-full px-4 py-2 border-b bg-card text-left">
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold text-card-foreground">
             TOTeM Model
@@ -90,7 +90,7 @@ export default function TotemMiner({
             onLocalFilterChange?.(params);
           }} />
         </div>
-        <div className="flex items-center gap-5">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
           {/* τ slider */}
           <div className="flex items-center gap-3">
             <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider min-w-[50px] text-right">
@@ -107,7 +107,7 @@ export default function TotemMiner({
             />
           </div>
 
-          <div className="w-px h-6 bg-border" />
+          <div className="hidden sm:block w-px h-6 bg-border" />
 
           <Button
             variant="outline"

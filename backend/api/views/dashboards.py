@@ -24,6 +24,7 @@ from ..models import (
     NewOCDFGComponent,
     OCCNComponent,
     OCPNComponent,
+    OCPNFlattenedReplayComponent,
     SqlQueryComponent,
     PieChartComponent,
     KpiComponent,
@@ -33,7 +34,9 @@ from ..models import (
     FilterStackComponent,
     OCHandoverComponent,
     ResourceProfilingComponent,
+    OCAlignmentComponent,
 )
+from ..view_preferences import clean_preferences, preferences_error
 from ..serializers import (
     DashboardComponentPolymorphicSerializer,
     DashboardSerializer,
@@ -148,6 +151,22 @@ def _local_filter_params(item):
     cleaned = {str(k): str(v) for k, v in raw.items() if k and v is not None and str(v) != ""}
     return cleaned or None
 
+def _ocpn_asset_id_for(item, dashboard):
+    """The OCPN asset id of a replay widget, if it is an OCPN of this project."""
+    raw = item.get("ocpn_asset_id")
+    if isinstance(raw, bool):
+        return None
+    try:
+        asset_id = int(raw)
+    except (TypeError, ValueError):
+        return None
+    exists = ProjectAsset.objects.filter(
+        pk=asset_id,
+        project_id=dashboard.project_id,
+        asset_type=ProjectAsset.AssetType.OCPN,
+    ).exists()
+    return asset_id if exists else None
+
 
 def _query_asset_for(item, dashboard, request):
     """The stored query (``ProjectAsset`` of type QUERY) a layout item links.
@@ -168,6 +187,23 @@ def _query_asset_for(item, dashboard, request):
         project=dashboard.project,
         project__users=request.user,
         asset_type=ProjectAsset.AssetType.QUERY,
+    ).first()
+
+
+def _ocpn_asset_for(item, dashboard, request):
+    """The OCPN model asset an alignment widget links (own project only)."""
+    asset_id = item.get("model_asset")
+    if not asset_id:
+        return None
+    try:
+        asset_id = int(asset_id)
+    except (TypeError, ValueError):
+        return None
+    return ProjectAsset.objects.filter(
+        pk=asset_id,
+        project=dashboard.project,
+        project__users=request.user,
+        asset_type=ProjectAsset.AssetType.OCPN,
     ).first()
 
 
@@ -271,6 +307,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
         "NewOCDFGComponent": NewOCDFGComponent,
         "NewOCDFGVariantsComponent": NewOCDFGComponent,
         "OCPNComponent": OCPNComponent,
+        "OCPNFlattenedReplayComponent": OCPNFlattenedReplayComponent,
         "SqlQueryComponent": SqlQueryComponent,
         "PieChartComponent": PieChartComponent,
         "KpiComponent": KpiComponent,
@@ -280,9 +317,51 @@ class DashboardViewSet(viewsets.ModelViewSet):
         "FilterStackComponent": FilterStackComponent,
         "OCHandoverComponent": OCHandoverComponent,
         "ResourceProfilingComponent": ResourceProfilingComponent,
+        "OCAlignmentComponent": OCAlignmentComponent,
     }
 
     _REQUIRED_LAYOUT_KEYS = ("component_name", "x", "y", "w", "h")
+
+    @action(detail=True, methods=["PATCH"])
+    def ocdfg_layout(self, request, pk=None):
+        """
+        Store the layout options of one OC-DFG widget while the dashboard is
+        viewed (outside edit mode, where `save_layout` would rebuild every
+        component).
+
+        Body: ``{"x": int, "y": int, "layout_options": object | null}``. The
+        widget is identified by its grid position: widgets never overlap, and
+        component ids change with every `save_layout`, so an id held by the
+        page can be stale. ``null`` resets the widget to the default layout.
+        """
+        dashboard = self.get_object()
+        x = request.data.get("x")
+        y = request.data.get("y")
+        if not all(isinstance(v, int) and not isinstance(v, bool) for v in (x, y)):
+            return Response(
+                {"error": "x and y must be integers"}, status=status.HTTP_400_BAD_REQUEST
+            )
+        if "layout_options" not in request.data:
+            return Response(
+                {"error": "layout_options is required (null resets the layout)"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        layout_options = request.data.get("layout_options")
+        error = preferences_error(layout_options)
+        if error:
+            return Response(
+                {"error": f"layout_options {error}"}, status=status.HTTP_400_BAD_REQUEST
+            )
+        matches = list(NewOCDFGComponent.objects.filter(dashboard=dashboard, x=x, y=y))
+        if len(matches) != 1:
+            return Response(
+                {"error": "No OC-DFG widget at this position"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        component = matches[0]
+        component.layout_options = layout_options
+        component.save(update_fields=["layout_options"])
+        return Response({"x": x, "y": y, "layout_options": layout_options})
 
     @action(detail=True, methods=["GET"])
     def get_layout(self, request, pk=None):
@@ -486,6 +565,17 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     business_object_types=_string_list_field(item, "business_object_types"),
                     business_activities=_string_list_field(item, "business_activities"),
                     local_filter_params=_local_filter_params(item),
+                    variants_mode=(
+                        item.get("variants_mode")
+                        if item.get("variants_mode") in ("process_areas", "custom")
+                        else "process_areas"
+                    ),
+                    area_execution_column=str(
+                        item.get("area_execution_column") or "process-executions-cc-process-areas"
+                    )[:64],
+                    area_variant_column=str(
+                        item.get("area_variant_column") or "variant-cc-process-areas"
+                    )[:64],
                 )
             elif component_name == "ProcessAreaComponent":
                 ProcessAreaComponent.objects.create(
@@ -544,6 +634,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     color_by=item.get("color_by") or "activity",
                     shape_by=item.get("shape_by") or "none",
                     row_order=item.get("row_order") or "first_occurrence",
+                    row_order_direction=item.get("row_order_direction") or "asc",
                     max_points=item.get("max_points", 10000),
                     show_minimap=item.get("show_minimap", True),
                     show_controls=item.get("show_controls", True),
@@ -563,6 +654,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     ),
                     layout_direction=item.get("layout_direction", "TB"),
                     local_filter_params=_local_filter_params(item),
+                    layout_options=clean_preferences(item.get("layout_options")),
                 )
             elif component_name == "OCCNComponent":
                 OCCNComponent.objects.create(
@@ -594,6 +686,17 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     automatic_loading=item.get('automatic_loading', False),
                     timeout_s=item.get('timeout_s', 30.0),
                     local_filter_params=_local_filter_params(item),
+                )
+            elif component_name == 'OCPNFlattenedReplayComponent':
+                OCPNFlattenedReplayComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    ocpn_asset_id=_ocpn_asset_id_for(item, dashboard),
+                    automatic_loading=bool(item.get('automatic_loading', False)),
                 )
             elif component_name == 'FilterStackComponent':
                 FilterStackComponent.objects.create(
@@ -742,6 +845,27 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     distance_metric=_choice_field(item, 'distance_metric', _PROFILE_DISTANCE_METRICS, 'euclidean'),
                     view_mode=_choice_field(item, 'view_mode', _PROFILE_VIEW_MODES, 'graph'),
                     local_filter_params=_local_filter_params(item),
+                )
+
+            elif component_name == 'OCAlignmentComponent':
+                OCAlignmentComponent.objects.create(
+                    dashboard=dashboard,
+                    x=item['x'],
+                    y=item['y'],
+                    w=item['w'],
+                    h=item['h'],
+                    component_name=component_name,
+                    show_controls=bool(item.get('show_controls', True)),
+                    automatic_loading=bool(item.get('automatic_loading', False)),
+                    model_asset=_ocpn_asset_for(item, dashboard, request),
+                    execution_source=_choice_field(item, 'execution_source', ('area', 'stored'), 'area'),
+                    execution_column=str(item.get('execution_column') or '')[:200],
+                    business_object_types=_string_list_field(item, 'business_object_types'),
+                    business_activities=_string_list_field(item, 'business_activities'),
+                    execution_id=str(item.get('execution_id') or '')[:500],
+                    max_states=_bounded_int(item, 'max_states', 200_000, 1_000, 2_000_000),
+                    timeout_s=_bounded_float(item, 'timeout_s', 60.0, 1.0, 600.0),
+                    show_silent_moves=bool(item.get('show_silent_moves', False)),
                 )
 
         return Response({"status": "saved"})

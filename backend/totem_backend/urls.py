@@ -15,8 +15,10 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 import os
+from pathlib import Path
 
 from django.contrib import admin
+from django.http import FileResponse, Http404
 from django.urls import path, include, re_path
 from django.views.static import serve
 from rest_framework.throttling import AnonRateThrottle
@@ -60,4 +62,35 @@ elif settings.LOCAL_MODE:
             serve,
             {"document_root": settings.MEDIA_ROOT},
         )
+    ]
+elif settings.FRONTEND_DIST_DIR:
+    # Self-contained server (Docker image): no proxy serves MEDIA_ROOT either.
+    # MEDIA_ROOT also holds uploaded event logs, so only images are exposed,
+    # and the sandbox CSP keeps an uploaded SVG from running script on the
+    # app's origin when opened directly.
+    def media_image(request, path):
+        if not path.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg')):
+            raise Http404()
+        response = serve(request, path, document_root=settings.MEDIA_ROOT)
+        response['Content-Security-Policy'] = 'sandbox'
+        response['X-Content-Type-Options'] = 'nosniff'
+        return response
+
+    urlpatterns += [
+        re_path(rf"^{settings.MEDIA_URL.lstrip('/')}(?P<path>.*)$", media_image),
+    ]
+
+# Built frontend (Docker image): hand index.html to every path the API does
+# not own, so client-side routes like /upload survive a reload. Must stay last.
+if settings.FRONTEND_DIST_DIR:
+    def frontend_index(request):
+        index = Path(settings.FRONTEND_DIST_DIR) / 'index.html'
+        if not index.is_file():
+            raise Http404('Frontend build not found.')
+        response = FileResponse(index.open('rb'), content_type='text/html')
+        response['Cache-Control'] = 'no-cache'
+        return response
+
+    urlpatterns += [
+        re_path(r'^(?!(?:api|token|auth|admin|static|files)/).*$', frontend_index),
     ]
