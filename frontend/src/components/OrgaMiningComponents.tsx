@@ -184,7 +184,7 @@ export const OCHandoverComponent: React.FC<ComponentProps> = ({
   const [automaticLoading, setAutomaticLoading] = useState(node.automatic_loading ?? false);
   const [filterEnabled, setFilterEnabled] = useState(true);
   const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
-    node.local_filter_params, dashboardId, node.component_id, onUpdate,
+    node, dashboardId, onUpdate,
   );
 
   const [maxGapText, setMaxGapText] = useState(settings.maxGap === null ? "" : String(settings.maxGap));
@@ -405,7 +405,7 @@ export const ResourceProfilingComponent: React.FC<ComponentProps> = ({
   const [automaticLoading, setAutomaticLoading] = useState(node.automatic_loading ?? false);
   const [filterEnabled, setFilterEnabled] = useState(true);
   const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
-    node.local_filter_params, dashboardId, node.component_id, onUpdate,
+    node, dashboardId, onUpdate,
   );
 
   useEffect(() => { setSettings(profilingSettingsFromNode(JSON.parse(persistedJson))); }, [persistedJson]);

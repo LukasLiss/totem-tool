@@ -359,13 +359,14 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
 
   // View mode auto-runs; edit-mode authoring runs are explicit (Run / ⌘↵).
   // While linked, wait for the stored text before running anything.
-  // effectiveFilterVersion re-triggers the run when the global filter changes.
+  // A changed global filter, filter toggle or local filter re-runs the query.
+  const localFilterKey = JSON.stringify(localFilterParams ?? {});
   useEffect(() => {
     if (isEditMode) return;
     if (linked && storedQueryText == null) return;
     void run(linked ? storedQueryText ?? "" : query);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isEditMode, query, fileId, linked, storedQueryText, rowLimit, effectiveFilterVersion]);
+  }, [isEditMode, query, fileId, linked, storedQueryText, rowLimit, effectiveFilterVersion, filterEnabled, localFilterKey]);
 
   const patchName = (v: string) => {
     setName(v);

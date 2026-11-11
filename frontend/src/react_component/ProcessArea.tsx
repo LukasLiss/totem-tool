@@ -92,11 +92,14 @@ export default function ProcessArea({
   const [filterEnabled, setFilterEnabled] = useState(true);
   const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>(initialLocalFilterParams ?? {});
 
-  // Sync when initialLocalFilterParams loads async
+  // Follow the host's filter when it changes from outside (loaded
+  // asynchronously, or reset on a project switch).
+  const initialLocalFilterJson = JSON.stringify(initialLocalFilterParams ?? {});
   useEffect(() => {
-    if (!initialLocalFilterParams || Object.keys(initialLocalFilterParams).length === 0) return;
-    setLocalFilterParams((prev) => (Object.keys(prev).length === 0 ? initialLocalFilterParams : prev));
-  }, [initialLocalFilterParams]);
+    setLocalFilterParams((prev) =>
+      JSON.stringify(prev) === initialLocalFilterJson ? prev : JSON.parse(initialLocalFilterJson),
+    );
+  }, [initialLocalFilterJson]);
 
   const handleControlsReady = useCallback((controls: TotemVisualizerControls) => {
     setTotemControls(controls);

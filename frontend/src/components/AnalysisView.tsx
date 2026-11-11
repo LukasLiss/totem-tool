@@ -323,7 +323,8 @@ function OrgaMiningView({
           </span>
           <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggleFilter} />
           {activeFilterChange && (
-            <LocalFilterDropdown fileId={fileId} onFilterChange={activeFilterChange} value={activeIdx === 0 ? orgaMiningFilter : ocHandoverFilter} />
+            // Keyed per slide so the dropdown's rule state never carries over.
+            <LocalFilterDropdown key={activeIdx} fileId={fileId} onFilterChange={activeFilterChange} value={activeIdx === 0 ? orgaMiningFilter : ocHandoverFilter} />
           )}
         </div>
         <Button

@@ -1,4 +1,5 @@
 import axios from "axios";
+import { filterRequestConfig } from "@/store/filterStore";
 
 export interface ColumnSchema {
   name: string;
@@ -72,10 +73,11 @@ export async function executeQuery(
     const body: Record<string, unknown> = { query };
     if (page.offset !== undefined) body.offset = page.offset;
     if (page.limit !== undefined) body.limit = page.limit;
-    const { data } = await axios.post(`/api/files/${fileId}/execute_query/`, body, {
-      ...(page.skipGlobalFilter && { _skipGlobalFilter: true }),
-      ...(page.localFilterParams && Object.keys(page.localFilterParams).length > 0 && { params: page.localFilterParams }),
-    });
+    const { data } = await axios.post(
+      `/api/files/${fileId}/execute_query/`,
+      body,
+      filterRequestConfig(page.localFilterParams, !page.skipGlobalFilter),
+    );
     const hasMore = Boolean(data.has_more ?? data.truncated ?? false);
     return {
       data: data.data ?? [],

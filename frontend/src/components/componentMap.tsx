@@ -438,7 +438,7 @@ export const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile
   const [processedResult, setProcessedResult] = useState(null);
   const [filterEnabled, setFilterEnabled] = useState(true);
   const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
-    node.local_filter_params, dashboardId, node.component_id, onUpdate,
+    node, dashboardId, onUpdate,
   );
 
   const filterVersion = useFilterVersion();
@@ -791,7 +791,7 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
 }) => {
   const [filterEnabled, setFilterEnabled] = useState(true);
   const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
-    node.local_filter_params, dashboardId, node.component_id, onUpdate,
+    node, dashboardId, onUpdate,
   );
 
   // Local state for form values
@@ -1259,7 +1259,7 @@ export const ProcessAreaComponent: React.FC<ComponentProps> = ({
   dashboardId,
 }) => {
   const [, handleLocalFilterChange] = useDashboardLocalFilter(
-    node.local_filter_params, dashboardId, node.component_id, onUpdate,
+    node, dashboardId, onUpdate,
   );
 
   // Local state, kept in step with the node. `onUpdate` mutates the gridstack
@@ -1405,7 +1405,7 @@ export const TotemMinerComponent: React.FC<ComponentProps> = ({
 }) => {
   const [filterEnabled, setFilterEnabled] = useState(true);
   const [, handleLocalFilterChange] = useDashboardLocalFilter(
-    node.local_filter_params, dashboardId, node.component_id, onUpdate,
+    node, dashboardId, onUpdate,
   );
 
   if (isEditMode) {
@@ -1454,7 +1454,7 @@ export const LogStatisticsComponent: React.FC<ComponentProps> = ({
 }) => {
   const [filterEnabled, setFilterEnabled] = useState(true);
   const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
-    node.local_filter_params, dashboardId, node.component_id, onUpdate,
+    node, dashboardId, onUpdate,
   );
 
   // Local state for toggle values (synced with node for edit mode)
@@ -1592,7 +1592,7 @@ export const OCDottedChartComponent: React.FC<ComponentProps> = ({
 }) => {
   const [filterEnabled, setFilterEnabled] = useState(true);
   const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
-    node.local_filter_params, dashboardId, node.component_id, onUpdate,
+    node, dashboardId, onUpdate,
   );
 
   const effectiveFileId = selectedFile?.id;
@@ -1770,7 +1770,7 @@ export const NewOCDFGComponent: React.FC<ComponentProps> = ({
 }) => {
   const [filterEnabled, setFilterEnabled] = useState(true);
   const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
-    node.local_filter_params, dashboardId, node.component_id, onUpdate,
+    node, dashboardId, onUpdate,
   );
 
   const [showControls, setShowControls] = useState(node.show_controls ?? true);
@@ -1886,7 +1886,7 @@ export const OCCNComponent: React.FC<ComponentProps> = ({
 }) => {
   const [filterEnabled, setFilterEnabled] = useState(true);
   const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
-    node.local_filter_params, dashboardId, node.component_id, onUpdate,
+    node, dashboardId, onUpdate,
   );
 
   const [threshold, setThreshold] = useState(node.relative_occurrence_threshold ?? 0);
@@ -2049,7 +2049,7 @@ export const OCPNComponent: React.FC<ComponentProps> = ({
   const [timeoutS, setTimeoutS] = useState<number>(node.timeout_s ?? 30);
   const [filterEnabled, setFilterEnabled] = useState(true);
   const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
-    node.local_filter_params, dashboardId, node.component_id, onUpdate,
+    node, dashboardId, onUpdate,
   );
 
   // Sync with node when it changes (e.g. dashboard reloads with persisted values).
@@ -2277,7 +2277,7 @@ export const SqlQueryComponent: React.FC<ComponentProps> = ({
 }) => {
   const [filterEnabled, setFilterEnabled] = useState(true);
   const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
-    node.local_filter_params, dashboardId, node.component_id, onUpdate,
+    node, dashboardId, onUpdate,
   );
 
   const value: SqlQueryConfig = {

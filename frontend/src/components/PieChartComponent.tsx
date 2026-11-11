@@ -49,7 +49,7 @@ const PieChartComponent: React.FC<ComponentProps> = ({
 }) => {
   const [filterEnabled, setFilterEnabled] = useState(true);
   const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
-    node.local_filter_params, dashboardId, node.component_id, onUpdate,
+    node, dashboardId, onUpdate,
   );
 
   // State for edit mode

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from "axios";
-import { useFilterVersion } from "@/store/filterStore";
+import { filterRequestConfig, useFilterVersion } from "@/store/filterStore";
 import { isCancelledError } from "@/store/computationStore";
 import ComputationStatus from "@/components/ComputationStatus";
 
@@ -80,8 +80,7 @@ const LogStatistics: React.FC<LogStatisticsProps> = ({
       try {
         const { data } = await axios.get(`/api/files/${fileId}/statistics/`, {
           signal: controller.signal,
-          ...(!filterEnabled && { _skipGlobalFilter: true }),
-          ...(localFilterParams && Object.keys(localFilterParams).length > 0 && { params: localFilterParams }),
+          ...filterRequestConfig(localFilterParams, filterEnabled),
         });
         setStats(data);
       } catch (err) {

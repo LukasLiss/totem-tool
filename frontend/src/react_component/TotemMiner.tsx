@@ -39,10 +39,14 @@ export default function TotemMiner({
   const [sliderTau, setSliderTau] = useState(0.8);
   const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>(initialLocalFilterParams ?? {});
 
+  // Follow the host's filter when it changes from outside (loaded
+  // asynchronously, or reset on a project switch).
+  const initialLocalFilterJson = JSON.stringify(initialLocalFilterParams ?? {});
   useEffect(() => {
-    if (!initialLocalFilterParams || Object.keys(initialLocalFilterParams).length === 0) return;
-    setLocalFilterParams((prev) => (Object.keys(prev).length === 0 ? initialLocalFilterParams : prev));
-  }, [initialLocalFilterParams]);
+    setLocalFilterParams((prev) =>
+      JSON.stringify(prev) === initialLocalFilterJson ? prev : JSON.parse(initialLocalFilterJson),
+    );
+  }, [initialLocalFilterJson]);
 
   const handleRelayout = useCallback(() => {
     setRelayoutSignal((prev) => prev + 1);

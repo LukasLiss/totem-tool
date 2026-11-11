@@ -3,6 +3,22 @@ import { getComponentFilters, saveComponentFilter } from "@/api/componentFilterA
 
 const DEBOUNCE_MS = 800;
 
+type FilterMap = Record<string, Record<string, string>>;
+
+// In-flight loads per project, so the many hooks a page mounts at once (one
+// per component key) share a single request. Dropped once settled, so a
+// later mount reads fresh data.
+const inFlight = new Map<number, Promise<FilterMap>>();
+
+function loadComponentFilters(projectId: number): Promise<FilterMap> {
+  let pending = inFlight.get(projectId);
+  if (!pending) {
+    pending = getComponentFilters(projectId).finally(() => inFlight.delete(projectId));
+    inFlight.set(projectId, pending);
+  }
+  return pending;
+}
+
 /**
  * Loads and persists local filter params.
  *
@@ -15,20 +31,32 @@ export function usePersistedLocalFilter(
 ): [Record<string, string>, (params: Record<string, string>) => void] {
   const [params, setParams] = useState<Record<string, string>>({});
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Set once the user changes the filter for the current project, so a load
+  // that resolves afterwards does not overwrite their choice.
+  const changedRef = useRef(false);
 
-  // Load persisted filter on mount (or when project changes)
+  // Load the persisted filter on mount and whenever the project changes;
+  // start empty so another project's filter never carries over.
   useEffect(() => {
+    setParams({});
+    changedRef.current = false;
+    // A save still pending for the previous project goes through (its timer
+    // holds that project id); forget it so a change here does not cancel it.
+    saveTimerRef.current = null;
     if (!projectId) return;
-    getComponentFilters(projectId)
+    let cancelled = false;
+    loadComponentFilters(projectId)
       .then((all) => {
+        if (cancelled || changedRef.current) return;
         if (all[componentKey]) setParams(all[componentKey]);
       })
       .catch(() => {});
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => { cancelled = true; };
   }, [projectId, componentKey]);
 
   const setParamsAndSave = useCallback(
     (next: Record<string, string>) => {
+      changedRef.current = true;
       setParams(next);
       if (!projectId) return;
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);

@@ -870,24 +870,37 @@ class DashboardViewSet(viewsets.ModelViewSet):
 
         return Response({"status": "saved"})
 
-    @action(
-        detail=True,
-        methods=["patch"],
-        url_path="components/(?P<component_id>[^/.]+)/local-filter",
-    )
-    def patch_local_filter(self, request, pk=None, component_id=None):
-        """Update only local_filter_params on a single dashboard component."""
-        dashboard = self.get_object()
-        try:
-            component = dashboard.components.get(pk=component_id)
-        except Exception:
-            return Response({"error": "Component not found"}, status=status.HTTP_404_NOT_FOUND)
+    @action(detail=True, methods=["PATCH"])
+    def local_filter(self, request, pk=None):
+        """
+        Store the local filter of the widget at grid position (x, y) while the
+        dashboard is viewed.
 
+        Body: ``{"x": int, "y": int, "local_filter_params": object | null}``.
+        Like `ocdfg_layout`, the widget is identified by its grid position:
+        component ids change with every `save_layout`, so an id held by the
+        page can be stale or belong to another widget.
+        """
+        dashboard = self.get_object()
+        x = request.data.get("x")
+        y = request.data.get("y")
+        if not all(isinstance(v, int) and not isinstance(v, bool) for v in (x, y)):
+            return Response(
+                {"error": "x and y must be integers"}, status=status.HTTP_400_BAD_REQUEST
+            )
         raw = request.data.get("local_filter_params")
         if not isinstance(raw, dict) and raw is not None:
-            return Response({"error": "local_filter_params must be an object or null"}, status=status.HTTP_400_BAD_REQUEST)
-
-        component.local_filter_params = _local_filter_params({"local_filter_params": raw}) if raw else None
+            return Response(
+                {"error": "local_filter_params must be an object or null"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        matches = list(dashboard.components.filter(x=x, y=y))
+        if len(matches) != 1:
+            return Response(
+                {"error": "No widget at this position"}, status=status.HTTP_404_NOT_FOUND
+            )
+        component = matches[0]
+        component.local_filter_params = _local_filter_params({"local_filter_params": raw})
         component.save(update_fields=["local_filter_params"])
         return Response(status=status.HTTP_204_NO_CONTENT)
 

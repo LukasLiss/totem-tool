@@ -20,13 +20,20 @@ export async function saveComponentFilter(
   });
 }
 
-export async function patchDashboardComponentLocalFilter(
+/**
+ * Store the local filter of the dashboard widget at grid position (x, y);
+ * null clears it. Positions identify widgets because component ids change
+ * with every dashboard save.
+ */
+export async function saveDashboardWidgetLocalFilter(
   dashboardId: number,
-  componentId: number,
+  x: number,
+  y: number,
   localFilterParams: Record<string, string> | null
 ): Promise<void> {
-  await axios.patch(
-    `/api/dashboard/${dashboardId}/components/${componentId}/local-filter/`,
-    { local_filter_params: localFilterParams }
-  );
+  await axios.patch(`/api/dashboard/${dashboardId}/local_filter/`, {
+    x,
+    y,
+    local_filter_params: localFilterParams,
+  });
 }
