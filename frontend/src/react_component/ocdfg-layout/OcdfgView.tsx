@@ -9,7 +9,7 @@
  * graph and reports its size so the surrounding box can follow it.
  */
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { LockIcon, MinusIcon, PlusIcon, ScanIcon, SlidersHorizontal, UnlockIcon, ZapIcon } from 'lucide-react';
+import { LockIcon, MinusIcon, PlayIcon, PlusIcon, ScanIcon, SlidersHorizontal, UnlockIcon, ZapIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
@@ -25,6 +25,8 @@ import { LAYOUT_PANEL_WIDTH, MAX_AUTO_LAYOUT_ARCS, type Aspect } from './options
 import type { LabGraph, LayoutOptions, LayoutResult } from './types';
 import { useLayoutExtras } from './useLayoutExtras';
 import { useLayoutOptions, type SaveLayout } from './useLayoutOptions';
+import TokenPlayback from './TokenPlayback';
+import { useOcdfgFlows } from './useOcdfgFlows';
 
 const LEGEND_HEADER_BUTTON_STYLE = {
   border: 'none',
@@ -194,6 +196,19 @@ export default function OcdfgView({
   // --- toolbar state ----------------------------------------------------------
   const [locked, setLocked] = useState(initialInteractionLocked);
   const [animate, setAnimate] = useState(false);
+
+  // --- token animation: objects replaying the log on their arcs ---------------
+  // Its steps are only loaded while it is switched on.
+  const canAnimateTokens = chrome && fileId != null;
+  const [tokensOn, setTokensOn] = useState(false);
+  const tokenLayer = useRef<SVGGElement | null>(null);
+  const flows = useOcdfgFlows({
+    enabled: tokensOn && canAnimateTokens,
+    fileId,
+    filterEnabled,
+    localFilterParams,
+    variantRanks: sliderMode === 'variants',
+  });
   // null = not chosen by the user yet; the default then follows the width.
   const [legendCollapsedChoice, setLegendCollapsed] = useState<boolean | null>(null);
   const [legendPosition, setLegendPosition] = useState({ x: 0, y: 0 });
@@ -261,6 +276,7 @@ export default function OcdfgView({
           colors={colors}
           panZoom={!detail && !locked}
           animate={animate}
+          tokenLayerRef={tokensOn && canAnimateTokens ? tokenLayer : undefined}
           fitPadding={fitPadding}
           maxFitScale={detail ? 1 : 1.4}
           fitKey={fitKey}
@@ -525,6 +541,20 @@ export default function OcdfgView({
             >
               <ZapIcon className="h-4 w-4" />
             </Button>
+            {canAnimateTokens && (
+              <Button
+                type="button"
+                variant={tokensOn ? 'secondary' : 'outline'}
+                size="icon"
+                onClick={() => setTokensOn((prev) => !prev)}
+                className="rounded-full h-9 w-9"
+                title={tokensOn ? 'Stop the object animation' : 'Animate the objects: replay the log on the arcs'}
+                aria-label="Animate the objects"
+                aria-pressed={tokensOn}
+              >
+                <PlayIcon className="h-4 w-4" />
+              </Button>
+            )}
             {editable && (
               <Button
                 type="button"
@@ -551,6 +581,17 @@ export default function OcdfgView({
             )}
           </div>
         </div>
+      )}
+
+      {tokensOn && canAnimateTokens && (
+        <TokenPlayback
+          state={flows}
+          layer={tokenLayer}
+          result={result}
+          colors={colors}
+          variantLimit={sliderMode === 'variants' ? sliderValue : undefined}
+          onClose={() => setTokensOn(false)}
+        />
       )}
 
       {editable && panelOpen && (

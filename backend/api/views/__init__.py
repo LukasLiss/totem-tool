@@ -34,7 +34,7 @@ from .misc import (
     upload_limits,
     user_settings,
 )
-from .ocdfg import NewOCDFGViewSet, OCDFGBlockStructureView
+from .ocdfg import NewOCDFGFlowsView, NewOCDFGViewSet, OCDFGBlockStructureView
 from .occn import OCCNViewSet, _occn_base_cache
 from .ochandover import event_log_table, ochandover, profile_matrix
 from .playout import playout, playout_export_ocel
@@ -47,6 +47,7 @@ __all__ = [
     "ImageAssetViewSet",
     "DashboardViewSet",
     "NewOCDFGViewSet",
+    "NewOCDFGFlowsView",
     "OCDFGBlockStructureView",
     "OCCNViewSet",
     "variants",

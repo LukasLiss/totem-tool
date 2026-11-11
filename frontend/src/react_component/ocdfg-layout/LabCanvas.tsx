@@ -29,6 +29,8 @@ interface LabCanvasProps {
   panZoom?: boolean;
   /** Flowing dashes along the arcs. */
   animate?: boolean;
+  /** Layer above the graph for the token animation (drawn into by TokenPlayback). */
+  tokenLayerRef?: React.Ref<SVGGElement>;
   /** Screen space (px) kept free around the graph when fitting, e.g. for a legend. */
   fitPadding?: Partial<Record<'top' | 'right' | 'bottom' | 'left', number>>;
   /** Largest zoom used when fitting a small graph. */
@@ -56,6 +58,7 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
     interactive = true,
     panZoom = interactive,
     animate = false,
+    tokenLayerRef,
     fitPadding,
     maxFitScale = 1.6,
     fitKey,
@@ -390,6 +393,8 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
               </text>
             ) : null,
           )}
+
+        {tokenLayerRef && <g ref={tokenLayerRef} pointerEvents="none" data-testid="ocdfg-token-layer" />}
       </svg>
 
       {interactive && hover && <HoverTooltip x={hover.x} y={hover.y} title={tooltipTitle(result, hover)} rows={tooltipRows(hover)} />}
