@@ -72,6 +72,7 @@ import { listAssets, type ProjectAsset } from '@/api/assetsApi';
 import { toast } from "sonner";
 import { saveOcdfgWidgetLayout } from "@/api/dashboardApi";
 import type { SaveLayout } from "@/react_component/ocdfg-layout/useLayoutOptions";
+import type { StoredLayout } from "@/react_component/ocdfg-layout/preferences";
 import OCCNVisualizer from '@/react_component/OCCNVisualizer';
 import LogStatistics from './LogStatistics';
 import LogStatisticsSketch from './LogStatisticsSketch';
@@ -1407,7 +1408,22 @@ const OCDFG_SKETCH_HINT =
  * the dashboard is viewed they are saved right away (by grid position, see
  * `saveOcdfgWidgetLayout`); the node is updated too, so a later save of the
  * dashboard in edit mode keeps them.
+ *
+ * The flow direction is the exception: the widget's own setting
+ * (`layout_direction`, set in edit mode) is the direction it opens with. A
+ * direction picked in the layout panel is never stored, so it lasts while
+ * the view stays open (filter changes keep it) and the view opens with the
+ * widget's setting again after edit mode or a reload.
  */
+function withoutDirection(entry: unknown): unknown {
+  if (typeof entry !== "object" || entry === null) return entry;
+  const options = (entry as StoredLayout).options;
+  if (typeof options !== "object" || options === null || !("direction" in options)) return entry;
+  const rest: Partial<StoredLayout["options"]> = { ...options };
+  delete rest.direction;
+  return Object.keys(rest).length > 0 ? { ...(entry as StoredLayout), options: rest } : null;
+}
+
 function useDashboardOcdfgLayout(
   node: ComponentProps["node"],
   dashboardId: number | undefined,
@@ -1415,10 +1431,11 @@ function useDashboardOcdfgLayout(
 ) {
   const save = useCallback<SaveLayout>(
     async (entry) => {
-      onUpdate?.({ layout_options: entry });
+      const persisted = withoutDirection(entry) as StoredLayout | null;
+      onUpdate?.({ layout_options: persisted });
       if (!dashboardId || node.x == null || node.y == null) return;
       try {
-        await saveOcdfgWidgetLayout(dashboardId, node.x, node.y, entry);
+        await saveOcdfgWidgetLayout(dashboardId, node.x, node.y, persisted);
       } catch {
         toast.error("The OC-DFG layout could not be saved");
       }
@@ -1426,7 +1443,8 @@ function useDashboardOcdfgLayout(
     [dashboardId, node, onUpdate],
   );
   return {
-    storedLayout: node.layout_options ?? null,
+    // A direction stored before it stopped being stored is ignored too.
+    storedLayout: withoutDirection(node.layout_options ?? null),
     onLayoutChange: save,
     layoutScope: `dashboard:${dashboardId ?? ""}:${node.x ?? ""}:${node.y ?? ""}`,
   };
@@ -1444,13 +1462,15 @@ export const NewOCDFGComponent: React.FC<ComponentProps> = ({
   const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>({});
   const [showControls, setShowControls] = useState(node.show_controls ?? true);
   const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
+  const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>(node.layout_direction ?? 'TB');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const layout = useDashboardOcdfgLayout(node, dashboardId, onUpdate);
 
   useEffect(() => {
     setShowControls(node.show_controls ?? true);
     setInitialInteractionLocked(node.initial_interaction_locked ?? true);
-  }, [node.show_controls, node.initial_interaction_locked]);
+    setLayoutDirection(node.layout_direction ?? 'TB');
+  }, [node.show_controls, node.initial_interaction_locked, node.layout_direction]);
 
   if (isEditMode) {
     // EDIT MODE: the tile shows a draft of the graph; the settings open in a popup.
@@ -1462,7 +1482,7 @@ export const NewOCDFGComponent: React.FC<ComponentProps> = ({
         onConfigure={() => setSettingsOpen(true)}
         sketch={
           <OcdfgSketch
-            layoutDirection={node.layout_direction ?? 'TB'}
+            layoutDirection={layoutDirection}
             showControls={showControls}
             interactionLocked={initialInteractionLocked}
             className="h-full w-full"
@@ -1474,15 +1494,16 @@ export const NewOCDFGComponent: React.FC<ComponentProps> = ({
             id={`ocdfg-${node.component_id}`}
             heading="Object-Centric DFG (Arc Weight) settings"
             description="Object-Centric Directly Follows Graph with a minimum arc weight per object type."
-            initial={{ showControls, initialInteractionLocked }}
-            layoutDirection={node.layout_direction ?? 'TB'}
+            initial={{ showControls, initialInteractionLocked, layoutDirection }}
             sketchHint={OCDFG_SKETCH_HINT}
             onApply={(next) => {
               setShowControls(next.showControls);
               setInitialInteractionLocked(next.initialInteractionLocked);
+              setLayoutDirection(next.layoutDirection);
               onUpdate?.({
                 show_controls: next.showControls,
                 initial_interaction_locked: next.initialInteractionLocked,
+                layout_direction: next.layoutDirection,
               });
               setSettingsOpen(false);
             }}
@@ -1502,7 +1523,7 @@ export const NewOCDFGComponent: React.FC<ComponentProps> = ({
           fileId={selectedFile?.id}
           showControls={showControls}
           initialInteractionLocked={initialInteractionLocked}
-          layoutDirection={node.layout_direction ?? 'TB'}
+          layoutDirection={layoutDirection}
           filterEnabled={filterEnabled}
           localFilterParams={localFilterParams}
           {...layout}
@@ -1523,13 +1544,15 @@ export const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
   const [filterEnabled, setFilterEnabled] = useState(true);
   const [showControls, setShowControls] = useState(node.show_controls ?? true);
   const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
+  const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>(node.layout_direction ?? 'TB');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const layout = useDashboardOcdfgLayout(node, dashboardId, onUpdate);
 
   useEffect(() => {
     setShowControls(node.show_controls ?? true);
     setInitialInteractionLocked(node.initial_interaction_locked ?? true);
-  }, [node.show_controls, node.initial_interaction_locked]);
+    setLayoutDirection(node.layout_direction ?? 'TB');
+  }, [node.show_controls, node.initial_interaction_locked, node.layout_direction]);
 
   if (isEditMode) {
     // EDIT MODE: the tile shows a draft of the graph; the settings open in a popup.
@@ -1541,7 +1564,7 @@ export const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
         onConfigure={() => setSettingsOpen(true)}
         sketch={
           <OcdfgSketch
-            layoutDirection={node.layout_direction ?? 'TB'}
+            layoutDirection={layoutDirection}
             showControls={showControls}
             interactionLocked={initialInteractionLocked}
             className="h-full w-full"
@@ -1553,15 +1576,16 @@ export const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
             id={`ocdfg-variants-${node.component_id}`}
             heading="OCDFG (variants) settings"
             description="Object-Centric Directly Follows Graph (OCDFG) visualization with Variant/Trace filtering."
-            initial={{ showControls, initialInteractionLocked }}
-            layoutDirection={node.layout_direction ?? 'TB'}
+            initial={{ showControls, initialInteractionLocked, layoutDirection }}
             sketchHint={OCDFG_SKETCH_HINT}
             onApply={(next) => {
               setShowControls(next.showControls);
               setInitialInteractionLocked(next.initialInteractionLocked);
+              setLayoutDirection(next.layoutDirection);
               onUpdate?.({
                 show_controls: next.showControls,
                 initial_interaction_locked: next.initialInteractionLocked,
+                layout_direction: next.layoutDirection,
               });
               setSettingsOpen(false);
             }}
@@ -1579,7 +1603,7 @@ export const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
         fileId={selectedFile?.id}
         showControls={showControls}
         initialInteractionLocked={initialInteractionLocked}
-        layoutDirection={node.layout_direction ?? 'TB'}
+        layoutDirection={layoutDirection}
         filterEnabled={filterEnabled}
         onToggleFilter={() => setFilterEnabled(p => !p)}
         {...layout}

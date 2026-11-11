@@ -2,19 +2,27 @@
  * The OCDFG widgets' settings popup body (OCDFG and OCDFG with variants):
  * the settings their edit forms always had beside a draft of the graph. It
  * works on a draft of the settings, mounted on every open, and only hands it
- * over on Apply. The layout (direction included) is changed with the layout
- * button in the widget's toolbar and stored with the widget, not here.
+ * over on Apply. The flow direction set here is the one the widget opens
+ * with; the rest of the layout is changed with the layout button in the
+ * widget's toolbar and stored with the widget.
  */
 
 import React, { useState } from "react";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { ChartSettingsLayout } from "./sql-widgets/chartSettings";
+import { SegmentedControl } from "./sql-widgets/shared";
 import OcdfgSketch from "./OcdfgSketch";
+
+const LAYOUT_DIRECTION_OPTIONS: readonly { value: "TB" | "LR"; label: string }[] = [
+  { value: "TB", label: "Top to Bottom" },
+  { value: "LR", label: "Left to Right" },
+];
 
 type OcdfgSettings = {
   showControls: boolean;
   initialInteractionLocked: boolean;
+  layoutDirection: "TB" | "LR";
 };
 
 const OcdfgSettingsBody: React.FC<{
@@ -23,21 +31,20 @@ const OcdfgSettingsBody: React.FC<{
   /** The widget's one-line description at the top of the form. */
   description: string;
   initial: OcdfgSettings;
-  /** Direction the draft is drawn in (the widget's default direction). */
-  layoutDirection: "TB" | "LR";
   /** Explanation of the draft, the same as in the edit tile. */
   sketchHint: string;
   onApply: (settings: OcdfgSettings) => void;
   onCancel: () => void;
-}> = ({ id, heading, description, initial, layoutDirection, sketchHint, onApply, onCancel }) => {
+}> = ({ id, heading, description, initial, sketchHint, onApply, onCancel }) => {
   const [showControls, setShowControls] = useState(initial.showControls);
   const [initialInteractionLocked, setInitialInteractionLocked] = useState(initial.initialInteractionLocked);
+  const [layoutDirection, setLayoutDirection] = useState(initial.layoutDirection);
 
   return (
     <ChartSettingsLayout
       heading={heading}
       idPrefix={id}
-      onApply={() => onApply({ showControls, initialInteractionLocked })}
+      onApply={() => onApply({ showControls, initialInteractionLocked, layoutDirection })}
       onCancel={onCancel}
       dataTab={
         <div className="space-y-4 text-left">
@@ -58,8 +65,24 @@ const OcdfgSettingsBody: React.FC<{
               onCheckedChange={setInitialInteractionLocked}
             />
           </div>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label>Flow direction</Label>
+              <SegmentedControl<"TB" | "LR">
+                ariaLabel="Flow direction"
+                value={layoutDirection}
+                options={LAYOUT_DIRECTION_OPTIONS}
+                onChange={setLayoutDirection}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              The direction the graph opens with. Changing it in the layout panel of the
+              widget&apos;s toolbar applies while the dashboard is open; the next time the
+              graph is shown, it starts in this direction again.
+            </p>
+          </div>
           <p className="text-xs text-muted-foreground">
-            The layout is changed with the layout button in the widget&apos;s toolbar and stored with this widget.
+            The rest of the layout is changed with the layout button in the widget&apos;s toolbar and stored with this widget.
           </p>
         </div>
       }
