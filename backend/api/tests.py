@@ -4754,6 +4754,38 @@ class ExecuteQuerySandboxTests(APITestCase):
         self.assertEqual(response.data["limit"], views.event_log.EXECUTE_QUERY_MAX_ROWS)
 
 
+    def _run_filtered(self, query, params):
+        return self.client.post(
+            f"/api/files/{self.log.pk}/execute_query/?{params}", {"query": query}, format="json"
+        )
+
+    def test_filter_params_restrict_the_events_table(self):
+        response = self._run_filtered(
+            "SELECT activity FROM events ORDER BY activity", "activities=ship%20order"
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual([r["activity"] for r in response.data["data"]], ["ship order"])
+
+    def test_filter_works_with_recursive_and_user_ctes(self):
+        recursive = (
+            "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 2) "
+            "SELECT count(*) AS c FROM events, r"
+        )
+        response = self._run_filtered(recursive, "activities=ship%20order")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["data"], [{"c": 2}])
+        own_cte = "WITH x AS (SELECT activity FROM events) SELECT count(*) AS c FROM x"
+        response = self._run_filtered(own_cte, "activities=ship%20order")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["data"], [{"c": 1}])
+
+    def test_impossible_time_window_returns_no_rows_with_columns(self):
+        response = self._run_filtered("SELECT activity FROM events", "after=1&before=0")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["data"], [])
+        self.assertEqual(response.data["columns"], ["activity"])
+
+
 @override_settings(MEDIA_ROOT=_MEDIA_ROOT)
 class QueryColumnsEndpointTests(APITestCase):
     """The SQL editor's schema browser."""
@@ -6287,6 +6319,66 @@ class HostingLimitsTests(TestCase):
 # ---------------------------------------------------------------------------
 
 _PREFS = {"version": 1, "options": {"edgeStyle": "orthogonal", "selfLoopStyle": "badge"}}
+
+
+class DashboardLocalFilterTests(TestCase):
+    """Per-widget local filters: stored by save_layout and by the view-mode
+    PATCH, which finds the widget by grid position (ids change on save)."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="filter-owner")
+        self.other = User.objects.create_user(username="filter-other")
+        self.project = Project.objects.create(name="Filters")
+        self.project.users.add(self.user)
+        self.dashboard = Dashboard.objects.create(project=self.project, name="D", order_in_project=0)
+        self.client.force_authenticate(user=self.user)
+
+    def _save(self, layout):
+        return self.client.post(
+            f"/api/dashboard/{self.dashboard.pk}/save_layout/", {"layout": layout}, format="json"
+        )
+
+    def _layout(self):
+        return self.client.get(f"/api/dashboard/{self.dashboard.pk}/get_layout/").json()
+
+    def _patch(self, body):
+        return self.client.patch(
+            f"/api/dashboard/{self.dashboard.pk}/local_filter/", body, format="json"
+        )
+
+    def _widgets(self):
+        return [
+            {"x": 0, "y": 0, "w": 4, "h": 4, "component_name": "LogStatisticsComponent",
+             "local_filter_params": {"activities": "a", "after": "", "before": None}},
+            {"x": 4, "y": 0, "w": 4, "h": 4, "component_name": "KpiComponent"},
+        ]
+
+    def test_save_layout_stores_cleaned_params(self):
+        self.assertEqual(self._save(self._widgets()).status_code, 200)
+        self.assertEqual(
+            [c["local_filter_params"] for c in self._layout()], [{"activities": "a"}, None]
+        )
+
+    def test_patch_by_position_survives_a_layout_save(self):
+        self._save(self._widgets())
+        self._save(self._widgets())  # recreates components with new ids
+        response = self._patch({"x": 4, "y": 0, "local_filter_params": {"activities": "b"}})
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(
+            [c["local_filter_params"] for c in self._layout()],
+            [{"activities": "a"}, {"activities": "b"}],
+        )
+        self.assertEqual(self._patch({"x": 0, "y": 0, "local_filter_params": None}).status_code, 204)
+        self.assertEqual(self._layout()[0]["local_filter_params"], None)
+
+    def test_patch_validates_and_404s(self):
+        self._save(self._widgets())
+        self.assertEqual(self._patch({"x": "0", "y": 0, "local_filter_params": {}}).status_code, 400)
+        self.assertEqual(self._patch({"x": 0, "y": 0, "local_filter_params": "a"}).status_code, 400)
+        self.assertEqual(self._patch({"x": 9, "y": 9, "local_filter_params": {}}).status_code, 404)
+        self.client.force_authenticate(user=self.other)
+        self.assertEqual(self._patch({"x": 0, "y": 0, "local_filter_params": {}}).status_code, 404)
 
 
 class OcdfgDashboardLayoutTests(TestCase):

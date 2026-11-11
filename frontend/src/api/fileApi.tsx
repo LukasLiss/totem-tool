@@ -1,4 +1,5 @@
 import axios, { type AxiosProgressEvent } from "axios";
+import { filterRequestConfig } from "@/store/filterStore";
 
 export async function uploadFile(
   file: File,
@@ -45,10 +46,17 @@ export async function deleteProject(fileId: string | number) {
   await axios.delete(`/api/files/${fileId}/`, { _skipGlobalFilter: true });
 }
 
-export async function processFile(fileId: string | number) {
+export async function processFile(
+  fileId: string | number,
+  filterEnabled = true,
+  localFilterParams?: Record<string, string>,
+) {
   // Honors the active global filter (the interceptor appends its params),
   // so the shown event count matches the rest of the tool.
-  const { data } = await axios.get(`/api/files/${fileId}/NoE/`);
+  const { data } = await axios.get(
+    `/api/files/${fileId}/NoE/`,
+    filterRequestConfig(localFilterParams, filterEnabled),
+  );
   return data;
 }
 

@@ -138,7 +138,7 @@ QUERY_BROWSER_COLUMN_NOTES = {
 
 
 @contextmanager
-def _sandboxed_query_connection(log_path: str):
+def _sandboxed_query_connection(log_path: str, filter_params: dict | None = None):
     """Yield a DuckDB connection that can only read the given log.
 
     A fresh in-memory instance attaches the log file READ_ONLY (multiple
@@ -147,16 +147,59 @@ def _sandboxed_query_connection(log_path: str):
     That setting is one-way for the lifetime of the instance, which is why
     this is not done on the long-lived registry connection (it relies on
     DataFrame replacement scans, which the setting also disables).
+
+    With ``filter_params`` (as parsed by ``_parse_filter_params``) a temporary
+    ``events`` view holding only the matching events shadows the log's table,
+    so user SQL sees the filtered log without knowing about the filter.
     """
     conn = duckdb.connect(":memory:")
     try:
         escaped = log_path.replace("'", "''")
         conn.execute(f"ATTACH '{escaped}' AS log (READ_ONLY)")
         conn.execute("USE log")
+        view_sql = _filtered_events_view_sql(filter_params or {})
+        if view_sql:
+            conn.execute(view_sql)
         conn.execute("SET enable_external_access = false")
         yield conn
     finally:
         conn.close()
+
+
+def _sql_string_list(values) -> str:
+    return ", ".join("'" + str(v).replace("'", "''") + "'" for v in values)
+
+
+def _filtered_events_view_sql(fp: dict) -> str | None:
+    """``CREATE TEMP VIEW events`` statement restricted to the filter, or None.
+
+    DuckDB resolves unqualified names (and ``main.<name>``) in the temp
+    catalog before the attached log, so the view shadows ``log.main.events``
+    for every query on the connection: plain SELECTs, ``WITH RECURSIVE``,
+    stored-query CTEs and the user's own CTEs alike. Views cannot take bound
+    parameters, so values are inlined as escaped string literals or ints.
+    """
+    conditions = []
+    if fp.get("activities"):
+        conditions.append(f"activity IN ({_sql_string_list(fp['activities'])})")
+    if "after" in fp:
+        conditions.append(f"timestamp_unix >= {int(fp['after'])}")
+    if "before" in fp:
+        conditions.append(f"timestamp_unix <= {int(fp['before'])}")
+    if fp.get("object_types"):
+        conditions.append(
+            "event_id IN ("
+            "SELECT eo.event_id FROM log.main.event_object eo "
+            "JOIN log.main.objects o ON eo.obj_id = o.obj_id "
+            f"WHERE o.obj_type IN ({_sql_string_list(fp['object_types'])})"
+            ")"
+        )
+    if not conditions:
+        return None
+    return (
+        "CREATE TEMP VIEW events AS SELECT * FROM log.main.events "
+        f"WHERE {' AND '.join(conditions)}"
+    )
 
 
 # Upper bound on sampled points for the dotted chart endpoint.
@@ -1863,7 +1906,9 @@ class EventLogViewSet(OCAlignmentActionsMixin, viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
-            with _sandboxed_query_connection(log_path) as conn:
+            # Global/local filter params shadow `events` with a filtered view.
+            filter_params = _parse_filter_params(request)
+            with _sandboxed_query_connection(log_path, filter_params) as conn:
                 cursor = conn.execute(wrapped)
                 columns = [d[0] for d in cursor.description]
                 rows = cursor.fetchall()

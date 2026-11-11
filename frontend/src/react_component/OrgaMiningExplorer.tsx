@@ -3,7 +3,7 @@ import axios from "axios";
 import TooltipBox from "@/react_component/ResourceTooltip";
 import { pieSlicePath } from "@/react_component/orgamining/geometry";
 import { useCluster, type TypeNMap } from "@/contexts/ClusterContext";
-import { useFilterVersion } from "@/store/filterStore";
+import { filterRequestConfig, useFilterVersion } from "@/store/filterStore";
 import { fetchObjectTypeCounts } from "@/react_component/variants/variantsApi";
 import {
   BUSINESS_OBJECT_FEATURE_GROUPS,
@@ -78,6 +78,8 @@ type OrgaMiningExplorerProps = {
   autoStart?: boolean;
   /** Send the global filter with every request (default true). */
   filterEnabled?: boolean;
+  /** Per-widget local filter params to append to every request. */
+  localFilterParams?: Record<string, string>;
 };
 
 type ViewMode = ProfilingViewMode;
@@ -129,6 +131,7 @@ export default function OrgaMiningExplorer({
   initialSettings,
   autoStart = false,
   filterEnabled = true,
+  localFilterParams,
 }: OrgaMiningExplorerProps) {
   // Settings are read once; a host that changes them re-mounts the explorer.
   const [initial] = useState<ResourceProfilingSettings>(() => ({ ...DEFAULT_PROFILING_SETTINGS, ...initialSettings }));
@@ -156,6 +159,11 @@ export default function OrgaMiningExplorer({
   const isFirstRender = useRef(true);
   const filterEnabledRef = useRef(filterEnabled);
   useEffect(() => { filterEnabledRef.current = filterEnabled; }, [filterEnabled]);
+  const localFilterParamsRef = useRef(localFilterParams);
+  useEffect(() => { localFilterParamsRef.current = localFilterParams; }, [localFilterParams]);
+  // Content key of the local filter: a changed filter invalidates the result
+  // like a changed global filter does (see the effect on filterVersion).
+  const localFilterKey = JSON.stringify(localFilterParams ?? {});
   const filterVersion = useFilterVersion();
   // Rendered size of the standalone graph; the embedded path measures its own
   // tile through CanvasShell instead.
@@ -278,9 +286,10 @@ export default function OrgaMiningExplorer({
       setErrorMsg("");
 
       try {
+        const filterConfig = filterRequestConfig(localFilterParamsRef.current, filterEnabledRef.current);
         const { data: result } = await axios.get<ProfileMatrixData>("/api/profile-matrix/", {
-          params,
-          _skipGlobalFilter: !filterEnabledRef.current,
+          ...filterConfig,
+          params: { ...params, ...filterConfig.params },
         });
         if (fileIdRef.current !== currentFileId || cancelled) return;
         setData(result);
@@ -371,7 +380,7 @@ export default function OrgaMiningExplorer({
     }
   // Only the filter is a trigger here; the other values are read when it fires.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterVersion, filterEnabled]);
+  }, [filterVersion, filterEnabled, localFilterKey]);
 
   // Must stay the last effect: everything above checks isFirstRender.
   useEffect(() => { isFirstRender.current = false; }, []);

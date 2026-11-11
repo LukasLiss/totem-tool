@@ -62,16 +62,48 @@ function slotLabel(rule: FilterRule): string {
   }
 }
 
+type RuleMap = Partial<Record<FilterType, FilterRule>>;
+
+/** Inverse of `buildFilterParams`: the rules a flat params dict stands for. */
+function rulesFromParams(params: Record<string, string>): RuleMap {
+  const rules: RuleMap = {};
+  const num = (v: string | undefined) => {
+    if (v == null || v === '') return undefined;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : undefined;
+  };
+  const after = num(params.after);
+  const before = num(params.before);
+  if (after != null || before != null) {
+    rules.time_range = { id: 'time_range', type: 'time_range', enabled: true, params: { after, before } };
+  }
+  const list = (v: string | undefined) => (v ? v.split(',').filter(Boolean) : []);
+  const objectTypes = list(params.object_types);
+  if (objectTypes.length > 0) {
+    rules.object_types = { id: 'object_types', type: 'object_types', enabled: true, params: { include: objectTypes } };
+  }
+  const activities = list(params.activities);
+  if (activities.length > 0) {
+    rules.activity = { id: 'activity', type: 'activity', enabled: true, params: { include: activities } };
+  }
+  return rules;
+}
+
 export interface LocalFilterDropdownProps {
   fileId?: number | string | null;
   onFilterChange: (params: Record<string, string>) => void;
   stopPropagation?: boolean;
+  /** Current active filter params from the parent (flat key→value dict),
+   *  e.g. a filter loaded from the backend. When given, the dropdown shows
+   *  these rules as applied, so a saved filter can be seen and edited. */
+  value?: Record<string, string>;
 }
 
 export function LocalFilterDropdown({
   fileId,
   onFilterChange,
   stopPropagation = false,
+  value,
 }: LocalFilterDropdownProps) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -79,9 +111,9 @@ export function LocalFilterDropdown({
   const [activeType, setActiveType] = useState<FilterType>('time_range');
 
   // Pending rules: configured but not yet applied
-  const [pending, setPending] = useState<Partial<Record<FilterType, FilterRule>>>({});
+  const [pending, setPending] = useState<RuleMap>(() => (value ? rulesFromParams(value) : {}));
   // Applied rules: what's been sent via onFilterChange
-  const [applied, setApplied] = useState<Partial<Record<FilterType, FilterRule>>>({});
+  const [applied, setApplied] = useState<RuleMap>(() => (value ? rulesFromParams(value) : {}));
 
   const [objectTypes, setObjectTypes] = useState<OptionItem[]>([]);
   const [activities,  setActivities]  = useState<OptionItem[]>([]);
@@ -91,8 +123,22 @@ export function LocalFilterDropdown({
   const appliedRef = useRef(applied);
   appliedRef.current = applied;
 
+  // Adopt the parent's filter (e.g. one loaded from the backend) whenever it
+  // differs from what the applied rules produce.
+  const valueJson = value ? JSON.stringify(value) : null;
+  useEffect(() => {
+    if (valueJson == null) return;
+    const current = JSON.stringify(buildFilterParams(Object.values(appliedRef.current) as FilterRule[]));
+    if (current === valueJson) return;
+    const rules = rulesFromParams(JSON.parse(valueJson) as Record<string, string>);
+    setApplied(rules);
+    setPending(rules);
+  }, [valueJson]);
+
   const isActive = Object.keys(applied).length > 0;
   const isDirty  = JSON.stringify(pending) !== JSON.stringify(applied);
+
+  const prevFileIdRef = useRef<typeof fileId>(undefined);
 
   useEffect(() => {
     if (!dropdownOpen || optionsLoaded || !fileId) return;
@@ -105,8 +151,14 @@ export function LocalFilterDropdown({
       .catch(() => setActivities([]));
   }, [dropdownOpen, fileId, optionsLoaded]);
 
-  // Reset loaded options when file changes
+  // Reset when the user SWITCHES to a different file — but NOT on the initial
+  // mount, when fileId goes from undefined/null to a valid value. Without this
+  // guard, any saved local-filter that was just loaded from the backend would
+  // be immediately wiped by this effect calling onFilterChange({}).
   useEffect(() => {
+    const prev = prevFileIdRef.current;
+    prevFileIdRef.current = fileId;
+    if (prev == null || fileId == null || prev === fileId) return;
     setOptionsLoaded(false);
     setPending({});
     setApplied({});

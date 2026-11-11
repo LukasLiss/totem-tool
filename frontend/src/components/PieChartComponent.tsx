@@ -9,10 +9,13 @@ import { Input } from "@/components/ui/input";
 import { GridStackNode } from 'gridstack';
 import type { LinkedQuery } from "@/react_component/sql/linkedQuery";
 import { useSqlQueryData } from "@/react_component/sql/useSqlQueryData";
-import { ColumnInput, QuerySection } from "@/components/sql-widgets/shared";
+import { ColumnInput, QuerySection, WidgetMessage } from "@/components/sql-widgets/shared";
 import { linkedQueryOf, useColumnDiscovery } from "@/components/sql-widgets/sqlWidgetUtils";
 import { PIE_CHART_EXPECTED_RESULT } from "@/components/sql-widgets/constants";
 import { SelectedFile } from '@/contexts/SelectedFileContext';
+import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
+import { LocalFilterDropdown } from '@/components/ui/LocalFilterDropdown';
+import { useDashboardLocalFilter } from '@/hooks/useDashboardLocalFilter';
 
 
 // Define props interface for components (extend as needed)
@@ -41,8 +44,14 @@ const PieChartComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
-  selectedFile
+  selectedFile,
+  dashboardId,
 }) => {
+  const [filterEnabled, setFilterEnabled] = useState(true);
+  const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
+    node, dashboardId, onUpdate,
+  );
+
   // State for edit mode
   const [query, setQuery] = useState(node.query || '');
   const [linked, setLinked] = useState<LinkedQuery | null>(linkedQueryOf(node));
@@ -75,6 +84,8 @@ const PieChartComponent: React.FC<ComponentProps> = ({
     queryAssetId: linked?.id,
     enabled: !isEditMode && Boolean(labelColumn && valueColumn),
     limit: 500,
+    filterEnabled,
+    localFilterParams: Object.keys(localFilterParams).length > 0 ? localFilterParams : undefined,
   });
   const isLoading = data.loading;
   const error = data.error;
@@ -231,54 +242,24 @@ const PieChartComponent: React.FC<ComponentProps> = ({
   }
 
   // VIEW MODE
-  if (!selectedFile) {
-    return (
-    <Card className="w-full h-full rounded-none overflow-auto">
-      <div className="flex items-center justify-center h-full text-muted-foreground">
-        Please select a file to display the pie chart
-      </div>
-    </Card>
-    );
-  }
-
-  if (error) {
-    return (
-    <Card className="w-full h-full rounded-none overflow-auto">
-      <div className="flex items-center justify-center h-full text-red-600">
-        Error: {error}
-      </div>
-    </Card>
-    );
-  }
-
-  if (isLoading) {
-    return (
-    <Card className="w-full h-full rounded-none overflow-auto">
-      <div className="flex items-center justify-center h-full">
-        Loading chart data...
-      </div>
-    </Card>
-    );
-  }
-
-  if (chartData.length === 0) {
-    return (
-      <Card className="w-full h-full rounded-none overflow-auto">
-        <div className="flex items-center justify-center h-full text-muted-foreground">
-          No data to display. Configure the query and columns in edit mode.
-        </div>
-      </Card>
-    );
-  }
-
   return (
     <Card className="w-full h-full rounded-none flex flex-col overflow-hidden">
-      {title && (
-        <CardHeader className="items-center pb-0">
-          <CardTitle>{title}</CardTitle>
-        </CardHeader>
-      )}
+      <CardHeader className="flex flex-row items-center gap-2 space-y-0 px-4 py-2 border-b text-left">
+        <CardTitle className="shrink min-w-0 truncate text-sm">{title}</CardTitle>
+        <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} />
+        <LocalFilterDropdown fileId={fileId} onFilterChange={handleLocalFilterChange} value={localFilterParams} />
+      </CardHeader>
       <CardContent className="flex-1 flex justify-center items-center pb-0 min-h-0">
+        {!selectedFile ? (
+          <WidgetMessage>Select an event log to display the pie chart.</WidgetMessage>
+        ) : error ? (
+          <WidgetMessage tone="error">{error}</WidgetMessage>
+        ) : isLoading ? (
+          <WidgetMessage>Loading…</WidgetMessage>
+        ) : chartData.length === 0 ? (
+          <WidgetMessage>No data to display. Configure the query and columns in edit mode.</WidgetMessage>
+        ) : (
+          <>
         <ChartContainer
           config={chartConfig}
           className="w-full h-full max-h-[450px]"
@@ -328,13 +309,17 @@ const PieChartComponent: React.FC<ComponentProps> = ({
               )}
             </Pie>
           </PieChart>
-        </ChartContainer>
+          </ChartContainer>
+        </>
+        )}
       </CardContent>
+      {chartData.length > 0 && (
         <CardFooter className="flex-col gap-2 text-sm">
           <div className="leading-none text-muted-foreground">
             {chartData.length} categories
           </div>
         </CardFooter>
+      )}
     </Card>
   );
 };

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from "axios";
-import { useFilterVersion } from "@/store/filterStore";
+import { filterRequestConfig, useFilterVersion } from "@/store/filterStore";
 import { isCancelledError } from "@/store/computationStore";
 import ComputationStatus from "@/components/ComputationStatus";
 
@@ -25,6 +25,8 @@ const formatTimestamp = (unix: number): string => {
 
 interface LogStatisticsProps {
   fileId: number | undefined;
+  filterEnabled?: boolean;
+  localFilterParams?: Record<string, string>;
   showNumEvents?: boolean;
   showNumActivities?: boolean;
   showNumObjects?: boolean;
@@ -46,6 +48,8 @@ interface Statistics {
 
 const LogStatistics: React.FC<LogStatisticsProps> = ({
   fileId,
+  filterEnabled = true,
+  localFilterParams,
   showNumEvents = true,
   showNumActivities = true,
   showNumObjects = true,
@@ -61,6 +65,7 @@ const LogStatistics: React.FC<LogStatisticsProps> = ({
   const [error, setError] = useState<string | null>(null);
 
   const filterVersion = useFilterVersion();
+  const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
 
   useEffect(() => {
     if (!fileId) {
@@ -73,7 +78,10 @@ const LogStatistics: React.FC<LogStatisticsProps> = ({
       setLoading(true);
       setError(null);
       try {
-        const { data } = await axios.get(`/api/files/${fileId}/statistics/`, { signal: controller.signal });
+        const { data } = await axios.get(`/api/files/${fileId}/statistics/`, {
+          signal: controller.signal,
+          ...filterRequestConfig(localFilterParams, filterEnabled),
+        });
         setStats(data);
       } catch (err) {
         if (controller.signal.aborted) return;
@@ -85,7 +93,7 @@ const LogStatistics: React.FC<LogStatisticsProps> = ({
     fetchStats();
     // Leaving the page or changing the filter stops the running computation.
     return () => controller.abort();
-  }, [fileId, filterVersion]);
+  }, [fileId, effectiveFilterVersion, filterEnabled, localFilterParams]);
 
   // Loading state
   if (loading) {

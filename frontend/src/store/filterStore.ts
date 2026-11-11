@@ -163,3 +163,19 @@ export function getEffectiveFilterConfig(
   const { merged, noResults } = mergeFilterParamsIntersection(globalParams, localFilterParams);
   return { params: merged, _skipGlobalFilter: true, _noResults: noResults };
 }
+
+/**
+ * Axios config fragment for a request that honours both the global filter
+ * (when `filterEnabled`) and a widget's local filter, intersected via
+ * `getEffectiveFilterConfig`. An empty intersection is sent as an impossible
+ * time window (after > before), so the endpoint still answers in its usual
+ * shape, just without any events — callers need no special empty path.
+ */
+export function filterRequestConfig(
+  localFilterParams: Record<string, string> | undefined,
+  filterEnabled: boolean,
+): { params?: Record<string, string>; _skipGlobalFilter: boolean } {
+  const { params, _skipGlobalFilter, _noResults } = getEffectiveFilterConfig(localFilterParams, filterEnabled);
+  if (!params) return { _skipGlobalFilter };
+  return { _skipGlobalFilter, params: _noResults ? { ...params, after: "1", before: "0" } : params };
+}
