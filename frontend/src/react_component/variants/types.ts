@@ -91,6 +91,8 @@ export type AdvancedSettings = {
   leading_type: string;
   business_object_types: string[];
   business_activities: string[];
+  /** Stored process-area composition of the process-area mode; null = the areas shown now. */
+  process_area_asset: number | null;
 };
 
 /* =========================

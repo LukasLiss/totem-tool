@@ -7,6 +7,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
+import type { ProjectAsset } from "@/api/assetsApi";
+import type { ProcessAreasSnapshot } from "@/store/processAreaStore";
+
 import { columnNameError } from "./settings";
 import { Field, Hint, SettingsSection, TimeoutInput } from "./VariantsSettingsPanel";
 import {
@@ -17,6 +20,11 @@ import {
 } from "./types";
 
 export type ProcessAreaSettingsPanelProps = {
+  /** Stored composition to use; null = the areas shown in the Process Area component. */
+  areaAssetId?: number | null;
+  onAreaAssetChange?: (assetId: number | null) => void;
+  storedCompositions?: ProjectAsset[];
+  currentProcessAreas?: ProcessAreasSnapshot | null;
   columns: ProcessAreaColumns;
   onColumnsChange: (next: ProcessAreaColumns) => void;
   grouping: GroupingSettings;
@@ -24,8 +32,62 @@ export type ProcessAreaSettingsPanelProps = {
   disabled?: boolean;
 };
 
+const CURRENT = "__current__";
+
+/** Which process areas the method runs on: the ones shown now, or a stored composition. */
+export function ProcessAreaSourceSelect({
+  value,
+  onChange,
+  storedCompositions,
+  currentProcessAreas,
+  disabled,
+  id = "variants-area-source",
+  className = "w-full",
+}: {
+  value: number | null;
+  onChange: (assetId: number | null) => void;
+  storedCompositions: Pick<ProjectAsset, "id" | "name">[];
+  currentProcessAreas?: ProcessAreasSnapshot | null;
+  disabled?: boolean;
+  id?: string;
+  className?: string;
+}) {
+  const missing = value !== null && !storedCompositions.some((asset) => asset.id === value);
+  const currentLabel = currentProcessAreas?.composition?.name
+    ? `Shown in the Process Area component (${currentProcessAreas.composition.name})`
+    : "Shown in the Process Area component (or discovered)";
+  return (
+    <Select
+      value={value === null ? CURRENT : String(value)}
+      onValueChange={(next) => onChange(next === CURRENT ? null : Number(next))}
+      disabled={disabled}
+    >
+      <SelectTrigger id={id} aria-label="Process areas" className={className}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value={CURRENT}>{currentLabel}</SelectItem>
+        {storedCompositions.map((asset) => (
+          <SelectItem key={asset.id} value={String(asset.id)}>
+            {asset.name}
+          </SelectItem>
+        ))}
+        {missing ? (
+          <SelectItem value={String(value)} disabled>
+            Deleted composition
+          </SelectItem>
+        ) : null}
+      </SelectContent>
+    </Select>
+  );
+}
+
 /** Advanced options of the "connected components per process area" method. */
 export function ProcessAreaSettingsPanel({
+  areaAssetId = null,
+  onAreaAssetChange,
+  storedCompositions = [],
+  currentProcessAreas = null,
   columns,
   onColumnsChange,
   grouping,
@@ -38,8 +100,29 @@ export function ProcessAreaSettingsPanel({
 
   return (
     <div className="flex flex-wrap gap-3">
+      {onAreaAssetChange ? (
+        <SettingsSection
+          step={1}
+          title="Process areas"
+          description="The process areas whose executions are compared, one variant list per area."
+        >
+          <Field label="Process areas" htmlFor="variants-area-source">
+            <ProcessAreaSourceSelect
+              value={areaAssetId}
+              onChange={onAreaAssetChange}
+              storedCompositions={storedCompositions}
+              currentProcessAreas={currentProcessAreas}
+              disabled={disabled}
+            />
+            <Hint>
+              Compositions adjusted and saved in the Process Area component are stored in the
+              project assets and keep their area names.
+            </Hint>
+          </Field>
+        </SettingsSection>
+      ) : null}
       <SettingsSection
-        step={1}
+        step={onAreaAssetChange ? 2 : 1}
         title="Variant grouping"
         description="Executions with the same structure form one variant."
       >
@@ -72,7 +155,7 @@ export function ProcessAreaSettingsPanel({
       </SettingsSection>
 
       <SettingsSection
-        step={2}
+        step={onAreaAssetChange ? 3 : 2}
         title="Store in event log"
         description="Every event gets the id of its process execution and of its variant."
       >

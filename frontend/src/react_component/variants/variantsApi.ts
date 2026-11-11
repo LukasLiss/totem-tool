@@ -131,13 +131,16 @@ export async function fetchEventColumnNames(fileId: number): Promise<string[]> {
   return data.map((column) => column.name);
 }
 
-/** The request payload for one process area; object types double as its name. */
+/**
+ * The request payload for one process area. A named area (of a stored or
+ * hand-edited composition) is labelled by its name, others by their types.
+ */
 export function toProcessAreaRequest(
-  area: Pick<ProcessAreaSnapshot, "objectTypes" | "activities">,
+  area: Pick<ProcessAreaSnapshot, "objectTypes" | "activities"> & { name?: string },
 ): ProcessAreaRequest {
   const objectTypes = [...area.objectTypes].sort((a, b) => a.localeCompare(b));
   return {
-    label: objectTypes.join(", "),
+    label: area.name?.trim() || objectTypes.join(", "),
     object_types: objectTypes,
     activities: [...area.activities].sort((a, b) => a.localeCompare(b)),
   };
@@ -217,6 +220,25 @@ type ProcessAreaPayload = {
 };
 
 /**
+ * The areas of a discovery result as snapshot entries (highest level first).
+ * The ids mirror `buildLayersFromBackend` in TotemVisualizer so every
+ * component agrees on what an area is called.
+ */
+export function discoveredSnapshotAreas(layers: NonNullable<ProcessAreaPayload["layers"]>): ProcessAreaSnapshot[] {
+  return [...layers]
+    .sort((a, b) => b.level - a.level)
+    .flatMap((layer) =>
+      layer.areas.map((area, index) => ({
+        id: `level-${layer.level}-area-${index}-${area.objectTypes.join("-")}`,
+        level: layer.level,
+        label: area.objectTypes.length === 1 ? area.objectTypes[0] : area.objectTypes.join(" & "),
+        objectTypes: area.objectTypes,
+        activities: area.eventTypes ?? [],
+      })),
+    );
+}
+
+/**
  * Compute process areas with the default (advanced) algorithm.
  *
  * Used when the Process Area component has not been opened yet for this
@@ -234,21 +256,11 @@ export async function fetchProcessAreas(
     `/api/files/${fileId}/discover_process_areas/`,
     filterConfig,
   );
-  const layers = [...(data.layers ?? [])].sort((a, b) => b.level - a.level);
-  const areas: ProcessAreaSnapshot[] = layers.flatMap((layer) =>
-    layer.areas.map((area, index) => ({
-      id: `level-${layer.level}-area-${index}-${area.objectTypes.join("-")}`,
-      level: layer.level,
-      label: area.objectTypes.length === 1 ? area.objectTypes[0] : area.objectTypes.join(" & "),
-      objectTypes: area.objectTypes,
-      activities: area.eventTypes ?? [],
-    })),
-  );
   return {
     fileId,
     algorithm: "advanced",
     filtered: filterEnabled,
-    areas,
+    areas: discoveredSnapshotAreas(data.layers ?? []),
     objectTypeToActivities: data.object_type_to_event_types ?? {},
   };
 }

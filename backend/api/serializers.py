@@ -15,6 +15,7 @@ from totem_lib.ocel.event_columns import EventColumnError, validate_event_column
 from .asset_formats import (
     validate_ocdfg_asset_dict,
     validate_ocpn_asset_dict,
+    validate_process_areas_asset_dict,
     validate_sql_query_asset_dict,
 )
 from .models import EventLog, ImageAsset, Project, ProjectAsset
@@ -366,6 +367,7 @@ class ProjectAssetSerializer(serializers.ModelSerializer):
             ProjectAsset.AssetType.OCPN: validate_ocpn_asset_dict,
             ProjectAsset.AssetType.OCDFG: validate_ocdfg_asset_dict,
             ProjectAsset.AssetType.QUERY: validate_sql_query_asset_dict,
+            ProjectAsset.AssetType.PROCESS_AREAS: validate_process_areas_asset_dict,
         }
         validator = schema_validators.get(asset_type)
         if validator is None:

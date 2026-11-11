@@ -57,7 +57,13 @@ export function AnalysisView() {
       case "processArea":
         return (
           <div className="w-full min-w-0 max-w-7xl">
-            <ProcessArea fileId={selectedFile?.id} height={CANVAS_HEIGHT} />
+            <ProcessArea
+              // A deep link from the asset store opens that composition.
+              key={viewMode.openAssetId ?? "process-area"}
+              fileId={selectedFile?.id}
+              height={CANVAS_HEIGHT}
+              initialCompositionAssetId={viewMode.openAssetId ?? null}
+            />
           </div>
         );
 
