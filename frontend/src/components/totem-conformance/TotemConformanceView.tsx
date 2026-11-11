@@ -54,9 +54,9 @@ export function TotemConformanceView({
   );
 
   return (
-    <div className="flex min-h-screen flex-col">
-      <SidebarTrigger className="m-2" />
-      <main className="flex-1 p-4 pt-0">
+    <div className="flex flex-col md:min-h-screen">
+      <SidebarTrigger className="m-2 max-md:hidden" />
+      <main className="flex-1 p-4 md:pt-0">
         <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-6">
           <header className="border-b pb-4">
             <h1 className="text-2xl font-semibold tracking-normal">

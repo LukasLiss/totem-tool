@@ -1,9 +1,10 @@
 import { AppSidebar } from "@/components/app-sidebar"
-import { useContext } from "react";
+import { useContext, useEffect } from "react";
 import {
   SidebarInset,
   SidebarProvider,
   SidebarTrigger,
+  useSidebar,
 } from "@/components/ui/sidebar"
 import { DashboardContext } from "./contexts/DashboardContext"
 import { DevDashboard } from "./components/dev_dashboard";
@@ -22,6 +23,19 @@ import Grid from './components/grid';
 import FilterChipStack from "@/components/FilterChipStack";
 import ComputationPanel from "@/components/ComputationPanel";
 import { FilterStackProvider } from "@/contexts/FilterStackContext";
+
+/**
+ * On a phone the sidebar is a drawer over the page. Picking a view from it
+ * should reveal that view, so the drawer closes on every view change.
+ */
+function CloseMobileSidebarOnNavigate() {
+  const { viewMode } = useContext(DashboardContext);
+  const { setOpenMobile } = useSidebar();
+  useEffect(() => {
+    setOpenMobile(false);
+  }, [viewMode, setOpenMobile]);
+  return null;
+}
 
 export function ProcessOverview() {
   const { viewMode } = useContext(DashboardContext);
@@ -65,6 +79,7 @@ export function ProcessOverview() {
   return (
     <SidebarProvider>
       <AppSidebar />
+      <CloseMobileSidebarOnNavigate />
       <SidebarInset>
         <FilterStackProvider>
           {viewMode.type !== 'dashboard' && (

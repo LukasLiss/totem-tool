@@ -35,6 +35,7 @@ const LEGEND_HEADER_BUTTON_STYLE = {
 } as const;
 /** Screen space the legend column takes on the left of the canvas. */
 const LEGEND_ROOM = 360;
+const LEGEND_AUTO_COLLAPSE_WIDTH = 480;
 const DETAIL_PADDING = 16;
 
 export interface OcdfgViewProps {
@@ -193,7 +194,8 @@ export default function OcdfgView({
   // --- toolbar state ----------------------------------------------------------
   const [locked, setLocked] = useState(initialInteractionLocked);
   const [animate, setAnimate] = useState(false);
-  const [legendCollapsed, setLegendCollapsed] = useState(false);
+  // null = not chosen by the user yet; the default then follows the width.
+  const [legendCollapsedChoice, setLegendCollapsed] = useState<boolean | null>(null);
   const [legendPosition, setLegendPosition] = useState({ x: 0, y: 0 });
   const dragStart = useRef<{ x: number; y: number; startX: number; startY: number } | null>(null);
   const [hoverType, setHoverType] = useState<string | null>(null);
@@ -231,11 +233,18 @@ export default function OcdfgView({
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
+  // Phone-sized boxes: the open legend would cover the whole graph, so it
+  // starts collapsed there until the user expands it.
+  const legendCollapsed = legendCollapsedChoice ?? (width > 0 && width < LEGEND_AUTO_COLLAPSE_WIDTH);
   const legendRoom = chrome && !legendCollapsed && width >= 2.5 * LEGEND_ROOM ? LEGEND_ROOM : 24;
   const panelRoom = editable && panelOpen && width - legendRoom >= 2 * LAYOUT_PANEL_WIDTH ? LAYOUT_PANEL_WIDTH + 36 : 24;
+  // Where there is no room beside the legend, the collapsed legend and the
+  // toolbar sit stacked in the top-left corner; start the graph below them.
+  const stackedChromeRoom =
+    chrome && legendCollapsed && width > 0 && width < LEGEND_AUTO_COLLAPSE_WIDTH ? 136 : 24;
   const fitPadding = detail
     ? { top: 4, right: 4, bottom: 4, left: 4 }
-    : { top: 24, bottom: 24, left: legendRoom, right: panelRoom };
+    : { top: stackedChromeRoom, bottom: 24, left: legendRoom, right: panelRoom };
   const fitKey = `${options.direction}|${types.join(',')}`;
 
   return (
@@ -392,7 +401,7 @@ export default function OcdfgView({
                       </button>
                     </>
                   )}
-                  <button type="button" onClick={() => setLegendCollapsed((prev) => !prev)} style={LEGEND_HEADER_BUTTON_STYLE}>
+                  <button type="button" onClick={() => setLegendCollapsed(!legendCollapsed)} style={LEGEND_HEADER_BUTTON_STYLE}>
                     {legendCollapsed ? 'Expand' : 'Collapse'}
                   </button>
                 </div>

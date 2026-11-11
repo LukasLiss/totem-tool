@@ -47,6 +47,7 @@ vi.mock("@/components/ui/sidebar", () => {
     SidebarMenuButton: Button,
     SidebarMenuSubButton: Button,
     SidebarTrigger: () => null,
+    useSidebar: () => ({ setOpenMobile: () => {} }),
   };
 });
 

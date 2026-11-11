@@ -202,8 +202,8 @@ export function FileUploadValidator() {
 
 
   return (
-  <div>
-    <Card className="w-full max-w-sm m-6">
+  <div className="w-full max-w-sm p-4 md:p-6">
+    <Card className="w-full">
       <CardHeader>
         <CardTitle>
           Upload a new file
@@ -212,7 +212,7 @@ export function FileUploadValidator() {
         <CardContent>
           <form className="flex flex-col" onSubmit={handleSubmit}>
             <div {...getRootProps({ className:
-              "dropzone font-sans border flex flex-col items-center justify-center rounded-md pt-15 pb-20 pr-10 pl-10 text-center cursor-pointer transition hover:shadow-lg" })}>
+              "dropzone font-sans border flex flex-col items-center justify-center rounded-md px-6 pt-10 pb-12 md:px-10 md:pt-15 md:pb-20 text-center cursor-pointer transition hover:shadow-lg" })}>
               <input
                 type="file"
                 name="my-file"
@@ -226,7 +226,7 @@ export function FileUploadValidator() {
         <CardFooter className="flex-col gap-6 text-sm w-full mt-6 p-0">
           <div className="flex flex-col justify-center w-full">
             <div className="flex border rounded-md justify-center pr-2 pl-2 text-primary gap-2 w-full h-9 px-4 py-2 has-[>svg]:px-3">
-                <span>{file?.name ?? "No file chosen"}</span>
+                <span className="min-w-0 truncate">{file?.name ?? "No file chosen"}</span>
             </div>
               <Button 
                 className="w-full flex mt-2 md:flex-row cursor-pointer transition hover:shadow-lg gap-2" 

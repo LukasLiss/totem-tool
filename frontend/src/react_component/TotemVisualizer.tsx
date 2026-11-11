@@ -75,6 +75,7 @@ import {
 } from './processAreaParams';
 import { useGridLayout } from './process-area/useGridLayout';
 import { detailActivityRestriction } from './process-area/detailActivities';
+import { useTouchMouseBridge } from '@/hooks/use-touch-mouse-bridge';
 
 /** Every committed slider change is a backend round-trip; don't fire per pixel. */
 const PROCESS_AREA_PARAM_DEBOUNCE_MS = 350;
@@ -4426,6 +4427,8 @@ function TotemVisualizer({
   const [panY, setPanY] = useState(0);
   const [viewZoom, setViewZoom] = useState(1);
   const [panLocked, setPanLocked] = useState(true);
+  // Finger drags and pinches drive the mouse pan / wheel zoom below.
+  useTouchMouseBridge(scrollContainerRef, !panLocked);
   const panLockedRef = useRef(panLocked);
   useEffect(() => {
     panLockedRef.current = panLocked;

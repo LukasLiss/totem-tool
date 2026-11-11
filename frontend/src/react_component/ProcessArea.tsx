@@ -322,7 +322,7 @@ export default function ProcessArea({
       className={`@container/card w-full flex flex-col ${fillContainer ? 'h-full rounded-none' : ''}`}
     >
       <CardHeader className="items-center relative z-10 justify-between flex-shrink-0">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <CardTitle>Process Area Visualizer</CardTitle>
           <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(prev => !prev)} />
           <LocalFilterDropdown fileId={fileId} onFilterChange={setLocalFilterParams} />
@@ -393,7 +393,7 @@ export default function ProcessArea({
                   totemControls.onAlgorithmChange(value as ProcessAreaAlgorithm)
                 }
               >
-                <SelectTrigger className="h-8 w-[230px]" aria-label="Discovery algorithm">
+                <SelectTrigger className="h-8 w-[230px] max-w-full" aria-label="Discovery algorithm">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -421,7 +421,7 @@ export default function ProcessArea({
                       <SlidersHorizontal className="h-4 w-4" />
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent align="end" className="w-[320px] space-y-4">
+                  <PopoverContent align="end" className="w-[320px] max-w-[calc(100vw-2rem)] space-y-4">
                     <div className="space-y-1">
                       <p className="text-sm font-medium">Resource indicators</p>
                       <p className="text-xs text-muted-foreground">

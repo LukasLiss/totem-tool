@@ -30,6 +30,7 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import FilterChipStack from "@/components/FilterChipStack";
+import { useIsMobile } from "@/hooks/use-mobile";
 // Type-safe layout items
 // Removed initialWidgets - grid starts empty now
 
@@ -73,6 +74,12 @@ const GridContent: React.FC = () => {
   const { viewMode, setViewMode, registerNavigationGuard } =
     useContext(DashboardContext);
   const { isEditMode, setIsEditMode } = useGridMode();
+  // A phone shows the dashboard as one stacked column. Editing there would
+  // save that column as the dashboard's layout, so it is view-only.
+  const isMobile = useIsMobile();
+  useEffect(() => {
+    if (isMobile) setIsEditMode(false);
+  }, [isMobile, setIsEditMode]);
 
   // Extract dashboard ID when in dashboard mode
   const selectedDashboard = viewMode.type === 'dashboard' ? viewMode.id : null;
@@ -211,7 +218,7 @@ const GridContent: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-screen  overflow-hidden">
+    <div className="flex flex-col h-dvh overflow-hidden">
       <div className="flex items-center gap-3 px-4 p-2 border-b bg-background" style={{ minHeight: 60 }}>
         <SidebarTrigger className="shrink-0" style={{ width: 36, height: 36 }} />
         <div className="w-px h-7 bg-border shrink-0" />
@@ -239,7 +246,7 @@ const GridContent: React.FC = () => {
               <span className="sr-only">Leave edit mode</span>
             </Button>
           </>
-        ) : (
+        ) : isMobile ? null : (
           <Button
             variant="ghost"
             size="icon"
