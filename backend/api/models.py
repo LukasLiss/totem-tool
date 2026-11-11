@@ -104,6 +104,11 @@ class ProjectAsset(models.Model):
         # "query": "...", "description": "..."}). Dashboard components can link
         # one so that editing the stored query updates every consumer.
         QUERY = "QUERY", "SQL Query"
+        # A named composition of process areas (content_json: {"schema":
+        # "process-areas", "version": 1, "levels": [...]}), discovered and/or
+        # adjusted by hand in the Process Area view. Variants and alignment
+        # components can pick its areas by name.
+        PROCESS_AREAS = "PROCESS_AREAS", "Process Areas"
 
     project = models.ForeignKey(
         Project,
@@ -318,6 +323,16 @@ class VariantsComponent(DashboardComponent):
     area_variant_column = models.CharField(
         max_length=64, default="variant-cc-process-areas", blank=True
     )
+    # Stored process-area composition the "process_areas" mode runs on.
+    # Null: the areas currently shown by the Process Area component (or a
+    # default discovery). Deleting the asset falls back to that (SET_NULL).
+    process_area_asset = models.ForeignKey(
+        "ProjectAsset",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
 
 
 class ProcessAreaComponent(DashboardComponent):
@@ -342,6 +357,16 @@ class ProcessAreaComponent(DashboardComponent):
     w_divergence = models.FloatField(default=1.0, validators=[MinValueValidator(0.0)])
     alpha = models.FloatField(default=2.0, validators=[MinValueValidator(0.0)])
     beta = models.FloatField(default=1.0, validators=[MinValueValidator(0.0)])
+
+    # Stored process-area composition to show instead of the discovered one
+    # (a ProjectAsset of type PROCESS_AREAS). Null shows the discovery.
+    composition_asset = models.ForeignKey(
+        "ProjectAsset",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
 
 
 class TotemMinerComponent(DashboardComponent):

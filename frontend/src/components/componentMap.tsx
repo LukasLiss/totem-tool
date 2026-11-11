@@ -32,6 +32,9 @@ import {
 } from '@/react_component/variants/types';
 import { MultiSelectPopover } from '@/react_component/variants/MultiSelectPopover';
 import { fetchActivities, fetchObjectTypes } from '@/react_component/variants/variantsApi';
+import { ProcessAreaSourceSelect } from '@/react_component/variants/ProcessAreaSettingsPanel';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { useProcessAreaAssets } from '@/store/processAreaAssetsStore';
 import ProcessArea from '@/react_component/ProcessArea';
 import {
   clampProcessAreaParams,
@@ -171,6 +174,8 @@ export interface ComponentProps {
     timeout_s?: number;
     business_object_types?: string[];
     business_activities?: string[];
+    // Stored process-area composition of the process-area mode (asset id)
+    process_area_asset?: number | null;
     // LogStatisticsComponent properties
     show_num_events?: boolean;
     show_num_activities?: boolean;
@@ -204,6 +209,8 @@ export interface ComponentProps {
     w_divergence?: number;
     alpha?: number;
     beta?: number;
+    // Stored composition shown instead of the discovery (asset id)
+    composition_asset?: number | null;
     // OCAlignmentComponent properties
     model_asset?: number | null;
     execution_source?: 'area' | 'stored';
@@ -798,6 +805,8 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
   const [areaVariantColumn, setAreaVariantColumn] = useState(
     node.area_variant_column ?? DEFAULT_PROCESS_AREA_COLUMNS.variantColumn
   );
+  const [areaAssetId, setAreaAssetId] = useState<number | null>(node.process_area_asset ?? null);
+  const storedCompositions = useProcessAreaAssets(selectedFile?.project ?? null);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [extraction, setExtraction] = useState<Extraction>(
     (node.extraction as Extraction) ?? 'leading_1hop'
@@ -825,6 +834,7 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
     setVariantsMode(node.variants_mode ?? DEFAULT_VARIANTS_MODE);
     setAreaExecutionColumn(node.area_execution_column ?? DEFAULT_PROCESS_AREA_COLUMNS.executionColumn);
     setAreaVariantColumn(node.area_variant_column ?? DEFAULT_PROCESS_AREA_COLUMNS.variantColumn);
+    setAreaAssetId(node.process_area_asset ?? null);
     setExtraction((node.extraction as Extraction) ?? 'leading_1hop');
     setIso((node.iso as IsoStrategy) ?? 'wl+vf2');
     setTimeoutS(node.timeout_s ?? 10);
@@ -836,6 +846,7 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
     node.variants_mode,
     node.area_execution_column,
     node.area_variant_column,
+    node.process_area_asset,
     node.extraction,
     node.iso,
     node.timeout_s,
@@ -933,6 +944,24 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
               onCheckedChange={handleAutomaticLoadingChange}
             />
           </div>
+
+          {variantsMode === 'process_areas' && (
+            <div className="space-y-2">
+              <Label htmlFor="variants-dashboard-area-source">Process areas</Label>
+              <ProcessAreaSourceSelect
+                id="variants-dashboard-area-source"
+                value={areaAssetId}
+                onChange={(id) => {
+                  setAreaAssetId(id);
+                  onUpdate?.({ process_area_asset: id });
+                }}
+                storedCompositions={storedCompositions.assets}
+              />
+              <p className="text-xs text-muted-foreground">
+                Pick a composition stored in the project assets to always use its named areas.
+              </p>
+            </div>
+          )}
 
           {variantsMode === 'process_areas' && (
             <p className="text-sm text-muted-foreground">
@@ -1184,6 +1213,7 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
           defaultLeadingType={leadingType || undefined}
           defaultMode={variantsMode}
           defaultProcessAreaColumns={areaColumns}
+          defaultProcessAreaAssetId={areaAssetId}
           defaultExtraction={extraction}
           defaultIso={iso}
           defaultTimeoutS={timeoutS}
@@ -1201,7 +1231,9 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
             setVariantsMode(s.mode);
             setAreaExecutionColumn(s.area_execution_column);
             setAreaVariantColumn(s.area_variant_column);
+            setAreaAssetId(s.process_area_asset);
             onUpdate?.({
+              process_area_asset: s.process_area_asset,
               variants_mode: s.mode,
               area_execution_column: s.area_execution_column,
               area_variant_column: s.area_variant_column,
@@ -1263,6 +1295,22 @@ export const ProcessAreaComponent: React.FC<ComponentProps> = ({
     });
 
   const [params, setParams] = useState<ProcessAreaParams>(paramsFromNode);
+  const [compositionAssetId, setCompositionAssetId] = useState<number | null>(
+    node.composition_asset ?? null,
+  );
+  const storedCompositions = useProcessAreaAssets(selectedFile?.project ?? null);
+
+  useEffect(() => {
+    setCompositionAssetId(node.composition_asset ?? null);
+  }, [node.composition_asset]);
+
+  const handleCompositionAssetChange = useCallback(
+    (assetId: number | null) => {
+      setCompositionAssetId(assetId);
+      onUpdate?.({ composition_asset: assetId });
+    },
+    [onUpdate],
+  );
 
   useEffect(() => {
     setAlgorithm(node.algorithm ?? DEFAULT_PROCESS_AREA_ALGORITHM);
@@ -1304,6 +1352,30 @@ export const ProcessAreaComponent: React.FC<ComponentProps> = ({
             The Process Area visualizes the object-type hierarchy of your event log.
             Select an event log file to see the visualization.
           </p>
+          <div className="space-y-2">
+            <Label htmlFor="process-area-composition">Shown process areas</Label>
+            <Select
+              value={compositionAssetId === null ? 'discovered' : String(compositionAssetId)}
+              onValueChange={(value) =>
+                handleCompositionAssetChange(value === 'discovered' ? null : Number(value))
+              }
+            >
+              <SelectTrigger id="process-area-composition" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="discovered">Discovered (algorithm below)</SelectItem>
+                {storedCompositions.assets.map((asset) => (
+                  <SelectItem key={asset.id} value={String(asset.id)}>
+                    {asset.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Compositions are adjusted with “Adjust” in view mode and stored in the project assets.
+            </p>
+          </div>
           <div className="flex items-center justify-between">
             <Label>Discovery algorithm</Label>
             <DropdownMenu>
@@ -1370,6 +1442,8 @@ export const ProcessAreaComponent: React.FC<ComponentProps> = ({
       initialAlgorithm={algorithm}
       initialParams={params}
       onSettingsChange={handleSettingsChange}
+      initialCompositionAssetId={compositionAssetId}
+      onCompositionAssetChange={handleCompositionAssetChange}
     />
   );
 };

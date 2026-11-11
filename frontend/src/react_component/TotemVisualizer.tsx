@@ -53,6 +53,8 @@ type ProcessAreaDefinition = {
   id: string;
   level: number;
   label: string;
+  /** User-given name; only areas of a named composition have one. */
+  name?: string;
   objectTypes: string[];
   /** Activities the backend assigned to this area (not claimed by a lower one). */
   activities: string[];
@@ -91,6 +93,16 @@ export type TotemVisualizerControls = {
   onParamsReset: () => void;
 };
 
+/** What a discovery returned, for callers that build compositions from it. */
+export type ProcessAreaDiscoveryInfo = {
+  algorithm: ProcessAreaAlgorithm;
+  filtered: boolean;
+  layers: MlpaLayer[];
+  objectTypeToActivities: Record<string, string[]>;
+  allObjectTypes: string[];
+  allActivities: string[];
+};
+
 type TotemVisualizerProps = {
   eventLogId?: number | string | null;
   height?: string | number;
@@ -111,6 +123,16 @@ type TotemVisualizerProps = {
     algorithm: ProcessAreaAlgorithm;
     params: ProcessAreaParams;
   }) => void;
+  /**
+   * A hand-edited or stored composition to draw instead of the discovered
+   * areas (highest level first). The discovery still runs: it supplies the
+   * relations between the object types. While set, the discovered areas are
+   * not published to the shared process-area store; the caller publishes
+   * the composition instead.
+   */
+  compositionLayers?: ProcessLayer[] | null;
+  /** Fired with every discovery result. */
+  onDiscoveryLoaded?: (info: ProcessAreaDiscoveryInfo) => void;
 };
 
 type RelationType = 'P' | 'D' | 'I' | 'A';
@@ -4339,11 +4361,18 @@ function TotemVisualizer({
   initialAlgorithm,
   initialParams,
   onSettingsChange,
+  compositionLayers,
+  onDiscoveryLoaded,
 }: TotemVisualizerProps) {
   const filterVersion = useFilterVersion();
   const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
   const localFilterParamsRef = useRef(localFilterParams);
   localFilterParamsRef.current = localFilterParams;
+  // Read inside `fetchTotem` without making a composition change refetch.
+  const compositionActiveRef = useRef(Boolean(compositionLayers));
+  compositionActiveRef.current = Boolean(compositionLayers);
+  const onDiscoveryLoadedRef = useRef(onDiscoveryLoaded);
+  onDiscoveryLoadedRef.current = onDiscoveryLoaded;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rawTotem, setRawTotem] = useState<TotemApiResponse | null>(null);
@@ -4917,7 +4946,10 @@ function TotemVisualizer({
   // drawn — `shownTotem`, `layers`, `allEdges`, `layoutInfo` — belongs to the
   // last response whose layout is done, so the previous hierarchy stays on
   // screen until the new one is laid out.
-  const latestLayers = useMemo(() => (rawTotem ? buildLayersFromBackend(rawTotem) : []), [rawTotem]);
+  const latestLayers = useMemo(
+    () => compositionLayers ?? (rawTotem ? buildLayersFromBackend(rawTotem) : []),
+    [rawTotem, compositionLayers],
+  );
   const baseEdges = useMemo(
     () => extractEdges(rawTotem?.tempgraph),
     [rawTotem?.tempgraph],
@@ -5114,10 +5146,20 @@ function TotemVisualizer({
       });
       if (!isCurrent()) return;
       setRawTotem(payload);
+      onDiscoveryLoadedRef.current?.({
+        algorithm,
+        filtered: filterEnabled,
+        layers: payload.layers ?? [],
+        objectTypeToActivities: payload.object_type_to_event_types ?? {},
+        allObjectTypes:
+          payload.tempgraph?.nodes ?? Object.keys(payload.object_type_to_event_types ?? {}),
+        allActivities: payload.all_event_types ?? [],
+      });
       // Share the result so other components (the Variants Explorer's
       // resource-aware mode) can pick one of these areas without recomputing.
+      // A shown composition is published by its owner instead.
       const numericFileId = Number(eventLogId);
-      if (Number.isFinite(numericFileId) && numericFileId > 0) {
+      if (Number.isFinite(numericFileId) && numericFileId > 0 && !compositionActiveRef.current) {
         useProcessAreaStore.getState().publish({
           fileId: numericFileId,
           algorithm,
@@ -6166,6 +6208,30 @@ function TotemVisualizer({
                                   zIndex: 2,
                                 }}
                               />
+                              {area.name ? (
+                                <span
+                                  data-testid="process-area-name"
+                                  title={area.name}
+                                  style={{
+                                    position: 'absolute',
+                                    bottom: '100%',
+                                    left: processAreaRadius / 2,
+                                    maxWidth: `calc(100% - ${processAreaRadius}px)`,
+                                    marginBottom: 2,
+                                    fontSize: 11,
+                                    fontWeight: 600,
+                                    lineHeight: 1.3,
+                                    color: '#1E3A8A',
+                                    whiteSpace: 'nowrap',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    pointerEvents: 'none',
+                                    zIndex: 3,
+                                  }}
+                                >
+                                  {area.name}
+                                </span>
+                              ) : null}
                               <ProcessAreaFilterAction
                                 fileId={eventLogId}
                                 area={area}

@@ -27,6 +27,15 @@ The currently supported asset types are:
   (structurally validated in `backend/api/asset_formats.py`)
 - `OCDFG` — the canonical `schema: "ocdfg"` JSON of the OC-DFG editor
   (structurally validated in `backend/api/asset_formats.py`)
+- `PROCESS_AREAS` — a named process-area composition, `schema: "process-areas"`
+  (validated by `validate_process_areas_asset_dict` in
+  `backend/api/asset_formats.py`). Levels are numbered from 0 (core business
+  objects) upwards; every area has a stable `id`, a `name` unique within the
+  composition, its `objectTypes` (an object type is in at most one area) and its
+  `activities`. The asset name is the composition name. Created in the Process
+  Area view's editor (`frontend/src/react_component/process-area/`); the
+  Variants and Process Area dashboard components link one through
+  `process_area_asset` / `composition_asset`.
 
 `OCPN` and `OCCN` assets can be executed by the playout view; `TOTEM` and
 `OCCN` assets can be used for conformance checking and opened in their

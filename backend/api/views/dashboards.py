@@ -177,6 +177,24 @@ def _query_asset_for(item, dashboard, request):
     ).first()
 
 
+def _process_area_asset_for(item, key, dashboard, request):
+    """The process-area composition (``PROCESS_AREAS`` asset) a layout item
+    links under ``key``; own project only, anything else unlinks."""
+    asset_id = item.get(key)
+    if not asset_id:
+        return None
+    try:
+        asset_id = int(asset_id)
+    except (TypeError, ValueError):
+        return None
+    return ProjectAsset.objects.filter(
+        pk=asset_id,
+        project=dashboard.project,
+        project__users=request.user,
+        asset_type=ProjectAsset.AssetType.PROCESS_AREAS,
+    ).first()
+
+
 def _ocpn_asset_for(item, dashboard, request):
     """The OCPN model asset an alignment widget links (own project only)."""
     asset_id = item.get("model_asset")
@@ -561,6 +579,9 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     area_variant_column=str(
                         item.get("area_variant_column") or "variant-cc-process-areas"
                     )[:64],
+                    process_area_asset=_process_area_asset_for(
+                        item, "process_area_asset", dashboard, request
+                    ),
                 )
             elif component_name == "ProcessAreaComponent":
                 ProcessAreaComponent.objects.create(
@@ -576,6 +597,9 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     w_divergence=item.get("w_divergence", 1.0),
                     alpha=item.get("alpha", 2.0),
                     beta=item.get("beta", 1.0),
+                    composition_asset=_process_area_asset_for(
+                        item, "composition_asset", dashboard, request
+                    ),
                 )
             elif component_name == "TotemMinerComponent":
                 TotemMinerComponent.objects.create(

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { AlertTriangle, LoaderCircle, RefreshCcw, RefreshCw, Search } from "lucide-react";
+import { AlertTriangle, LoaderCircle, RefreshCw, Search } from "lucide-react";
 
 import type { ProjectAsset } from "@/api/assetsApi";
 import type { EventColumnInfo } from "@/api/occnConformanceApi";
@@ -9,12 +9,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { MultiSelectPopover } from "@/react_component/variants/MultiSelectPopover";
-import { processAreaOptionLabel } from "@/react_component/variants/settings";
+import { ProcessAreaPicker } from "@/react_component/process-area/ProcessAreaPicker";
 import type { ProcessAreasSnapshot } from "@/store/processAreaStore";
 
-import { matchingArea, type OCAlignmentSettings } from "./settings";
-
-const NO_AREA = "__custom__";
+import type { OCAlignmentSettings } from "./settings";
 
 function Field({ label, htmlFor, hint, children }: {
   label: string; htmlFor?: string; hint?: React.ReactNode; children: React.ReactNode;
@@ -79,7 +77,6 @@ export function OCAlignmentSettingsPanel(props: OCAlignmentSettingsPanelProps) {
   // A different source invalidates the selected execution.
   const updateSource = (patch: Partial<OCAlignmentSettings>) =>
     onChange({ ...settings, ...patch, executionId: "" });
-  const selectedAreaId = matchingArea(settings, processAreas?.areas ?? []);
   const grid = compact ? "grid gap-3" : "grid gap-4 md:grid-cols-2 xl:grid-cols-3";
 
   return (
@@ -185,45 +182,21 @@ export function OCAlignmentSettingsPanel(props: OCAlignmentSettingsPanelProps) {
                 : areasError ?? "No process areas computed for this log yet."
             }
           >
-            {processAreas ? (
-              <Select
-                value={selectedAreaId ?? NO_AREA}
-                onValueChange={(value) => {
-                  const area = processAreas.areas.find((a) => a.id === value);
-                  if (!area) return;
-                  updateSource({
-                    businessObjectTypes: [...area.objectTypes].sort((a, b) => a.localeCompare(b)),
-                    businessActivities: [...area.activities].sort((a, b) => a.localeCompare(b)),
-                  });
-                }}
-                disabled={disabled || processAreas.areas.length === 0}
-              >
-                <SelectTrigger aria-label="Process area" className="w-full">
-                  <SelectValue placeholder="Pick a process area" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={NO_AREA} disabled>
-                    {settings.businessObjectTypes.length ? "Manual selection" : "Pick a process area"}
-                  </SelectItem>
-                  {processAreas.areas.map((area) => (
-                    <SelectItem key={area.id} value={area.id}>
-                      {processAreaOptionLabel(area)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            ) : (
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full"
-                onClick={onComputeAreas}
-                disabled={disabled || areasLoading}
-              >
-                {areasLoading ? <LoaderCircle className="animate-spin" /> : <RefreshCcw />}
-                Compute process areas
-              </Button>
-            )}
+            <ProcessAreaPicker
+              current={processAreas}
+              selectedObjectTypes={settings.businessObjectTypes}
+              selectedActivities={settings.businessActivities}
+              onPick={(area) =>
+                updateSource({
+                  businessObjectTypes: [...area.objectTypes].sort((a, b) => a.localeCompare(b)),
+                  businessActivities: [...area.activities].sort((a, b) => a.localeCompare(b)),
+                })
+              }
+              onComputeCurrent={onComputeAreas}
+              computeLoading={areasLoading}
+              computeError={areasError}
+              disabled={disabled}
+            />
           </Field>
         )}
 
