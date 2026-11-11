@@ -1373,7 +1373,7 @@ export const ProcessAreaComponent: React.FC<ComponentProps> = ({
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">
-              Compositions are adjusted with “Adjust” in view mode and stored in the project assets.
+              Compositions are edited on the canvas (“Edit” in view mode) and stored in the project assets.
             </p>
           </div>
           <div className="flex items-center justify-between">

@@ -33,7 +33,7 @@ The currently supported asset types are:
   objects) upwards; every area has a stable `id`, a `name` unique within the
   composition, its `objectTypes` (an object type is in at most one area) and its
   `activities`. The asset name is the composition name. Created in the Process
-  Area view's editor (`frontend/src/react_component/process-area/`); the
+  Area view's edit mode (`frontend/src/react_component/process-area/`); the
   Variants and Process Area dashboard components link one through
   `process_area_asset` / `composition_asset`.
 

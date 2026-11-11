@@ -596,8 +596,13 @@ export function withoutEmptyLevels(c: ProcessAreaComposition): ProcessAreaCompos
  * Layers for the visualizer, highest level first (the order it draws in),
  * with the area names as labels.
  */
-export function compositionToLayers(c: ProcessAreaComposition): VisualLayer[] {
-  const compact = withoutEmptyLevels(c);
+export function compositionToLayers(
+  c: ProcessAreaComposition,
+  options: { keepEmptyLevels?: boolean } = {},
+): VisualLayer[] {
+  // While editing, empty levels stay on the canvas so things can be dropped
+  // onto them; level numbers are then the indices in `c.levels`.
+  const compact = options.keepEmptyLevels ? c : withoutEmptyLevels(c);
   return compact.levels
     .map((level, levelIndex) => ({
       level: levelIndex,
@@ -610,7 +615,7 @@ export function compositionToLayers(c: ProcessAreaComposition): VisualLayer[] {
         activities: [...area.activities],
       })),
     }))
-    .filter((layer) => layer.areas.length > 0)
+    .filter((layer) => options.keepEmptyLevels || layer.areas.length > 0)
     .reverse();
 }
 

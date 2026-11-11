@@ -235,6 +235,13 @@ describe('conversions', () => {
     expect(layers[0].areas[0]).toMatchObject({ label: 'Staff & fleet', level: 1 });
   });
 
+  it('keeps empty levels for the editable canvas, numbered by their index', () => {
+    const c = insertLevel(discovered(), 1);
+    expect(compositionToLayers(c).map((l) => l.level)).toEqual([1, 0]);
+    const editing = compositionToLayers(c, { keepEmptyLevels: true });
+    expect(editing.map((l) => [l.level, l.areas.length])).toEqual([[2, 1], [1, 0], [0, 2]]);
+  });
+
   it('names areas after their object types by default', () => {
     expect(autoAreaName(['b', 'a'])).toBe('a & b');
   });

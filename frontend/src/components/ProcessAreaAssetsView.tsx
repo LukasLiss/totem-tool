@@ -3,7 +3,7 @@
  * store. Lists the stored process-area compositions with their named areas
  * and lets the user open one in the Process Area view, rename, download or
  * delete it. Compositions are created and edited in the Process Area view
- * ("Adjust" → "Save to project assets").
+ * ("Edit" on the canvas → "Save").
  */
 import { useContext, useMemo, useState } from "react";
 import { AlertCircle, Download, ExternalLink, Layers, Pencil, Trash2 } from "lucide-react";
@@ -126,7 +126,7 @@ export function ProcessAreaAssetsView() {
           ) : rows.length === 0 ? (
             <EmptyState
               title="No stored process areas"
-              description="Open the Process Area view, click “Adjust” to move object types between areas and levels, name the areas, and save the composition to the project assets."
+              description="Open the Process Area view, click “Edit” and drag object types between areas and levels right on the canvas, name the areas, and save the composition."
             />
           ) : (
             <Card className="overflow-hidden py-0">

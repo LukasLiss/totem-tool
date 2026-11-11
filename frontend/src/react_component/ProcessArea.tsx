@@ -25,7 +25,27 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Layers, Pencil, RefreshCcw, Save, SlidersHorizontal } from 'lucide-react';
+import {
+  AlertTriangle,
+  Check,
+  CircleAlert,
+  Layers,
+  MoreHorizontal,
+  Pencil,
+  Redo2,
+  RefreshCcw,
+  RotateCcw,
+  Save,
+  SlidersHorizontal,
+  Undo2,
+} from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
 import TotemVisualizer, {
   type ProcessAreaDiscoveryInfo,
@@ -37,12 +57,18 @@ import { createProcessAreaAsset, updateProcessAreaAsset } from '@/api/processAre
 import { useProcessAreaAssets, useProcessAreaAssetsStore } from '@/store/processAreaAssetsStore';
 import { useProcessAreaStore } from '@/store/processAreaStore';
 import { mapTypesToColors } from '@/utils/objectColors';
-import { ProcessAreaEditor } from './process-area/ProcessAreaEditor';
+import { AreaInspector } from './process-area/ProcessAreaInspector';
+import { useCompositionEditor } from './process-area/useCompositionEditor';
+import type { ProcessAreaCanvasEditing } from './process-area/canvasEditing';
 import {
   compositionFromLayers,
   compositionToLayers,
   fromAssetContent,
+  activityOwners,
+  findArea,
   hasBlockingProblems,
+  sameComposition,
+  withoutEmptyLevels,
   type ProcessAreaComposition,
 } from './process-area/composition';
 import { discoveredSnapshotAreas } from './variants/variantsApi';
@@ -133,7 +159,9 @@ export default function ProcessArea({
   const [composition, setComposition] = useState<ProcessAreaComposition | null>(null);
   /** Applied edits that are not stored in the project assets yet. */
   const [dirty, setDirty] = useState(false);
-  const [editorOpen, setEditorOpen] = useState(false);
+  const editor = useCompositionEditor(discovery?.objectTypeToActivities ?? {});
+  const [selectedAreaId, setSelectedAreaId] = useState<string | null>(null);
+  const [nameError, setNameError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const numericFileId = Number(fileId);
   const validFileId = Number.isFinite(numericFileId) && numericFileId > 0 ? numericFileId : null;
@@ -203,9 +231,15 @@ export default function ProcessArea({
         : null,
     [discovery, storedAssets.assets, validFileId],
   );
+  const draft = editor.draft;
   const compositionLayers = useMemo(
-    () => (composition ? compositionToLayers(composition) : null),
-    [composition],
+    () =>
+      draft
+        ? compositionToLayers(draft, { keepEmptyLevels: true })
+        : composition
+          ? compositionToLayers(composition)
+          : null,
+    [draft, composition],
   );
   const typeColors = useMemo(
     () => mapTypesToColors(discovery?.allObjectTypes ?? []),
@@ -250,10 +284,100 @@ export default function ProcessArea({
     if (loadAsset(assetId)) onCompositionAssetChange?.(assetId);
   };
 
+  // ---- in-place editing ----------------------------------------------------
+  const editorSeed = composition ?? discoveredComposition;
+  const startEditing = () => {
+    if (!editorSeed) return;
+    editor.start(editorSeed);
+    setSelectedAreaId(null);
+    setNameError(null);
+  };
+  const cancelEditing = () => {
+    editor.stop();
+    setSelectedAreaId(null);
+  };
+  /** Use the edited areas without saving them. */
+  const finishEditing = () => {
+    if (!draft || editor.errors.length > 0) return;
+    const next = withoutEmptyLevels({ ...draft, name: draft.name.trim() });
+    if (!composition || !sameComposition(next, composition)) {
+      setComposition(next);
+      setDirty(true);
+    }
+    cancelEditing();
+  };
+  const saveEditing = async (asNew: boolean) => {
+    if (!draft || !projectId || editor.errors.length > 0) return;
+    const next = withoutEmptyLevels({ ...draft, name: draft.name.trim() });
+    setSaving(true);
+    setNameError(null);
+    try {
+      const asset =
+        activeAssetId && !asNew
+          ? await updateProcessAreaAsset({ assetId: activeAssetId, composition: next })
+          : await createProcessAreaAsset({ projectId, composition: next });
+      upsertAsset(asset);
+      setComposition({ ...next, name: asset.name, source: { kind: 'asset', assetId: asset.id } });
+      setDirty(false);
+      onCompositionAssetChange?.(asset.id);
+      toast.success(`Saved process areas "${asset.name}" to the project assets.`);
+      cancelEditing();
+    } catch (error) {
+      const parsed = extractAssetApiError(error);
+      const field = parsed.fields?.name;
+      if (field) {
+        const message = Array.isArray(field) ? String(field[0]) : String(field);
+        setNameError(message);
+        toast.error(`${message} Rename the composition to save it.`);
+      } else {
+        toast.error(`Saving failed: ${parsed.message}`);
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const invalidAreaIds = useMemo(
+    () => new Set(editor.errors.map((p) => p.areaId).filter((id): id is string => Boolean(id))),
+    [editor.errors],
+  );
+  const canvasEditing: ProcessAreaCanvasEditing | null = draft
+    ? {
+        selectedAreaId,
+        invalidAreaIds,
+        unassigned: draft.unassigned,
+        levelCount: draft.levels.length,
+        onSelectArea: setSelectedAreaId,
+        onMoveObjectType: editor.moveObjectType,
+        onMoveArea: editor.moveArea,
+        onInsertLevel: editor.insertLevel,
+        onRemoveLevel: editor.removeLevel,
+      }
+    : null;
+  const selected = draft && selectedAreaId ? findArea(draft, selectedAreaId) : null;
+  useEffect(() => {
+    if (selectedAreaId && draft && !findArea(draft, selectedAreaId)) setSelectedAreaId(null);
+  }, [draft, selectedAreaId]);
+  const owners = useMemo(() => (draft ? activityOwners(draft) : new Map<string, string[]>()), [draft]);
+
+  const onEditKeyDown = (event: React.KeyboardEvent) => {
+    if (!draft) return;
+    const target = event.target as HTMLElement;
+    if (target.closest('input, textarea, [contenteditable="true"]')) return;
+    if (event.key === 'Escape' && selectedAreaId) {
+      setSelectedAreaId(null);
+      return;
+    }
+    if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'z') return;
+    event.preventDefault();
+    if (event.shiftKey) editor.redo();
+    else editor.undo();
+  };
+
   const saveDirectly = async () => {
     if (!composition || !projectId) return;
     if (hasBlockingProblems(composition)) {
-      setEditorOpen(true);
+      startEditing();
       return;
     }
     setSaving(true);
@@ -268,14 +392,12 @@ export default function ProcessArea({
       toast.success(`Saved process areas "${asset.name}" to the project assets.`);
     } catch (error) {
       toast.error(`Saving failed: ${extractAssetApiError(error).message}`);
-      setEditorOpen(true);
     } finally {
       setSaving(false);
     }
   };
 
   const sourceValue = composition ? (activeAssetId ? `asset:${activeAssetId}` : UNSAVED) : DISCOVERED;
-  const editorSeed = composition ?? discoveredComposition;
 
   const handleControlsReady = useCallback((controls: TotemVisualizerControls) => {
     setTotemControls(controls);
@@ -305,6 +427,7 @@ export default function ProcessArea({
         onSettingsChange={onSettingsChange}
         compositionLayers={compositionLayers}
         onDiscoveryLoaded={handleDiscoveryLoaded}
+        editing={canvasEditing}
       />
     </ReactFlowProvider>
   );
@@ -328,6 +451,112 @@ export default function ProcessArea({
           <LocalFilterDropdown fileId={fileId} onFilterChange={setLocalFilterParams} />
         </div>
         <CardAction className="flex flex-wrap items-center justify-end gap-2">
+          {draft ? (
+            <>
+              <div className="flex flex-col">
+                <Input
+                  aria-label="Composition name"
+                  value={draft.name}
+                  placeholder="Composition name"
+                  maxLength={100}
+                  onFocus={editor.beginTextEdit}
+                  onChange={(event) => {
+                    setNameError(null);
+                    editor.renameComposition(event.target.value);
+                  }}
+                  aria-invalid={nameError !== null || !draft.name.trim()}
+                  title={nameError ?? 'The name other components list this composition under'}
+                  className="h-8 w-[220px]"
+                />
+              </div>
+              <ProblemsBadge problems={editor.problems} onSelectArea={setSelectedAreaId} />
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="h-8 w-8"
+                onClick={editor.undo}
+                disabled={!editor.canUndo}
+                title="Undo (Ctrl+Z)"
+                aria-label="Undo"
+              >
+                <Undo2 className="h-4 w-4" />
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="h-8 w-8"
+                onClick={editor.redo}
+                disabled={!editor.canRedo}
+                title="Redo (Ctrl+Shift+Z)"
+                aria-label="Redo"
+              >
+                <Redo2 className="h-4 w-4" />
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button type="button" variant="outline" size="icon" className="h-8 w-8" aria-label="More editing actions">
+                    <MoreHorizontal className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-64">
+                  <DropdownMenuItem onSelect={editor.resetAllActivities}>
+                    <RotateCcw className="h-4 w-4" />
+                    Reset all activities to defaults
+                  </DropdownMenuItem>
+                  {discoveredComposition ? (
+                    <DropdownMenuItem
+                      onSelect={() =>
+                        editor.replace({ ...discoveredComposition, name: draft.name, description: draft.description })
+                      }
+                    >
+                      <Layers className="h-4 w-4" />
+                      Start over from the discovered areas
+                    </DropdownMenuItem>
+                  ) : null}
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <div className="w-px h-6 bg-border" />
+              <Button type="button" variant="ghost" size="sm" onClick={cancelEditing}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={finishEditing}
+                disabled={editor.errors.length > 0}
+                title={editor.errors[0]?.message ?? 'Show these process areas without saving them'}
+              >
+                <Check className="h-4 w-4" />
+                Done
+              </Button>
+              {activeAssetId ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void saveEditing(true)}
+                  disabled={saving || !projectId || editor.errors.length > 0}
+                >
+                  Save as new
+                </Button>
+              ) : null}
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => void saveEditing(false)}
+                disabled={saving || !projectId || editor.errors.length > 0}
+                title={editor.errors[0]?.message}
+                data-testid="pa-save"
+              >
+                <Save className="h-4 w-4" />
+                {saving ? 'Saving…' : activeAssetId ? 'Save changes' : 'Save'}
+              </Button>
+            </>
+          ) : (
+            <>
           <Select value={sourceValue} onValueChange={handleSourceChange}>
             <SelectTrigger
               className="h-8 w-[220px]"
@@ -361,7 +590,7 @@ export default function ProcessArea({
             type="button"
             variant="outline"
             size="sm"
-            onClick={() => setEditorOpen(true)}
+            onClick={startEditing}
             disabled={!editorSeed}
             title={
               editorSeed
@@ -370,7 +599,7 @@ export default function ProcessArea({
             }
           >
             <Pencil className="h-4 w-4" />
-            Adjust
+            Edit
           </Button>
           {composition && (dirty || !activeAssetId) ? (
             <Button
@@ -472,36 +701,106 @@ export default function ProcessArea({
             <RefreshCcw className="h-4 w-4" />
             Reload
           </Button>
+            </>
+          )}
         </CardAction>
       </CardHeader>
       <CardContent
-        className={`p-0 ${fillContainer ? 'flex-1 min-h-0' : ''}`}
+        className={`relative p-0 ${fillContainer ? 'flex-1 min-h-0' : ''}`}
         style={fillContainer ? undefined : { height: heightStyle }}
+        onKeyDown={onEditKeyDown}
       >
         {visualizerContent}
+        {draft && !selected ? (
+          <div
+            className="pointer-events-none absolute bottom-3 left-1/2 z-30 -translate-x-1/2 rounded-full border bg-background/95 px-3 py-1 text-[11px] text-muted-foreground shadow-sm"
+            data-testid="pa-edit-hint"
+          >
+            Drag object types onto other areas or onto <span className="font-medium">+ New process area</span> · drag
+            an area by ⠿ · click an area to name it · add or remove levels next to each level
+          </div>
+        ) : null}
+        {draft && selected ? (
+          <aside
+            className="absolute inset-y-0 right-0 z-40 w-[340px] max-w-full overflow-auto border-l bg-background p-4 shadow-lg"
+            data-testid="pa-docked-inspector"
+          >
+            <AreaInspector
+              key={selected.area.id}
+              area={selected.area}
+              levelIndex={selected.levelIndex}
+              draft={draft}
+              owners={owners}
+              objectTypeToActivities={discovery?.objectTypeToActivities ?? {}}
+              allActivities={discovery?.allActivities ?? []}
+              typeColors={typeColors}
+              onClose={() => setSelectedAreaId(null)}
+              onRename={(name) => editor.renameArea(selected.area.id, name)}
+              onRenameFocus={editor.beginTextEdit}
+              onSetActivities={(activities) => editor.setActivities(selected.area.id, activities)}
+              onResetActivities={() => editor.resetActivities(selected.area.id)}
+              onMoveType={editor.moveObjectType}
+              onMoveArea={(target) => editor.moveArea(selected.area.id, target)}
+            />
+          </aside>
+        ) : null}
       </CardContent>
-      {editorSeed ? (
-        <ProcessAreaEditor
-          open={editorOpen}
-          onOpenChange={setEditorOpen}
-          initial={editorSeed}
-          discovered={discoveredComposition}
-          objectTypeToActivities={discovery?.objectTypeToActivities ?? {}}
-          allActivities={discovery?.allActivities ?? []}
-          typeColors={typeColors}
-          projectId={projectId}
-          assetId={activeAssetId}
-          onApply={(next) => {
-            setComposition(next);
-            setDirty(true);
-          }}
-          onSaved={(next, asset) => {
-            setComposition({ ...next, name: asset.name });
-            setDirty(false);
-            onCompositionAssetChange?.(asset.id);
-          }}
-        />
-      ) : null}
     </Card>
+  );
+}
+
+/** Blocking errors / warnings of the edited composition, listed on click. */
+function ProblemsBadge({
+  problems,
+  onSelectArea,
+}: {
+  problems: Array<{ severity: 'error' | 'warning'; message: string; areaId?: string }>;
+  onSelectArea: (areaId: string) => void;
+}) {
+  const errors = problems.filter((p) => p.severity === 'error').length;
+  if (problems.length === 0) {
+    return (
+      <span className="flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-400" title="No problems">
+        <Check className="h-3.5 w-3.5" />
+      </span>
+    );
+  }
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className={`h-8 gap-1 px-2 text-xs ${errors ? 'border-destructive/50 text-destructive' : 'text-amber-700 dark:text-amber-400'}`}
+          aria-label="Checks"
+          data-testid="pa-checks"
+        >
+          {errors ? <CircleAlert className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />}
+          {errors ? `${errors} to fix` : `${problems.length}`}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 space-y-1">
+        <p className="text-xs font-medium">Checks</p>
+        {problems.map((problem, index) => (
+          <button
+            key={index}
+            type="button"
+            disabled={!problem.areaId}
+            onClick={() => problem.areaId && onSelectArea(problem.areaId)}
+            className={`flex w-full items-start gap-1.5 rounded px-1 py-0.5 text-left text-xs enabled:hover:bg-muted ${
+              problem.severity === 'error' ? 'text-destructive' : 'text-amber-700 dark:text-amber-400'
+            }`}
+          >
+            {problem.severity === 'error' ? (
+              <CircleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            ) : (
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            )}
+            {problem.message}
+          </button>
+        ))}
+      </PopoverContent>
+    </Popover>
   );
 }

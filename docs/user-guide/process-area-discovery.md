@@ -47,31 +47,33 @@ form a process area (the blue boxes).
 
 ## Adjusting process areas by hand
 
-A discovery is a proposal. Click **Adjust** in the header of the card to change it in an editor:
+A discovery is a proposal. Click **Edit** in the header of the card to change the process areas
+right on the canvas:
 
-![Process area editor with the levels on the left and the selected area's name and activities on the right](images/process-area-editor.png)
+![Process Area Visualizer in edit mode with the panel of the selected area on the right](images/process-area-editor.png)
 
-- **Move an object type to another process area**: drag its chip onto the area.
-- **Take an object type out of its process area**: drag it onto the dashed free space of a level.
-  It becomes a separate process area on that level. Use this also to move an object type to
-  another level.
-- **Move a whole process area**: drag it by its handle (⠿) onto another level, or onto another
-  area to merge the two. The ⋯ menu of an area offers the same moves, plus *Dissolve*.
-- **Add and remove levels**: use **+ Add level** on top, at the bottom, or between two levels.
-  The bin next to a level removes it; its object types move to *Not in any process area*.
-  Empty levels are dropped when the composition is applied.
-- **Activities**: click an area to edit it in the panel on the right. Check the activities that
-  belong to the area; activities of other object types of the log are listed under *Other
-  activities*. **Defaults** restores the discovery's rule (every activity of the area's object
-  types that no lower area claims). Moving object types updates the activities automatically.
-- **Names**: give the composition a name (top) and every process area a name (right panel).
-  Area names must be unique within a composition, so other parts of the tool can refer to an
-  area by its name.
-- Every move also has a menu equivalent (the ⋯ next to each object type), and **Undo / Redo**
-  (Ctrl+Z / Ctrl+Shift+Z) work for every change.
+- **Move an object type to another process area**: drag its node onto the area.
+- **Take an object type out of its process area**: drag it onto **+ New process area** next to a
+  level. It becomes a separate process area on that level. Use this also to move an object type
+  to another level. Dropping it on **Not in any process area** (top left) takes it out of every
+  area.
+- **Move a whole process area**: drag it by its handle (⠿, top left of the area) onto
+  **+ New process area** of another level, or onto another area to merge the two.
+- **Add and remove levels**: next to each level's name, **+↑** and **+↓** insert a level above or
+  below it and the bin removes it (its object types move to *Not in any process area*). Empty
+  levels are dropped when you finish editing.
+- **Name and activities**: click an area to open its panel on the right. Name the area and check
+  the activities that belong to it; activities of other object types of the log are listed under
+  *Other activities*. **Defaults** restores the discovery's rule (every activity of the area's
+  object types that no lower area claims). Moving object types updates the activities
+  automatically. The panel's ⋯ menus offer every move without dragging.
+- **Composition name**: in the header. Area names must be unique within a composition, so other
+  parts of the tool can refer to an area by its name; the ⚠ badge lists what still needs fixing.
+- **Undo / Redo** (Ctrl+Z / Ctrl+Shift+Z) work for every change; **Cancel** discards them.
 
-**Apply without saving** shows the adjusted areas in the visualizer for this session.
-**Save to project assets** stores the composition as a *Process Areas* asset of the project.
+**Done** shows the adjusted areas for this session without saving them. **Save** stores the
+composition as a *Process Areas* asset of the project (*Save changes* / *Save as new* when you
+edit a stored one).
 
 ## Stored process areas
 

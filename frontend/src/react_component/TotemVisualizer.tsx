@@ -14,7 +14,7 @@ import {
   CardAction,
 } from '@/components/ui/card';
 import { VisualizerEmptyState } from '@/components/ui/VisualizerEmptyState';
-import { RefreshCcw } from 'lucide-react';
+import { ArrowDown, ArrowUp, Plus, RefreshCcw } from 'lucide-react';
 
 import { mapTypesToColors, textColorForBackground } from '../utils/objectColors';
 import OCDFGDetailVisualizer from './OCDFGDetailVisualizer';
@@ -75,6 +75,13 @@ import {
 } from './processAreaParams';
 import { useGridLayout } from './process-area/useGridLayout';
 import { detailActivityRestriction } from './process-area/detailActivities';
+import {
+  dropTargetKey,
+  type CanvasDragItem,
+  type ProcessAreaCanvasEditing,
+} from './process-area/canvasEditing';
+import type { DropTarget } from './process-area/composition';
+import { RemoveLevelButton } from './process-area/ProcessAreaInspector';
 import { useTouchMouseBridge } from '@/hooks/use-touch-mouse-bridge';
 
 /** Every committed slider change is a backend round-trip; don't fire per pixel. */
@@ -135,6 +142,13 @@ type TotemVisualizerProps = {
   compositionLayers?: ProcessLayer[] | null;
   /** Fired with every discovery result. */
   onDiscoveryLoaded?: (info: ProcessAreaDiscoveryInfo) => void;
+  /**
+   * Makes the canvas editable in place: object types can be dragged onto
+   * other process areas or levels, areas by their handle, levels added and
+   * removed, and a click selects an area instead of opening its details.
+   * `compositionLayers` must then include empty levels.
+   */
+  editing?: ProcessAreaCanvasEditing | null;
 };
 
 type RelationType = 'P' | 'D' | 'I' | 'A';
@@ -182,6 +196,10 @@ const CORNER_RADIUS = 16;
 const ARC_STROKE_WIDTH = 2.6;
 // Largest side length of the square cap of a during arc.
 const DEPENDENT_CAP_MAX_SIZE = 18;
+// Longest arrow head of a preceding arc. The head scales with the final
+// segment of short approaches; without a cap, a long straight approach (two
+// areas far apart on one level) turned the head into a wedge across the gap.
+const PRECEDING_ARROW_MAX_LENGTH = 22;
 // Thickness of the two bars at each end of a parallel arc.
 const PARALLEL_BAR_STROKE_WIDTH = 4.5;
 
@@ -2123,7 +2141,7 @@ function recalculateEdgeDecorations(
     // Recalculate arrow head
     const maxApproach = Math.max(finalSegmentLength - 4 * edgeScale, 0);
     const baseArrowLength = Math.min(
-      Math.max(18, finalSegmentLength * 0.45),
+      Math.min(Math.max(18, finalSegmentLength * 0.45), PRECEDING_ARROW_MAX_LENGTH),
       maxApproach,
     );
     const arrowLength = Math.min(baseArrowLength * edgeScale, maxApproach);
@@ -2922,7 +2940,7 @@ function computeEdgeSegments(
       // Use final segment length to size the arrow appropriately for the actual approach distance
       const maxApproach = Math.max(finalSegmentLength - 4 * edgeScale, 0);
       const baseArrowLength = Math.min(
-        Math.max(18, finalSegmentLength * 0.45),
+        Math.min(Math.max(18, finalSegmentLength * 0.45), PRECEDING_ARROW_MAX_LENGTH),
         maxApproach,
       );
       const arrowLength = Math.min(baseArrowLength * edgeScale, maxApproach);
@@ -4292,6 +4310,30 @@ function detailSignature(area: ProcessAreaDefinition, detailedView: boolean): st
   ]);
 }
 
+/** Small control in a level's legend of the editable canvas. */
+function LevelControlButton({
+  label,
+  onClick,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      data-totem-control
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      className="flex h-6 items-center rounded-md border border-slate-200 bg-white px-1 text-slate-500 transition hover:border-blue-500 hover:text-blue-600"
+    >
+      {children}
+    </button>
+  );
+}
+
 function TotemVisualizer({
   eventLogId,
   height = '100%',
@@ -4308,6 +4350,7 @@ function TotemVisualizer({
   onSettingsChange,
   compositionLayers,
   onDiscoveryLoaded,
+  editing = null,
 }: TotemVisualizerProps) {
   const filterVersion = useFilterVersion();
   const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
@@ -4407,6 +4450,10 @@ function TotemVisualizer({
   const [detailedOcdfgView, setDetailedOcdfgView] = useState(false);
   /** Per area: `detailSignature` of the graph last requested for it. */
   const detailSignatureRef = useRef<Record<string, string>>({});
+  /** In-place editing: what is being dragged and which target is hovered. */
+  const [canvasDrag, setCanvasDrag] = useState<CanvasDragItem | null>(null);
+  const [dropHover, setDropHover] = useState<string | null>(null);
+  const isEditing = editing !== null;
   const [legendOffsets, setLegendOffsets] = useState<Record<number, number>>({});
   const [processAreaScale, setProcessAreaScale] = useState(DEFAULT_PROCESS_AREA_SCALE);
   const [smoothedProcessAreaScale, setSmoothedProcessAreaScale] = useState(DEFAULT_PROCESS_AREA_SCALE);
@@ -4899,6 +4946,89 @@ function TotemVisualizer({
     () => compositionLayers ?? (rawTotem ? buildLayersFromBackend(rawTotem) : []),
     [rawTotem, compositionLayers],
   );
+
+  // ── In-place editing (drag & drop on the canvas) ─────────────────────────
+  const typeLocation = useMemo(() => {
+    const map = new Map<string, { areaId: string; level: number }>();
+    latestLayers.forEach((layer) =>
+      layer.areas.forEach((area) =>
+        area.objectTypes.forEach((t) => map.set(t, { areaId: area.id, level: layer.level })),
+      ),
+    );
+    return map;
+  }, [latestLayers]);
+  const areaLevel = useMemo(() => {
+    const map = new Map<string, { level: number; size: number }>();
+    latestLayers.forEach((layer) =>
+      layer.areas.forEach((area) => map.set(area.id, { level: layer.level, size: area.objectTypes.length })),
+    );
+    return map;
+  }, [latestLayers]);
+
+  const canDropOn = (target: DropTarget): boolean => {
+    if (!editing || !canvasDrag) return false;
+    if (canvasDrag.kind === 'type') {
+      const from = typeLocation.get(canvasDrag.objectType);
+      if (target.kind === 'area') return from?.areaId !== target.areaId;
+      if (target.kind === 'unassigned') return Boolean(from);
+      // A lone type onto a new area of its own level would change nothing.
+      return !(from && from.level === target.levelIndex && areaLevel.get(from.areaId)?.size === 1);
+    }
+    const located = areaLevel.get(canvasDrag.areaId);
+    if (!located) return false;
+    if (target.kind === 'area') return target.areaId !== canvasDrag.areaId;
+    if (target.kind === 'newArea') return target.levelIndex !== located.level;
+    return true;
+  };
+
+  const dropHandlers = (target: DropTarget) =>
+    editing
+      ? {
+          onDragOver: (event: React.DragEvent) => {
+            if (!canDropOn(target)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            event.dataTransfer.dropEffect = 'move';
+            const key = dropTargetKey(target);
+            if (dropHover !== key) setDropHover(key);
+          },
+          onDragLeave: (event: React.DragEvent) => {
+            if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+            const key = dropTargetKey(target);
+            setDropHover((current) => (current === key ? null : current));
+          },
+          onDrop: (event: React.DragEvent) => {
+            if (!canvasDrag || !canDropOn(target)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            if (canvasDrag.kind === 'type') editing.onMoveObjectType(canvasDrag.objectType, target);
+            else editing.onMoveArea(canvasDrag.areaId, target);
+            setCanvasDrag(null);
+            setDropHover(null);
+          },
+        }
+      : {};
+
+  const dragHandlers = (item: CanvasDragItem) =>
+    editing
+      ? {
+          draggable: true,
+          'data-totem-control': true,
+          onDragStart: (event: React.DragEvent) => {
+            event.stopPropagation();
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('text/plain', item.kind === 'type' ? item.objectType : item.areaId);
+            setTooltipState(null);
+            setCanvasDrag(item);
+          },
+          onDragEnd: () => {
+            setCanvasDrag(null);
+            setDropHover(null);
+          },
+        }
+      : {};
+
+  const isDropHover = (target: DropTarget) => dropHover === dropTargetKey(target) && canDropOn(target);
   const baseEdges = useMemo(
     () => extractEdges(rawTotem?.tempgraph),
     [rawTotem?.tempgraph],
@@ -5245,6 +5375,12 @@ function TotemVisualizer({
     },
     [detailCache, detailLoading, fetchDetailOcdfg, detailedOcdfgView],
   );
+
+  // Details would cover the areas while they are being rearranged.
+  useEffect(() => {
+    if (!isEditing) return;
+    setExpandedAreas({});
+  }, [isEditing]);
 
   // An open drill-down follows its area: adjusting the object types or
   // activities of an area (Process Area editor) refetches its graph.
@@ -5593,6 +5729,70 @@ function TotemVisualizer({
       >
         {/* Bottom-left legend of the relation arcs */}
         {eventLogId && <RelationLegend />}
+
+        {editing ? (
+          <div
+            data-totem-control
+            data-testid="pa-canvas-unassigned"
+            {...dropHandlers({ kind: 'unassigned' })}
+            style={{
+              position: 'absolute',
+              top: 12,
+              left: 12,
+              zIndex: 30,
+              maxWidth: 'min(420px, 45%)',
+              padding: '8px 10px',
+              borderRadius: 10,
+              border: `1.5px dashed ${isDropHover({ kind: 'unassigned' }) ? '#2563EB' : '#CBD5E1'}`,
+              background: isDropHover({ kind: 'unassigned' }) ? 'rgba(219, 234, 254, 0.95)' : 'rgba(255, 255, 255, 0.95)',
+              boxShadow: '0 1px 3px rgba(15, 23, 42, 0.08)',
+              fontSize: 11,
+              color: '#475569',
+            }}
+          >
+            <div style={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 4 }}>
+              Not in any process area
+            </div>
+            {editing.unassigned.length === 0 ? (
+              <div style={{ fontStyle: 'italic' }}>Drop an object type here to take it out of its area.</div>
+            ) : (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {editing.unassigned.map((objectType) => (
+                  <span
+                    key={objectType}
+                    data-testid="pa-canvas-unassigned-type"
+                    data-object-type={objectType}
+                    {...dragHandlers({ kind: 'type', objectType })}
+                    title="Drag onto a process area or a level"
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      padding: '2px 8px',
+                      borderRadius: 999,
+                      border: '1px solid #E2E8F0',
+                      background: '#FFFFFF',
+                      color: '#0F172A',
+                      fontWeight: 600,
+                      cursor: 'grab',
+                      opacity: canvasDrag?.kind === 'type' && canvasDrag.objectType === objectType ? 0.4 : 1,
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: 999,
+                        background: typeColorMap[objectType] ?? '#94A3B8',
+                      }}
+                    />
+                    {objectType}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : null}
 
         {/* Floating HUD Controls */}
         <div
@@ -6037,6 +6237,7 @@ function TotemVisualizer({
                 {layers.map((layer) => (
                   <section
                     key={`layer-${layer.level}`}
+                    data-testid={editing ? `pa-canvas-level-${layer.level}` : undefined}
                     style={{
                       display: 'flex',
                       flexDirection: 'column',
@@ -6060,6 +6261,9 @@ function TotemVisualizer({
                           rowGap: gridRowGap,
                           width: levelMinimumWidth,
                           alignItems: 'center',
+                          // An empty level keeps the height of a row of areas
+                          // while editing, so it can be seen and dropped onto.
+                          minHeight: editing ? objectNodeMinHeight + processAreaPaddingY * 2 : undefined,
                         }}
                       >
                         {layer.areas.map((area) => {
@@ -6124,6 +6328,9 @@ function TotemVisualizer({
                             <div
                               key={area.id}
                               className="group/process-area"
+                              data-testid={editing ? 'pa-canvas-area' : undefined}
+                              data-area-name={editing ? area.name ?? area.label : undefined}
+                              {...dropHandlers({ kind: 'area', areaId: area.id })}
                               style={{
                                 gridColumn: `${startColumn + 1} / span ${spanColumns}`,
                                 // Every area of a layer belongs on the layer's
@@ -6151,9 +6358,21 @@ function TotemVisualizer({
                                   position: 'absolute',
                                   inset: 0,
                                   borderRadius: processAreaRadius,
-                                  background: PROCESS_AREA_BACKGROUND,
-                                  border: `1px solid ${PROCESS_AREA_BORDER}`,
-                                  boxShadow: PROCESS_AREA_INSET_SHADOW,
+                                  background: isDropHover({ kind: 'area', areaId: area.id })
+                                    ? 'rgba(191, 219, 254, 0.9)'
+                                    : PROCESS_AREA_BACKGROUND,
+                                  border: editing?.invalidAreaIds.has(area.id)
+                                    ? '2px solid #DC2626'
+                                    : editing?.selectedAreaId === area.id ||
+                                        isDropHover({ kind: 'area', areaId: area.id })
+                                      ? '2px solid #2563EB'
+                                      : `1px solid ${PROCESS_AREA_BORDER}`,
+                                  boxShadow:
+                                    editing?.selectedAreaId === area.id
+                                      ? '0 0 0 4px rgba(37, 99, 235, 0.18)'
+                                      : PROCESS_AREA_INSET_SHADOW,
+                                  opacity:
+                                    canvasDrag?.kind === 'area' && canvasDrag.areaId === area.id ? 0.45 : 1,
                                   zIndex: 0,
                                   pointerEvents: 'none',
                                 }}
@@ -6161,9 +6380,13 @@ function TotemVisualizer({
                               <button
                                 type="button"
                                 ref={(element) => assignNodeRef(areaAnchorId, element)}
-                                onClick={() => toggleAreaDetail(area)}
-                                aria-pressed={isExpanded}
-                                aria-label={`${isExpanded ? 'Hide' : 'Show'} details for ${area.label}`}
+                                onClick={() => (editing ? editing.onSelectArea(area.id) : toggleAreaDetail(area))}
+                                aria-pressed={editing ? editing.selectedAreaId === area.id : isExpanded}
+                                aria-label={
+                                  editing
+                                    ? `Edit process area ${area.name ?? area.label}`
+                                    : `${isExpanded ? 'Hide' : 'Show'} details for ${area.label}`
+                                }
                                 style={{
                                   position: 'absolute',
                                   inset: 0,
@@ -6175,10 +6398,36 @@ function TotemVisualizer({
                                   zIndex: 2,
                                 }}
                               />
-                              {area.name ? (
+                              {editing ? (
+                                <span
+                                  {...dragHandlers({ kind: 'area', areaId: area.id })}
+                                  data-testid="pa-canvas-area-handle"
+                                  title="Drag to move this process area to another level, or onto another area to merge them"
+                                  style={{
+                                    position: 'absolute',
+                                    top: 4,
+                                    left: 4,
+                                    zIndex: 4,
+                                    width: 16,
+                                    height: 16,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    borderRadius: 4,
+                                    color: '#64748B',
+                                    background: 'rgba(255,255,255,0.85)',
+                                    cursor: 'grab',
+                                    fontSize: 12,
+                                    lineHeight: 1,
+                                  }}
+                                >
+                                  ⠿
+                                </span>
+                              ) : null}
+                              {area.name || editing ? (
                                 <span
                                   data-testid="process-area-name"
-                                  title={area.name}
+                                  title={area.name || area.label}
                                   style={{
                                     position: 'absolute',
                                     bottom: '100%',
@@ -6196,7 +6445,7 @@ function TotemVisualizer({
                                     zIndex: 3,
                                   }}
                                 >
-                                  {area.name}
+                                  {area.name || area.label}
                                 </span>
                               ) : null}
                               <ProcessAreaFilterAction
@@ -6220,7 +6469,12 @@ function TotemVisualizer({
                                     <span
                                       key={objectType}
                                       ref={(element) => assignNodeRef(objectType, element)}
+                                      {...dragHandlers({ kind: 'type', objectType })}
+                                      data-testid={editing ? 'pa-canvas-object-type' : undefined}
+                                      data-object-type={editing ? objectType : undefined}
+                                      onClick={editing ? () => editing.onSelectArea(area.id) : undefined}
                                       onMouseEnter={(e) => {
+                                        if (canvasDrag) return;
                                         setTooltipState({
                                           x: e.clientX,
                                           y: e.clientY,
@@ -6255,6 +6509,9 @@ function TotemVisualizer({
                                         justifyContent: 'center',
                                         textAlign: 'center',
                                         wordBreak: 'break-word',
+                                        cursor: editing ? 'grab' : undefined,
+                                        opacity:
+                                          canvasDrag?.kind === 'type' && canvasDrag.objectType === objectType ? 0.4 : 1,
                                         position: 'relative',
                                         zIndex: 3,
                                         gridColumn: `${columnIndex + 1}`,
@@ -6420,6 +6677,41 @@ function TotemVisualizer({
                         })}
                       </div>
 
+                      {editing ? (
+                        <div
+                          data-totem-control
+                          data-testid={`pa-canvas-new-area-${layer.level}`}
+                          {...dropHandlers({ kind: 'newArea', levelIndex: layer.level })}
+                          style={{
+                            pointerEvents: 'auto',
+                            flexShrink: 0,
+                            width: objectNodeWidth,
+                            minHeight: objectNodeMinHeight + processAreaPaddingY * 2,
+                            borderRadius: processAreaRadius,
+                            border: `1.5px dashed ${
+                              isDropHover({ kind: 'newArea', levelIndex: layer.level })
+                                ? '#2563EB'
+                                : canvasDrag && canDropOn({ kind: 'newArea', levelIndex: layer.level })
+                                  ? '#93C5FD'
+                                  : '#CBD5E1'
+                            }`,
+                            background: isDropHover({ kind: 'newArea', levelIndex: layer.level })
+                              ? 'rgba(219, 234, 254, 0.9)'
+                              : 'rgba(248, 250, 252, 0.8)',
+                            color: '#64748B',
+                            fontSize: Math.max(10, objectEmptyFontSize),
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            textAlign: 'center',
+                            padding: 6,
+                            boxSizing: 'border-box',
+                          }}
+                        >
+                          {canvasDrag?.kind === 'area' ? 'Move area here' : '+ New process area'}
+                        </div>
+                      ) : null}
+
                       <header
                         ref={(element) => assignLegendRef(layer.level, element)}
                         aria-hidden={legendHidden}
@@ -6442,6 +6734,31 @@ function TotemVisualizer({
                           {layer.areas.reduce((acc, area) => acc + area.objectTypes.length, 0)} object
                           type{layer.areas.reduce((acc, area) => acc + area.objectTypes.length, 0) === 1 ? '' : 's'}
                         </span>
+                        {editing ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 2, marginTop: 2 }}>
+                            <LevelControlButton
+                              label={`Insert a level above level ${layer.level}`}
+                              onClick={() => editing.onInsertLevel(layer.level + 1)}
+                            >
+                              <Plus className="h-3 w-3" />
+                              <ArrowUp className="h-3 w-3" />
+                            </LevelControlButton>
+                            <LevelControlButton
+                              label={`Insert a level below level ${layer.level}`}
+                              onClick={() => editing.onInsertLevel(layer.level)}
+                            >
+                              <Plus className="h-3 w-3" />
+                              <ArrowDown className="h-3 w-3" />
+                            </LevelControlButton>
+                            <RemoveLevelButton
+                              levelIndex={layer.level}
+                              typeCount={layer.areas.reduce((acc, area) => acc + area.objectTypes.length, 0)}
+                              disabled={editing.levelCount <= 1}
+                              onConfirm={() => editing.onRemoveLevel(layer.level)}
+                              className="h-6 w-6 text-muted-foreground hover:text-destructive"
+                            />
+                          </div>
+                        ) : null}
                       </header>
                     </div>
                   </section>
