@@ -498,7 +498,7 @@ export default function VariantsExplorer({
     <Wrapper className="w-full min-w-0">
       <CardHeader className="pb-2">
         {/* Toolbar: wraps on narrow widths instead of overflowing. */}
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
           <Button
             type="button"
             variant="outline"
@@ -563,7 +563,7 @@ export default function VariantsExplorer({
         </div>
 
         {settingsOpen ? (
-          <div id="variants-settings-panel" className="mt-3 space-y-3 rounded-md border bg-muted/30 p-3">
+          <div id="variants-settings-panel" className="mt-3 min-w-0 space-y-3 rounded-md border bg-muted/30 p-3">
             <div className="max-w-md space-y-1.5">
               <Label htmlFor="variants-mode" className="text-xs">Method</Label>
               <Select

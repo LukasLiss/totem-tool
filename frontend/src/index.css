@@ -140,3 +140,11 @@ html, body, #root {
 .totem-primary-svg line {
   shape-rendering: geometricPrecision;
 }
+
+/* Phones: the editor minimap covers a third of the canvas and cannot be
+   used with a finger anyway. */
+@media (max-width: 767px) {
+  .react-flow__minimap {
+    display: none;
+  }
+}

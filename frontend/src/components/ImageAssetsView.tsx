@@ -68,9 +68,9 @@ export function ImageAssetsView() {
   }, [loadAssets]);
 
   return (
-    <div className="flex min-h-screen flex-col">
-      <SidebarTrigger className="m-2" />
-      <main className="flex-1 p-4 pt-0">
+    <div className="flex flex-col md:min-h-screen">
+      <SidebarTrigger className="m-2 max-md:hidden" />
+      <main className="flex-1 p-4 md:pt-0">
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
           <div className="flex flex-col gap-3 border-b pb-4 md:flex-row md:items-end md:justify-between">
             <div>

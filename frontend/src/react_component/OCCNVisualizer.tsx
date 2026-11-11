@@ -637,12 +637,17 @@ function OCCNVisualizer({
               position: 'absolute',
               bottom: 16,
               right: 16,
+              // Narrow boxes (phones): wrap onto a second row instead of
+              // running off the left edge.
+              maxWidth: 'calc(100% - 32px)',
+              flexWrap: 'wrap',
+              justifyContent: 'flex-end',
               display: 'flex',
               gap: 8,
               alignItems: 'center',
               background: '#FFFFFF',
               border: '1px solid #E2E8F0',
-              borderRadius: 9999,
+              borderRadius: 28,
               padding: '6px 12px',
               boxShadow: '0 10px 24px rgba(15, 23, 42, 0.14)',
             }}

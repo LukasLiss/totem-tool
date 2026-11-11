@@ -35,6 +35,7 @@ import {
 import { RefreshCcw, Plus, Minus, Scan, Lock, Unlock } from 'lucide-react';
 import { mapTypesToColors, textColorForBackground } from '../utils/objectColors';
 import { computeTotemHubLayout } from '@/components/totem/totemLayout';
+import { useTouchMouseBridge } from '@/hooks/use-touch-mouse-bridge';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -377,6 +378,8 @@ function TotemMinerVisualizer({
   );
 
   const containerRef = useRef<HTMLDivElement>(null);
+  // Finger drags and pinches drive the mouse pan / wheel zoom below.
+  useTouchMouseBridge(containerRef, !panLocked);
   const [svgSize, setSvgSize] = useState({ width: 800, height: 600 });
   const [stableSvgSize, setStableSvgSize] = useState<{ width: number; height: number } | null>(null);
 

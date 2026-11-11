@@ -76,7 +76,7 @@ function DateInput({
   onChange: (v: string) => void;
 }) {
   return (
-    <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
+    <div style={{ flex: "1 1 170px", minWidth: 0, display: "flex", flexDirection: "column", gap: 6 }}>
       <Label htmlFor={id} style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
         {label}
         <span style={{ fontSize: 10, color: "var(--muted-foreground)", fontWeight: 400 }}>UTC</span>
@@ -749,8 +749,10 @@ export function FilterConfigDialog({
       }}
     >
       <DialogContent
-        className="sm:max-w-[460px]"
-        style={{ padding: 0, gap: 0, overflow: "hidden" }}
+        // One shrinkable column: without it the date inputs and the chart
+        // size the dialog to their own width and get cut off on a phone.
+        className="grid-cols-[minmax(0,1fr)] sm:max-w-[460px]"
+        style={{ padding: 0, gap: 0, overflowX: "hidden" }}
       >
         <DialogHeader
           style={{
@@ -819,7 +821,7 @@ export function FilterConfigDialog({
               </p>
             ) : (
               <>
-                <div style={{ display: "flex", gap: 12 }}>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
                   <DateInput
                     id="f-after"
                     label="From"
@@ -1013,6 +1015,9 @@ export function FilterConfigDialog({
             padding: "12px 24px",
             borderTop: "1px solid var(--border)",
             display: "flex",
+            // DialogFooter stacks its children on phones; this one is a
+            // single row of three small buttons and fits as it is.
+            flexDirection: "row",
             justifyContent: "space-between",
             alignItems: "center",
           }}

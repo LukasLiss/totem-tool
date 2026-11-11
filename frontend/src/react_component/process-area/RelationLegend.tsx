@@ -102,9 +102,10 @@ export function RelationLegend() {
   return (
     <div
       data-totem-control
+      // On a phone the zoom controls span the bottom edge; sit above them.
+      className="bottom-[68px] md:bottom-4"
       style={{
         position: 'absolute',
-        bottom: 16,
         left: 16,
         zIndex: 50,
         background: '#ffffff',
@@ -131,7 +132,7 @@ export function RelationLegend() {
               <Info className="h-3.5 w-3.5" />
             </button>
           </PopoverTrigger>
-          <PopoverContent side="top" align="start" className="w-[360px] space-y-3 text-xs">
+          <PopoverContent side="top" align="start" className="w-[360px] max-w-[calc(100vw-2rem)] max-h-[70svh] overflow-y-auto space-y-3 text-xs">
             <div className="space-y-1">
               <p className="text-sm font-medium">Object lifespans</p>
               <p className="text-muted-foreground">

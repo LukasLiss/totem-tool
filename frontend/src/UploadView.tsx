@@ -6,13 +6,13 @@ import UserFileSelect from './react_component/userfileselect';
 export function UploadView(){
 
 return (
-    <div>
+    <div className="max-md:w-full">
         {!LOCAL_MODE && (
             <div className="flex justify-end px-6 pt-6">
                 <LogoutButton />
             </div>
         )}
-        <div className="flex flex-row">
+        <div className="flex flex-col items-center md:flex-row md:items-start">
             <FileUploadValidator/>
             <UserFileSelect/>
         </div>
