@@ -287,7 +287,7 @@ export function PlayoutView() {
     setExporting(true);
     try {
       const ocel = await exportPlayoutOcel(result.variants);
-      downloadJson(`${toFilename(source.model.name, 'playout')}-playout-log`, ocel);
+      await downloadJson(`${toFilename(source.model.name, 'playout')}-playout-log`, ocel);
     } catch (err) {
       toast.error(apiErrorMessage(err));
     } finally {
@@ -309,7 +309,7 @@ export function PlayoutView() {
         variantCount: result.variantCount,
         exhaustive: result.exhaustive,
       }),
-    );
+    ).catch((err) => toast.error(apiErrorMessage(err)));
   };
 
   return (

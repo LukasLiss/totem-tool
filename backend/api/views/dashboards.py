@@ -6,11 +6,15 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 from django.conf import settings
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
+from django.db.models import Max
+from django.utils.text import slugify
 import os
 
 from ..models import (
     Dashboard,
+    EventLog,
     ImageAsset,
     Project,
     ProjectAsset,
@@ -51,6 +55,14 @@ from totem_lib.orgamining import (
     NORMALIZATIONS,
 )
 
+from ..dashboard_bundle import (
+    WARN_COMPONENT_UNKNOWN,
+    build_dashboard_bundle,
+    canonical_component_name,
+    resolve_bundle_components,
+    unique_dashboard_name,
+    validate_dashboard_bundle_dict,
+)
 from ..rich_text import (
     FONT_SIZE_MAX,
     FONT_SIZE_MIN,
@@ -225,6 +237,26 @@ def _ocpn_asset_for(item, dashboard, request):
     ).first()
 
 
+def _optional_int(raw):
+    """``raw`` as an int, or None when it is not one.
+
+    Reference ids on the import endpoint come from a request body a user can
+    hand-write, and the ORM raises ValueError/TypeError — a 500 — when a
+    non-numeric value reaches ``filter(pk=...)``. Bools are excluded because
+    ``int(True)`` is 1, which would silently mean "project 1".
+    """
+    if raw is None or isinstance(raw, bool):
+        return None
+    # 1.5 must not become project 1: truncating a fractional id would silently
+    # resolve to a *different* project than the one asked for.
+    if isinstance(raw, float) and not raw.is_integer():
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def _bounded_int(item, key: str, default: int, lo: int, hi: int) -> int:
     try:
         value = int(item.get(key, default))
@@ -302,10 +334,19 @@ class DashboardViewSet(viewsets.ModelViewSet):
         Rename a dashboard. Only accepts `name` in the body.
         """
         dashboard = self.get_object()
-        new_name = request.data.get("name")
+        new_name = (request.data.get("name") or "").strip()
         if not new_name:
             return Response(
                 {"error": "Name is required"}, status=status.HTTP_400_BAD_REQUEST
+            )
+        # This action bypasses the serializer, so nothing else enforces the
+        # column width: SQLite stores an over-long name silently and Postgres
+        # raises DataError, a 500. Same guard as `EventLogViewSet.rename`.
+        limit = Dashboard._meta.get_field("name").max_length
+        if len(new_name) > limit:
+            return Response(
+                {"error": f"Name must be at most {limit} characters"},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         dashboard.name = new_name
@@ -315,6 +356,12 @@ class DashboardViewSet(viewsets.ModelViewSet):
     # component_name -> concrete model used to re-fetch the polymorphic child row.
     _LAYOUT_COMPONENT_MODELS = {
         "TextBoxComponent": TextBoxComponent,
+        # `_replace_components` stores this one as "NumberOfEventsComponent"
+        # (capital O), which is also what the React registry uses. Without that
+        # key the row never downcast, so `get_layout` served the base component
+        # and the widget lost its `color` on every load. The old spelling stays
+        # for any row written before the fix.
+        "NumberOfEventsComponent": NumberofEventsComponent,
         "NumberofEventsComponent": NumberofEventsComponent,
         "ImageComponent": ImageComponent,
         "VariantsComponent": VariantsComponent,
@@ -384,12 +431,29 @@ class DashboardViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["GET"])
     def get_layout(self, request, pk=None):
         dashboard = self.get_object()
-        components = []
-        for comp in dashboard.components.all():
-            model = self._LAYOUT_COMPONENT_MODELS.get(comp.component_name)
-            components.append(model.objects.get(id=comp.id) if model else comp)
+        components = self._downcast_components(dashboard.components.all())
         serializer = DashboardComponentPolymorphicSerializer(components, many=True)
         return Response(serializer.data)
+
+    @classmethod
+    def _downcast_components(cls, base_rows):
+        """``base_rows`` as their concrete models, in the same order.
+
+        One query per component *type* rather than one per row: the export and
+        the grid both load every widget, and a 200-widget dashboard should not
+        cost 200 round trips.
+        """
+        rows = list(base_rows)
+        ids_by_model = {}
+        for comp in rows:
+            model = cls._LAYOUT_COMPONENT_MODELS.get(comp.component_name)
+            if model is not None:
+                ids_by_model.setdefault(model, []).append(comp.id)
+        concrete = {}
+        for model, ids in ids_by_model.items():
+            for obj in model.objects.filter(id__in=ids):
+                concrete[obj.id] = obj
+        return [concrete.get(comp.id, comp) for comp in rows]
 
     @action(detail=True, methods=["POST"])
     def save_layout(self, request, pk=None):
@@ -430,6 +494,127 @@ class DashboardViewSet(viewsets.ModelViewSet):
 
         return Response({"status": "saved"})
 
+    @action(detail=True, methods=["GET"])
+    def export(self, request, pk=None):
+        """Download this dashboard's structure as a portable JSON document.
+
+        Authorization comes from `get_object()` against the membership-scoped
+        queryset, so a dashboard in somebody else's project is a 404.
+        """
+        dashboard = self.get_object()
+        response = Response(build_dashboard_bundle(dashboard))
+        filename = f"{slugify(dashboard.name) or 'dashboard'}.json"
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
+
+    @action(detail=False, methods=["POST"], url_path="import")
+    def import_bundle(self, request):
+        """Create a new dashboard from an exported bundle.
+
+        Always creates; never overwrites. Whatever could not be carried over
+        comes back in `warnings` rather than failing the import, because a
+        dashboard that is 90% right and says what to fix beats a refusal.
+        """
+        project_id = _optional_int(request.data.get("project"))
+        project = Project.objects.filter(
+            pk=project_id, users=request.user
+        ).first()
+        if project is None:
+            # Same answer for "no such project" and "not yours", so project ids
+            # cannot be probed by guessing.
+            return Response(
+                {"error": "You do not have access to this project."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        bundle = request.data.get("bundle")
+        try:
+            validate_dashboard_bundle_dict(bundle)
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        # A value that is not an id at all lands on the same path as a log of
+        # another project: the chart imports unbound and says so.
+        event_log_id = _optional_int(request.data.get("event_log"))
+        if event_log_id is not None:
+            # Only a log of this project: a dotted chart must never be pointed
+            # at somebody else's data.
+            event_log_id = (
+                EventLog.objects.filter(pk=event_log_id, project=project)
+                .values_list("pk", flat=True)
+                .first()
+            )
+
+        try:
+            with transaction.atomic():
+                next_order = (
+                    Dashboard.objects.filter(project=project).aggregate(
+                        Max("order_in_project")
+                    )["order_in_project__max"]
+                    or 0
+                ) + 1
+                bundle_name = bundle["dashboard"]["name"]
+                dashboard = Dashboard.objects.create(
+                    project=project,
+                    name=unique_dashboard_name(project, bundle_name),
+                    order_in_project=next_order,
+                )
+                # Resolved after the row exists so a text box linking to the
+                # bundle's own dashboard points at this copy.
+                layout, warnings = resolve_bundle_components(
+                    bundle["components"],
+                    project=project,
+                    user=request.user,
+                    event_log_id=event_log_id,
+                    self_dashboard=dashboard,
+                    self_name=bundle_name,
+                )
+                self._replace_components(dashboard, layout, request)
+
+                # `_replace_components` drops anything its chain does not
+                # handle, silently and by design. We have already filtered the
+                # names it knows, so a shortfall here means the two have
+                # drifted apart — say so rather than leave a hole.
+                stored = dashboard.components.count()
+                if stored < len(layout):
+                    warnings.append(
+                        {
+                            "code": WARN_COMPONENT_UNKNOWN,
+                            "component_name": None,
+                            "detail": (
+                                f"{len(layout) - stored} widget(s) could not be "
+                                f"stored and were left out."
+                            ),
+                        }
+                    )
+        except RichTextTooLarge as exc:
+            return Response(
+                {"error": f"a text box's content is too large: {exc}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except (ValueError, TypeError, DjangoValidationError) as exc:
+            # `validate_dashboard_bundle_dict` checks the envelope and the
+            # geometry; the remaining per-widget fields are handed to
+            # `_replace_components`, which validates many but not all of them,
+            # so a hand-edited value like {"alpha": "x"} surfaces here as the
+            # model rejecting it. Raised out of the atomic block above, so the
+            # half-built dashboard is already rolled back.
+            detail = "; ".join(exc.messages) if isinstance(
+                exc, DjangoValidationError
+            ) else str(exc)
+            return Response(
+                {"error": f"The file contains a value this build cannot read: {detail}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            {
+                "dashboard": DashboardSerializer(dashboard).data,
+                "warnings": warnings,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
     def _replace_components(self, dashboard, layout, request):
         # Clear existing components
         dashboard.components.all().delete()
@@ -443,7 +628,9 @@ class DashboardViewSet(viewsets.ModelViewSet):
         )
 
         for item in layout:
-            component_name = item["component_name"]
+            # A legacy spelling is stored under the current one, so old rows
+            # stop being dropped the first time they are saved again.
+            component_name = canonical_component_name(item["component_name"])
             if component_name == "TextBoxComponent":
                 # Formatting is presentational, but it lands in an inline
                 # style, so every value is validated down to a known-safe one

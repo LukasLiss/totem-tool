@@ -7,7 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { listAssets, type ProjectAsset } from "@/api/assetsApi";
 import { DashboardProvider } from "@/contexts/DashboardContext";
-import { SelectedFileContext } from "@/contexts/SelectedFileContext";
+import {
+  SelectedFileContext,
+  type SelectedFile,
+} from "@/contexts/SelectedFileContext";
 
 import { ProcessOverview } from "./ProcessOverview";
 
@@ -71,6 +74,12 @@ vi.mock("@/components/app-sidebar", async () => {
           >
             Model Assets
           </button>
+          <button
+            type="button"
+            onClick={() => setViewMode({ type: "dashboard", id: 5 })}
+          >
+            Open dashboard
+          </button>
         </nav>
       );
     },
@@ -127,14 +136,15 @@ const occnAsset: ProjectAsset = {
   asset_type: "OCCN",
 };
 
-function renderOverview() {
-  return render(
+const EVENT_LOG_A: SelectedFile = { id: 12, project: 7, file: "event-log.xml" };
+const EVENT_LOG_B: SelectedFile = { id: 34, project: 9, file: "other-log.xml" };
+
+/** Separate from `renderOverview` so a test can re-render with another project. */
+function overviewTree(selectedFile: SelectedFile | null = EVENT_LOG_A) {
+  return (
     <MemoryRouter initialEntries={["/overview"]}>
       <SelectedFileContext.Provider
-        value={{
-          selectedFile: { id: 12, project: 7, file: "event-log.xml" },
-          setSelectedFile: vi.fn(),
-        }}
+        value={{ selectedFile, setSelectedFile: vi.fn() }}
       >
         <DashboardProvider>
           <ProcessOverview />
@@ -142,6 +152,10 @@ function renderOverview() {
       </SelectedFileContext.Provider>
     </MemoryRouter>
   );
+}
+
+function renderOverview(selectedFile?: SelectedFile | null) {
+  return render(overviewTree(selectedFile));
 }
 
 describe("ProcessOverview conformance routing", () => {
@@ -216,5 +230,54 @@ describe("ProcessOverview conformance routing", () => {
     expect(screen.getByText("Analysis page")).toBeTruthy();
     expect(screen.queryByTestId("totem-workflow")).toBeNull();
     expect(screen.queryByTestId("occn-workflow")).toBeNull();
+  });
+});
+
+describe("ProcessOverview project switching", () => {
+  beforeEach(() => {
+    listAssetsMock.mockReset();
+    listAssetsMock.mockResolvedValue([totemAsset, occnAsset]);
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  const openDashboard = () => {
+    fireEvent.click(screen.getByRole("button", { name: "Open dashboard" }));
+    expect(screen.getByText("Dashboard page")).toBeTruthy();
+  };
+
+  it("drops back to the overview when another project is opened", () => {
+    const { rerender } = renderOverview(EVENT_LOG_A);
+    openDashboard();
+
+    // A dashboard of project 7 is not in project 9's sidebar, and its widgets
+    // would compute against the wrong event log.
+    rerender(overviewTree(EVENT_LOG_B));
+
+    expect(screen.getByText("Overview page")).toBeTruthy();
+    expect(screen.queryByText("Dashboard page")).toBeNull();
+  });
+
+  it("stays on the dashboard when the open project is merely renamed", () => {
+    const { rerender } = renderOverview(EVENT_LOG_A);
+    openDashboard();
+
+    // What a rename from the project switcher does: a fresh object carrying
+    // the same event log.
+    rerender(overviewTree({ ...EVENT_LOG_A, display_name: "Renamed" }));
+
+    expect(screen.getByText("Dashboard page")).toBeTruthy();
+  });
+
+  it("drops back to the overview when the project is closed", () => {
+    const { rerender } = renderOverview(EVENT_LOG_A);
+    openDashboard();
+
+    rerender(overviewTree(null));
+
+    expect(screen.getByText("Overview page")).toBeTruthy();
   });
 });
