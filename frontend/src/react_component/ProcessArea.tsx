@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import {
   Card,
@@ -70,6 +70,8 @@ export type ProcessAreaProps = {
     algorithm: ProcessAreaAlgorithm;
     params: ProcessAreaParams;
   }) => void;
+  initialLocalFilterParams?: Record<string, string>;
+  onLocalFilterChange?: (params: Record<string, string>) => void;
 };
 
 import { API_BASE_URL } from '../config/api';
@@ -82,11 +84,19 @@ export default function ProcessArea({
   initialAlgorithm,
   initialParams,
   onSettingsChange,
+  initialLocalFilterParams,
+  onLocalFilterChange,
 }: ProcessAreaProps) {
   const [totemControls, setTotemControls] = useState<TotemVisualizerControls | null>(null);
   const [reloadSignal, setReloadSignal] = useState(0);
   const [filterEnabled, setFilterEnabled] = useState(true);
-  const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>({});
+  const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>(initialLocalFilterParams ?? {});
+
+  // Sync when initialLocalFilterParams loads async
+  useEffect(() => {
+    if (!initialLocalFilterParams || Object.keys(initialLocalFilterParams).length === 0) return;
+    setLocalFilterParams((prev) => (Object.keys(prev).length === 0 ? initialLocalFilterParams : prev));
+  }, [initialLocalFilterParams]);
 
   const handleControlsReady = useCallback((controls: TotemVisualizerControls) => {
     setTotemControls(controls);
@@ -130,11 +140,14 @@ export default function ProcessArea({
     <Card
       className={`@container/card w-full flex flex-col ${fillContainer ? 'h-full rounded-none' : ''}`}
     >
-      <CardHeader className="items-center relative z-10 justify-between flex-shrink-0">
+      <CardHeader className="items-center relative z-10 justify-between flex-shrink-0 px-4 py-2 text-left border-b">
         <div className="flex items-center gap-2">
-          <CardTitle>Process Area Visualizer</CardTitle>
+          <CardTitle className="text-sm">Process Area Visualizer</CardTitle>
           <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(prev => !prev)} />
-          <LocalFilterDropdown fileId={fileId} onFilterChange={setLocalFilterParams} />
+          <LocalFilterDropdown fileId={fileId} value={localFilterParams} onFilterChange={(params) => {
+            setLocalFilterParams(params);
+            onLocalFilterChange?.(params);
+          }} />
         </div>
         <CardAction className="flex items-center gap-2">
           {totemControls && (

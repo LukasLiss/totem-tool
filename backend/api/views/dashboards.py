@@ -135,6 +135,20 @@ def _validated_legacy_image_path(raw, project):
     return os.path.relpath(candidate, media_root).replace(os.sep, "/")
 
 
+def _local_filter_params(item):
+    """Extract and sanitize local_filter_params from a layout item.
+
+    Returns a plain string→string dict, or None when nothing was sent.
+    All keys and values are cast to str and empty-string values are dropped
+    so we never store ``{"activity": ""}`` as an active filter.
+    """
+    raw = item.get("local_filter_params")
+    if not isinstance(raw, dict) or not raw:
+        return None
+    cleaned = {str(k): str(v) for k, v in raw.items() if k and v is not None and str(v) != ""}
+    return cleaned or None
+
+
 def _query_asset_for(item, dashboard, request):
     """The stored query (``ProjectAsset`` of type QUERY) a layout item links.
 
@@ -406,6 +420,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     h=item["h"],
                     component_name=component_name,
                     color=item.get("color", "blue"),
+                    local_filter_params=_local_filter_params(item),
                 )
             elif component_name == "ImageComponent":
                 # Legacy image path: only keep it when it points at an
@@ -470,6 +485,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     timeout_s=item.get("timeout_s", 10.0),
                     business_object_types=_string_list_field(item, "business_object_types"),
                     business_activities=_string_list_field(item, "business_activities"),
+                    local_filter_params=_local_filter_params(item),
                 )
             elif component_name == "ProcessAreaComponent":
                 ProcessAreaComponent.objects.create(
@@ -485,6 +501,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     w_divergence=item.get("w_divergence", 1.0),
                     alpha=item.get("alpha", 2.0),
                     beta=item.get("beta", 1.0),
+                    local_filter_params=_local_filter_params(item),
                 )
             elif component_name == "TotemMinerComponent":
                 TotemMinerComponent.objects.create(
@@ -494,6 +511,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     w=item["w"],
                     h=item["h"],
                     component_name=component_name,
+                    local_filter_params=_local_filter_params(item),
                 )
             elif component_name == "LogStatisticsComponent":
                 LogStatisticsComponent.objects.create(
@@ -510,6 +528,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     show_earliest_timestamp=item.get("show_earliest_timestamp", False),
                     show_newest_timestamp=item.get("show_newest_timestamp", False),
                     show_duration=item.get("show_duration", False),
+                    local_filter_params=_local_filter_params(item),
                 )
             elif component_name == "OCDottedChartComponent":
                 OCDottedChartComponent.objects.create(
@@ -528,6 +547,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     max_points=item.get("max_points", 10000),
                     show_minimap=item.get("show_minimap", True),
                     show_controls=item.get("show_controls", True),
+                    local_filter_params=_local_filter_params(item),
                 )
             elif component_name in ("NewOCDFGComponent", "NewOCDFGVariantsComponent"):
                 NewOCDFGComponent.objects.create(
@@ -542,6 +562,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                         "initial_interaction_locked", True
                     ),
                     layout_direction=item.get("layout_direction", "TB"),
+                    local_filter_params=_local_filter_params(item),
                 )
             elif component_name == "OCCNComponent":
                 OCCNComponent.objects.create(
@@ -560,6 +581,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     ),
                     layout_direction=item.get("layout_direction", "LR"),
                     object_types=item.get("object_types") or "",
+                    local_filter_params=_local_filter_params(item),
                 )
             elif component_name == 'OCPNComponent':
                 OCPNComponent.objects.create(
@@ -571,6 +593,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     component_name=component_name,
                     automatic_loading=item.get('automatic_loading', False),
                     timeout_s=item.get('timeout_s', 30.0),
+                    local_filter_params=_local_filter_params(item),
                 )
             elif component_name == 'FilterStackComponent':
                 FilterStackComponent.objects.create(
@@ -594,6 +617,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     query=item.get('query') or "SELECT activity, count(*) AS n FROM events GROUP BY activity",
                     query_asset=_query_asset_for(item, dashboard, request),
                     row_limit=_bounded_int(item, 'row_limit', 25, 1, 1000),
+                    local_filter_params=_local_filter_params(item),
                 )
             # Add more as needed
             elif component_name == 'PieChartComponent':
@@ -613,6 +637,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     show_tooltip=item.get('show_tooltip', True),
                     label_column=item.get('label_column', ''),
                     value_column=item.get('value_column', ''),
+                    local_filter_params=_local_filter_params(item),
                 )
             elif component_name == 'KpiComponent':
                 KpiComponent.objects.create(
@@ -629,6 +654,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     prefix=item.get('prefix') or '',
                     suffix=item.get('suffix') or '',
                     decimals=_bounded_int(item, 'decimals', 0, 0, 10),
+                    local_filter_params=_local_filter_params(item),
                 )
             elif component_name == 'BarChartComponent':
                 BarChartComponent.objects.create(
@@ -645,6 +671,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     value_column=item.get('value_column') or '',
                     horizontal=bool(item.get('horizontal', False)),
                     show_values=bool(item.get('show_values', False)),
+                    local_filter_params=_local_filter_params(item),
                 )
             elif component_name == 'ScatterPlotComponent':
                 ScatterPlotComponent.objects.create(
@@ -662,6 +689,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     series_column=item.get('series_column') or '',
                     x_label=item.get('x_label') or '',
                     y_label=item.get('y_label') or '',
+                    local_filter_params=_local_filter_params(item),
                 )
             elif component_name == 'OCHandoverComponent':
                 OCHandoverComponent.objects.create(
@@ -684,6 +712,7 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     min_parallel_observations=_bounded_int(item, 'min_parallel_observations', 1, 1, 1_000_000),
                     cluster_by_ot=bool(item.get('cluster_by_ot', False)),
                     view_mode=_choice_field(item, 'view_mode', _HANDOVER_VIEW_MODES, 'graph'),
+                    local_filter_params=_local_filter_params(item),
                 )
             elif component_name == 'ResourceProfilingComponent':
                 feature_groups = [
@@ -712,9 +741,31 @@ class DashboardViewSet(viewsets.ModelViewSet):
                     min_cluster_size=_bounded_int(item, 'min_cluster_size', 2, 2, 100000),
                     distance_metric=_choice_field(item, 'distance_metric', _PROFILE_DISTANCE_METRICS, 'euclidean'),
                     view_mode=_choice_field(item, 'view_mode', _PROFILE_VIEW_MODES, 'graph'),
+                    local_filter_params=_local_filter_params(item),
                 )
 
         return Response({"status": "saved"})
+
+    @action(
+        detail=True,
+        methods=["patch"],
+        url_path="components/(?P<component_id>[^/.]+)/local-filter",
+    )
+    def patch_local_filter(self, request, pk=None, component_id=None):
+        """Update only local_filter_params on a single dashboard component."""
+        dashboard = self.get_object()
+        try:
+            component = dashboard.components.get(pk=component_id)
+        except Exception:
+            return Response({"error": "Component not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        raw = request.data.get("local_filter_params")
+        if not isinstance(raw, dict) and raw is not None:
+            return Response({"error": "local_filter_params must be an object or null"}, status=status.HTTP_400_BAD_REQUEST)
+
+        component.local_filter_params = _local_filter_params({"local_filter_params": raw}) if raw else None
+        component.save(update_fields=["local_filter_params"])
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(
         detail=True,

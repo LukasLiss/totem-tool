@@ -66,12 +66,17 @@ export interface LocalFilterDropdownProps {
   fileId?: number | string | null;
   onFilterChange: (params: Record<string, string>) => void;
   stopPropagation?: boolean;
+  /** Current active filter params from the parent (flat key→value dict).
+   *  Used only to show the button as active when a saved filter is loaded
+   *  before the user opens the dropdown. Does not control internal state. */
+  value?: Record<string, string>;
 }
 
 export function LocalFilterDropdown({
   fileId,
   onFilterChange,
   stopPropagation = false,
+  value,
 }: LocalFilterDropdownProps) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -91,8 +96,12 @@ export function LocalFilterDropdown({
   const appliedRef = useRef(applied);
   appliedRef.current = applied;
 
-  const isActive = Object.keys(applied).length > 0;
+  // Active when the user has applied rules in this session OR when the parent
+  // reports a saved filter that was loaded before the dropdown was opened.
+  const isActive = Object.keys(applied).length > 0 || (!!value && Object.keys(value).length > 0);
   const isDirty  = JSON.stringify(pending) !== JSON.stringify(applied);
+
+  const prevFileIdRef = useRef<typeof fileId>(undefined);
 
   useEffect(() => {
     if (!dropdownOpen || optionsLoaded || !fileId) return;
@@ -105,8 +114,14 @@ export function LocalFilterDropdown({
       .catch(() => setActivities([]));
   }, [dropdownOpen, fileId, optionsLoaded]);
 
-  // Reset loaded options when file changes
+  // Reset when the user SWITCHES to a different file — but NOT on the initial
+  // mount, when fileId goes from undefined/null to a valid value. Without this
+  // guard, any saved local-filter that was just loaded from the backend would
+  // be immediately wiped by this effect calling onFilterChange({}).
   useEffect(() => {
+    const prev = prevFileIdRef.current;
+    prevFileIdRef.current = fileId;
+    if (prev == null || fileId == null || prev === fileId) return;
     setOptionsLoaded(false);
     setPending({});
     setApplied({});

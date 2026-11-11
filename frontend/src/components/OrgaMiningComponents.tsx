@@ -10,6 +10,7 @@
  * `ResourceProfilingComponent` on the backend).
  */
 import React, { useEffect, useState } from "react";
+import { useDashboardLocalFilter } from "@/hooks/useDashboardLocalFilter";
 import type { GridStackNode } from "gridstack";
 import { ChevronDown } from "lucide-react";
 import { toast } from "sonner";
@@ -24,6 +25,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { GlobalFilterToggle } from "@/components/ui/GlobalFilterToggle";
+import { LocalFilterDropdown } from "@/components/ui/LocalFilterDropdown";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
@@ -143,18 +145,21 @@ function DashboardSwitches({ id, automaticLoading, onAutomaticLoading }: {
  * and everything above it is something the user is operating, so an expanded
  * panel covers the title rather than opening underneath it.
  */
-function WidgetTitle({ title, filterEnabled, onToggle }: {
-  title: string; filterEnabled: boolean; onToggle: () => void;
+function WidgetTitle({ title, filterEnabled, onToggle, fileId, onLocalFilterChange, localFilterParams }: {
+  title: string;
+  filterEnabled: boolean;
+  onToggle: () => void;
+  fileId?: number;
+  onLocalFilterChange?: (params: Record<string, string>) => void;
+  localFilterParams?: Record<string, string>;
 }) {
   return (
-    <div
-      className="absolute top-3 left-1/2 -translate-x-1/2 z-[5] flex items-center gap-2 pointer-events-none"
-      style={{ fontFamily: "var(--font-primary, Inter, sans-serif)" }}
-    >
-      <span className="text-sm font-semibold text-slate-900">{title}</span>
-      <span className="pointer-events-auto">
-        <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggle} stopPropagation />
-      </span>
+    <div className="flex items-center gap-2 px-4 py-2 border-b bg-card flex-shrink-0 text-left">
+      <span className="text-sm font-semibold text-card-foreground shrink min-w-0 truncate">{title}</span>
+      <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggle} stopPropagation />
+      {onLocalFilterChange && (
+        <LocalFilterDropdown fileId={fileId} onFilterChange={onLocalFilterChange} value={localFilterParams} />
+      )}
     </div>
   );
 }
@@ -170,6 +175,7 @@ export const OCHandoverComponent: React.FC<ComponentProps> = ({
   onUpdate,
   isEditMode = false,
   selectedFile,
+  dashboardId,
 }) => {
   // The persisted fields as one string: a stable dependency for syncing local
   // state after a layout (re)load, without listing every field.
@@ -177,6 +183,10 @@ export const OCHandoverComponent: React.FC<ComponentProps> = ({
   const [settings, setSettings] = useState<HandoverSettings>(() => handoverSettingsFromNode(node));
   const [automaticLoading, setAutomaticLoading] = useState(node.automatic_loading ?? false);
   const [filterEnabled, setFilterEnabled] = useState(true);
+  const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
+    node.local_filter_params, dashboardId, node.component_id, onUpdate,
+  );
+
   const [maxGapText, setMaxGapText] = useState(settings.maxGap === null ? "" : String(settings.maxGap));
 
   useEffect(() => {
@@ -352,20 +362,29 @@ export const OCHandoverComponent: React.FC<ComponentProps> = ({
     );
   }
 
-  // VIEW MODE: the explorer owns the whole tile and floats its own controls;
-  // it is re-mounted whenever the persisted settings change.
+  // VIEW MODE: header bar on top, explorer fills the rest.
   return (
-    <div className="w-full h-full relative overflow-hidden bg-background text-left">
-      <OCHandoverExplorer
-        key={`${persistedJson}|${automaticLoading}`}
-        fileId={selectedFile?.id}
-        fileName={selectedFile?.file?.split("/").pop()}
-        embedded
-        initialSettings={settings}
-        autoStart={automaticLoading}
+    <div className="w-full h-full flex flex-col overflow-hidden bg-background text-left">
+      <WidgetTitle
+        title="Handover of Work"
         filterEnabled={filterEnabled}
+        onToggle={() => setFilterEnabled((p) => !p)}
+        fileId={selectedFile?.id}
+        onLocalFilterChange={handleLocalFilterChange}
+        localFilterParams={localFilterParams}
       />
-      <WidgetTitle title="Handover of Work" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled((p) => !p)} />
+      <div className="flex-1 relative overflow-hidden">
+        <OCHandoverExplorer
+          key={`${persistedJson}|${automaticLoading}`}
+          fileId={selectedFile?.id}
+          fileName={selectedFile?.file?.split("/").pop()}
+          embedded
+          initialSettings={settings}
+          autoStart={automaticLoading}
+          filterEnabled={filterEnabled}
+          localFilterParams={Object.keys(localFilterParams).length > 0 ? localFilterParams : undefined}
+        />
+      </div>
     </div>
   );
 };
@@ -379,11 +398,15 @@ export const ResourceProfilingComponent: React.FC<ComponentProps> = ({
   onUpdate,
   isEditMode = false,
   selectedFile,
+  dashboardId,
 }) => {
   const persistedJson = JSON.stringify(profilingSettingsToNode(profilingSettingsFromNode(node)));
   const [settings, setSettings] = useState<ResourceProfilingSettings>(() => profilingSettingsFromNode(node));
   const [automaticLoading, setAutomaticLoading] = useState(node.automatic_loading ?? false);
   const [filterEnabled, setFilterEnabled] = useState(true);
+  const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
+    node.local_filter_params, dashboardId, node.component_id, onUpdate,
+  );
 
   useEffect(() => { setSettings(profilingSettingsFromNode(JSON.parse(persistedJson))); }, [persistedJson]);
   useEffect(() => { setAutomaticLoading(node.automatic_loading ?? false); }, [node.automatic_loading]);
@@ -578,16 +601,26 @@ export const ResourceProfilingComponent: React.FC<ComponentProps> = ({
   }
 
   return (
-    <div className="w-full h-full relative overflow-hidden bg-background text-left">
-      <OrgaMiningExplorer
-        key={`${persistedJson}|${automaticLoading}`}
-        fileId={selectedFile?.id}
-        embedded
-        initialSettings={settings}
-        autoStart={automaticLoading}
+    <div className="w-full h-full flex flex-col overflow-hidden bg-background text-left">
+      <WidgetTitle
+        title="Resource Profiling"
         filterEnabled={filterEnabled}
+        onToggle={() => setFilterEnabled((p) => !p)}
+        fileId={selectedFile?.id}
+        onLocalFilterChange={handleLocalFilterChange}
+        localFilterParams={localFilterParams}
       />
-      <WidgetTitle title="Resource Profiling" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled((p) => !p)} />
+      <div className="flex-1 relative overflow-hidden">
+        <OrgaMiningExplorer
+          key={`${persistedJson}|${automaticLoading}`}
+          fileId={selectedFile?.id}
+          embedded
+          initialSettings={settings}
+          autoStart={automaticLoading}
+          filterEnabled={filterEnabled}
+          localFilterParams={Object.keys(localFilterParams).length > 0 ? localFilterParams : undefined}
+        />
+      </div>
     </div>
   );
 };

@@ -106,6 +106,8 @@ type OCHandoverExplorerProps = {
   autoStart?: boolean;
   /** Send the global filter with every request (default true). */
   filterEnabled?: boolean;
+  /** Per-widget local filter params to append to every request. */
+  localFilterParams?: Record<string, string>;
 };
 
 type ViewMode = HandoverViewMode;
@@ -267,11 +269,17 @@ async function requestHandover<T>(
   params: HandoverParams,
   clusterMap: Record<string, string> | null,
   filterEnabled: boolean,
+  localFilterParams?: Record<string, string>,
 ): Promise<T> {
-  const config = { _skipGlobalFilter: !filterEnabled };
+  const hasLocal = localFilterParams && Object.keys(localFilterParams).length > 0;
+  const baseConfig = { _skipGlobalFilter: !filterEnabled };
   const { data } = clusterMap
-    ? await axios.post<T>("/api/handover/", { ...params, cluster_map: clusterMap }, config)
-    : await axios.get<T>("/api/handover/", { params, ...config });
+    ? await axios.post<T>("/api/handover/", { ...params, cluster_map: clusterMap },
+        hasLocal ? { ...baseConfig, params: localFilterParams } : baseConfig)
+    : await axios.get<T>("/api/handover/", {
+        params: hasLocal ? { ...params, ...localFilterParams } : params,
+        ...baseConfig,
+      });
   return data;
 }
 
@@ -449,6 +457,7 @@ export default function OCHandoverExplorer({
   initialSettings,
   autoStart = false,
   filterEnabled = true,
+  localFilterParams,
 }: OCHandoverExplorerProps) {
   // Settings are read once; a host that changes them re-mounts the explorer.
   const [initial] = useState<HandoverSettings>(() => ({ ...DEFAULT_HANDOVER_SETTINGS, ...initialSettings }));
@@ -487,6 +496,8 @@ export default function OCHandoverExplorer({
   const isFirstRender = useRef(true);
   const filterEnabledRef = useRef(filterEnabled);
   useEffect(() => { filterEnabledRef.current = filterEnabled; }, [filterEnabled]);
+  const localFilterParamsRef = useRef(localFilterParams);
+  useEffect(() => { localFilterParamsRef.current = localFilterParams; }, [localFilterParams]);
   const filterVersion = useFilterVersion();
   const [logData, setLogData] = useState<EventLogData | null>(null);
   const [logStatus, setLogStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
@@ -628,7 +639,7 @@ export default function OCHandoverExplorer({
     (async () => {
       try {
         const { data: result } = await axios.get<EventLogData>("/api/event-log/", {
-          params: { file_id: fileId },
+          params: { file_id: fileId, ...localFilterParamsRef.current },
           _skipGlobalFilter: !filterEnabledRef.current,
         });
         if (cancelled) return;
@@ -686,7 +697,7 @@ export default function OCHandoverExplorer({
 
       try {
         const activeClusterMap = useClustersRef.current && clusterInfoRef.current ? clusterInfoRef.current.clusterMap : null;
-        const result = await requestHandover<HandoverData>(params, activeClusterMap, filterEnabledRef.current);
+        const result = await requestHandover<HandoverData>(params, activeClusterMap, filterEnabledRef.current, localFilterParamsRef.current);
         if (fileIdRef.current !== currentFileId || cancelled) return;
         setData(result);
         setStatus(result.edges.length > 0 ? "ready" : "empty");
@@ -809,7 +820,7 @@ export default function OCHandoverExplorer({
     try {
       const activeClusterMap = useClusters && clusterInfo ? clusterInfo.clusterMap : null;
       const result = await requestHandover<{ flows?: FlowEvent[]; timeline?: FlowsData["timeline"] }>(
-        params, activeClusterMap, filterEnabledRef.current,
+        params, activeClusterMap, filterEnabledRef.current, localFilterParamsRef.current,
       );
       if (result.flows && result.timeline) {
         setFlowsData({ flows: result.flows, timeline: result.timeline });
@@ -845,7 +856,7 @@ export default function OCHandoverExplorer({
     }
     try {
       const activeClusterMap = useClusters && clusterInfo ? clusterInfo.clusterMap : null;
-      const result = await requestHandover<{ bindings?: BindingPattern[] }>(params, activeClusterMap, filterEnabledRef.current);
+      const result = await requestHandover<{ bindings?: BindingPattern[] }>(params, activeClusterMap, filterEnabledRef.current, localFilterParamsRef.current);
       if (Array.isArray(result.bindings)) {
         setBindingsData(result.bindings);
         setBindingsStatus("ready");

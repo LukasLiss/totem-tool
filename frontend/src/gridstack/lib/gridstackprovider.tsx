@@ -451,6 +451,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         h,
         order: index,
         ...props,
+        local_filter_params: node.local_filter_params ?? null,
         id: component_id,  // Now always set — spread last so this always wins
       };
     });
@@ -644,6 +645,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             n_clusters: item.n_clusters,
             min_cluster_size: item.min_cluster_size,
             distance_metric: item.distance_metric,
+            local_filter_params: item.local_filter_params ?? null,
           });
           // After adding, ensure custom properties are on the node
           if (widgetEl) {
@@ -751,6 +753,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node.n_clusters = item.n_clusters;
               node.min_cluster_size = item.min_cluster_size;
               node.distance_metric = item.distance_metric;
+              node.local_filter_params = item.local_filter_params ?? null;
             }
           }
           // Set data attribute for persistence

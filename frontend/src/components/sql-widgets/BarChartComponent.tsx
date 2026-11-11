@@ -32,6 +32,9 @@ import {
   type SqlWidgetNodeFields,
   type SqlWidgetProps,
 } from "./sqlWidgetUtils";
+import { GlobalFilterToggle } from "@/components/ui/GlobalFilterToggle";
+import { LocalFilterDropdown } from "@/components/ui/LocalFilterDropdown";
+import { useDashboardLocalFilter } from "@/hooks/useDashboardLocalFilter";
 
 export interface BarChartNodeFields extends SqlWidgetNodeFields {
   label_column?: string;
@@ -47,7 +50,13 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
   onUpdate,
   isEditMode = false,
   selectedFile,
+  dashboardId,
 }) => {
+  const [filterEnabled, setFilterEnabled] = useState(true);
+  const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
+    node.local_filter_params, dashboardId, node.component_id, onUpdate,
+  );
+
   const [title, setTitle] = useState(node.title ?? "");
   const [query, setQuery] = useState(node.query ?? BAR_CHART_DEFAULT_QUERY);
   const [linked, setLinked] = useState<LinkedQuery | null>(linkedQueryOf(node));
@@ -77,6 +86,8 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
     queryAssetId: linked?.id,
     enabled: !isEditMode,
     limit: 500,
+    filterEnabled,
+    localFilterParams: Object.keys(localFilterParams).length > 0 ? localFilterParams : undefined,
   });
 
   const { chartData, valueKey } = useMemo(() => {
@@ -182,21 +193,24 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
     );
   }
 
-  if (!fileId) return <WidgetMessage>Select an event log to draw this chart.</WidgetMessage>;
-  if (data.error) return <WidgetMessage tone="error">{data.error}</WidgetMessage>;
-  if (data.loading) return <WidgetMessage>Loading…</WidgetMessage>;
-  if (chartData.length === 0 || !valueKey) {
-    return <WidgetMessage>No data to display. Configure the query and columns in edit mode.</WidgetMessage>;
-  }
-
   return (
     <Card className="flex h-full w-full flex-col overflow-hidden rounded-none">
-      {title && (
-        <CardHeader className="pb-0">
-          <CardTitle className="truncate text-sm">{title}</CardTitle>
-        </CardHeader>
-      )}
+      <CardHeader className="flex flex-row items-center gap-2 space-y-0 px-4 py-2 border-b text-left">
+        <CardTitle className="shrink min-w-0 truncate text-sm">{title}</CardTitle>
+        <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} />
+        <LocalFilterDropdown fileId={fileId} onFilterChange={handleLocalFilterChange} value={localFilterParams} />
+      </CardHeader>
       <CardContent className="min-h-0 flex-1 p-3">
+        {!fileId ? (
+          <WidgetMessage>Select an event log to draw this chart.</WidgetMessage>
+        ) : data.error ? (
+          <WidgetMessage tone="error">{data.error}</WidgetMessage>
+        ) : data.loading ? (
+          <WidgetMessage>Loading…</WidgetMessage>
+        ) : chartData.length === 0 || !valueKey ? (
+          <WidgetMessage>No data to display. Configure the query and columns in edit mode.</WidgetMessage>
+        ) : (
+          <>
         <ChartContainer config={chartConfig} className="aspect-auto h-full w-full">
           <BarChart
             data={chartData}
@@ -248,8 +262,10 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
             </Bar>
           </BarChart>
         </ChartContainer>
-        {data.truncated && (
-          <p className="pt-1 text-[11px] text-muted-foreground">showing the first 500 rows</p>
+          {data.truncated && (
+            <p className="pt-1 text-[11px] text-muted-foreground">showing the first 500 rows</p>
+          )}
+        </>
         )}
       </CardContent>
     </Card>

@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Card,
   CardContent,
@@ -18,6 +18,8 @@ export type TotemMinerProps = {
   height?: string | number;
   filterEnabled?: boolean;
   onToggleFilter?: () => void;
+  initialLocalFilterParams?: Record<string, string>;
+  onLocalFilterChange?: (params: Record<string, string>) => void;
 };
 
 import { API_BASE_URL } from '../config/api';
@@ -29,11 +31,18 @@ export default function TotemMiner({
   height = 600,
   filterEnabled = true,
   onToggleFilter,
+  initialLocalFilterParams,
+  onLocalFilterChange,
 }: TotemMinerProps) {
   const [relayoutSignal, setRelayoutSignal] = useState(0);
   const [tau, setTau] = useState(0.8);
   const [sliderTau, setSliderTau] = useState(0.8);
-  const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>({});
+  const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>(initialLocalFilterParams ?? {});
+
+  useEffect(() => {
+    if (!initialLocalFilterParams || Object.keys(initialLocalFilterParams).length === 0) return;
+    setLocalFilterParams((prev) => (Object.keys(prev).length === 0 ? initialLocalFilterParams : prev));
+  }, [initialLocalFilterParams]);
 
   const handleRelayout = useCallback(() => {
     setRelayoutSignal((prev) => prev + 1);
@@ -68,15 +77,18 @@ export default function TotemMiner({
       className={`@container/card w-full flex flex-col ${fillContainer ? 'h-full rounded-none' : ''}`}
     >
       {/* Custom inline header matching thesis layout */}
-      <div className="flex flex-row items-center justify-between relative z-10 flex-shrink-0 w-full px-6 py-3 border-b bg-white">
+      <div className="flex flex-row items-center justify-between relative z-10 flex-shrink-0 w-full px-4 py-2 border-b bg-card text-left">
         <div className="flex items-center gap-2">
-          <h3 className="text-base font-semibold leading-none tracking-tight text-slate-900">
+          <span className="text-sm font-semibold text-card-foreground">
             TOTeM Model
-          </h3>
+          </span>
           {onToggleFilter && (
             <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggleFilter} />
           )}
-          <LocalFilterDropdown fileId={fileId} onFilterChange={setLocalFilterParams} />
+          <LocalFilterDropdown fileId={fileId} value={localFilterParams} onFilterChange={(params) => {
+            setLocalFilterParams(params);
+            onLocalFilterChange?.(params);
+          }} />
         </div>
         <div className="flex items-center gap-5">
           {/* τ slider */}

@@ -13,6 +13,7 @@ import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import ProcessArea from "@/react_component/ProcessArea";
 import NewOCDFGVisualizer from "@/react_component/NewOCDFGVisualizer";
 import LogStatistics from "@/components/LogStatistics";
+import { usePersistedLocalFilter } from "@/hooks/usePersistedLocalFilter";
 
 /**
  * The Overview page: a first look at the selected event log.
@@ -26,8 +27,10 @@ import LogStatistics from "@/components/LogStatistics";
  */
 export function DevDashboard() {
   const { selectedFile } = useContext(SelectedFileContext);
+  const projectId = selectedFile?.project ?? null;
   const [dfgFilterEnabled, setDfgFilterEnabled] = useState(true);
-  const [dfgLocalFilter, setDfgLocalFilter] = useState<Record<string, string>>({});
+  const [processAreaFilter, setProcessAreaFilter] = usePersistedLocalFilter(projectId, "overview_processArea");
+  const [dfgLocalFilter, setDfgLocalFilter] = usePersistedLocalFilter(projectId, "overview_dfg");
 
   return (
     <div>
@@ -39,13 +42,17 @@ export function DevDashboard() {
           showNumObjects={true}
           showNumObjectTypes={true}
         />
-        <ProcessArea fileId={selectedFile?.id} />
+        <ProcessArea
+          fileId={selectedFile?.id}
+          initialLocalFilterParams={processAreaFilter}
+          onLocalFilterChange={setProcessAreaFilter}
+        />
         <Card className="@container/card" data-testid="overview-dfg-card">
           <CardHeader className="items-center relative z-10 justify-between">
             <div className="flex items-center gap-2">
               <CardTitle>Object-Centric Directly-Follows Graph</CardTitle>
               <GlobalFilterToggle filterEnabled={dfgFilterEnabled} onToggle={() => setDfgFilterEnabled(p => !p)} />
-              <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setDfgLocalFilter} />
+              <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setDfgLocalFilter} value={dfgLocalFilter} />
             </div>
             <CardDescription>Directly-follows relations per object type with arc weights and automatic layout</CardDescription>
           </CardHeader>

@@ -7,6 +7,7 @@ frontend can trigger against a stored event log is an ``@action`` here.
 import copy
 import json
 import os
+import re
 import shutil
 import tempfile
 from contextlib import contextmanager
@@ -148,6 +149,37 @@ def _sandboxed_query_connection(log_path: str):
         yield conn
     finally:
         conn.close()
+
+
+def _build_filter_cte(fp: dict) -> str | None:
+    """Return an 'events AS (...)' CTE fragment that shadows the events table.
+
+    Uses main.events (schema-qualified) to avoid self-reference inside the CTE.
+    After USE log, 'main.events' resolves to log.main.events.
+    """
+    if not fp:
+        return None
+    conditions = []
+    if "activities" in fp:
+        escaped = "', '".join(a.replace("'", "''") for a in fp["activities"])
+        conditions.append(f"activity IN ('{escaped}')")
+    if "after" in fp:
+        conditions.append(f"timestamp_unix >= {int(fp['after'])}")
+    if "before" in fp:
+        conditions.append(f"timestamp_unix <= {int(fp['before'])}")
+    if "object_types" in fp:
+        escaped = "', '".join(ot.replace("'", "''") for ot in fp["object_types"])
+        conditions.append(
+            f"event_id IN ("
+            f"SELECT eo.event_id FROM main.event_object eo "
+            f"JOIN main.objects o ON eo.obj_id = o.obj_id "
+            f"WHERE o.obj_type IN ('{escaped}')"
+            f")"
+        )
+    if not conditions:
+        return None
+    where = " AND ".join(conditions)
+    return f"events AS (SELECT * FROM main.events WHERE {where})"
 
 
 # Upper bound on sampled points for the dotted chart endpoint.
@@ -1720,6 +1752,17 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response({"error": "Exactly one SQL statement is allowed"}, status=status.HTTP_400_BAD_REQUEST)
         if statements[0].type != duckdb.StatementType.SELECT:
             return Response({"error": "Only SELECT queries are allowed"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Inject a filtered 'events' CTE when local filter params are present.
+        # The CTE shadows the base events table so the user's SQL sees only
+        # matching events without needing to know about the filter.
+        fp = _parse_filter_params(request)
+        filter_cte = _build_filter_cte(fp)
+        if filter_cte:
+            if re.match(r"^\s*WITH\b", query, re.IGNORECASE):
+                query = re.sub(r"^\s*WITH\s+", f"WITH {filter_cte}, ", query, count=1, flags=re.IGNORECASE)
+            else:
+                query = f"WITH {filter_cte} {query}"
 
         # Optional paging: ``limit`` rows starting at ``offset``. Without an
         # explicit limit the historical cap applies. Fetch one extra row to

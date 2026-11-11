@@ -78,6 +78,8 @@ type OrgaMiningExplorerProps = {
   autoStart?: boolean;
   /** Send the global filter with every request (default true). */
   filterEnabled?: boolean;
+  /** Per-widget local filter params to append to every request. */
+  localFilterParams?: Record<string, string>;
 };
 
 type ViewMode = ProfilingViewMode;
@@ -129,6 +131,7 @@ export default function OrgaMiningExplorer({
   initialSettings,
   autoStart = false,
   filterEnabled = true,
+  localFilterParams,
 }: OrgaMiningExplorerProps) {
   // Settings are read once; a host that changes them re-mounts the explorer.
   const [initial] = useState<ResourceProfilingSettings>(() => ({ ...DEFAULT_PROFILING_SETTINGS, ...initialSettings }));
@@ -156,6 +159,8 @@ export default function OrgaMiningExplorer({
   const isFirstRender = useRef(true);
   const filterEnabledRef = useRef(filterEnabled);
   useEffect(() => { filterEnabledRef.current = filterEnabled; }, [filterEnabled]);
+  const localFilterParamsRef = useRef(localFilterParams);
+  useEffect(() => { localFilterParamsRef.current = localFilterParams; }, [localFilterParams]);
   const filterVersion = useFilterVersion();
   // Rendered size of the standalone graph; the embedded path measures its own
   // tile through CanvasShell instead.
@@ -279,7 +284,7 @@ export default function OrgaMiningExplorer({
 
       try {
         const { data: result } = await axios.get<ProfileMatrixData>("/api/profile-matrix/", {
-          params,
+          params: { ...params, ...localFilterParamsRef.current },
           _skipGlobalFilter: !filterEnabledRef.current,
         });
         if (fileIdRef.current !== currentFileId || cancelled) return;
