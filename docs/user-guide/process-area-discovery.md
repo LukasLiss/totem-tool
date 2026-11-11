@@ -34,8 +34,10 @@ form a process area (the blue boxes).
   cohesion (β) parameters. **Reset to defaults** restores the defaults.
 - **Reload** recomputes the process areas, for example after you change the global filter.
 - **Details**: expand a process area to see an embedded object-centric directly-follows graph
-  of the activities in that area. The eye button switches between the level-based view and a
-  detailed view that shows all activities.
+  of its object types. By default (level-based view) it only contains the activities that belong
+  to the area, i.e. not those already claimed by a lower process area (or, for an adjusted
+  composition, the activities you chose for the area). The eye button switches to the detailed
+  view, which shows every activity of the area's object types.
 - **Filter by process area**: hover over an area and click the small filter icon to set the
   global object-type and activity filter to exactly that area. Every other analysis then works
   on this part of the process only.

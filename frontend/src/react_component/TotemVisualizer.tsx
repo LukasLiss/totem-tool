@@ -74,6 +74,7 @@ import {
   type ProcessAreaParams,
 } from './processAreaParams';
 import { useGridLayout } from './process-area/useGridLayout';
+import { detailActivityRestriction } from './process-area/detailActivities';
 
 /** Every committed slider change is a backend round-trip; don't fire per pixel. */
 const PROCESS_AREA_PARAM_DEBOUNCE_MS = 350;
@@ -4281,70 +4282,13 @@ function buildLayersFromBackend(data: TotemApiResponse): ProcessLayer[] {
   }));
 }
 
-function getFilteredDetailData(
-  cachedDetail: OcdfgGraph | undefined,
-  detailedOcdfgView: boolean,
-  layers: ProcessLayer[],
-  area: ProcessAreaDefinition,
-): OcdfgGraph | null {
-  if (!cachedDetail) return null;
-  if (detailedOcdfgView) return cachedDetail;
-
-  const objectTypeToLevel = new Map<string, number>();
-  layers.forEach((layer) => {
-    layer.areas.forEach((a) => {
-      a.objectTypes.forEach((ot) => {
-        objectTypeToLevel.set(ot, layer.level);
-      });
-    });
-  });
-
-  const minLevel = layers.length > 0 ? Math.min(...layers.map((l) => l.level)) : 0;
-  if (area.level <= minLevel) {
-    return cachedDetail;
-  }
-
-  const filteredNodes = cachedDetail.nodes.filter((node) => {
-    const nodeTypes = node.types ?? [];
-    const hasLowerLevelType = nodeTypes.some((ot) => {
-      const otLevel = objectTypeToLevel.get(ot);
-      return otLevel !== undefined && otLevel < area.level;
-    });
-    return !hasLowerLevelType;
-  });
-
-  const filteredNodeIds = new Set(filteredNodes.map((n) => n.id));
-  const filteredLinks = cachedDetail.links.filter((link) => {
-    return filteredNodeIds.has(link.source) && filteredNodeIds.has(link.target);
-  });
-
-  const originalDegree = new Map<string, number>();
-  cachedDetail.links.forEach((l) => {
-    originalDegree.set(l.source, (originalDegree.get(l.source) || 0) + 1);
-    originalDegree.set(l.target, (originalDegree.get(l.target) || 0) + 1);
-  });
-
-  const filteredDegree = new Map<string, number>();
-  filteredLinks.forEach((l) => {
-    filteredDegree.set(l.source, (filteredDegree.get(l.source) || 0) + 1);
-    filteredDegree.set(l.target, (filteredDegree.get(l.target) || 0) + 1);
-  });
-
-  const finalFilteredNodes = filteredNodes.filter((n) => {
-    const orig = originalDegree.get(n.id) || 0;
-    const curr = filteredDegree.get(n.id) || 0;
-    // Remove the node if it had edges originally, but lost all of them due to filtering
-    if (orig > 0 && curr === 0) {
-      return false;
-    }
-    return true;
-  });
-
-  return {
-    ...cachedDetail,
-    nodes: finalFilteredNodes,
-    links: filteredLinks,
-  };
+/** Identifies what a cached drill-down graph was computed for. */
+function detailSignature(area: ProcessAreaDefinition, detailedView: boolean): string {
+  return JSON.stringify([
+    detailedView,
+    [...area.objectTypes].sort(),
+    detailedView ? [] : [...area.activities].sort(),
+  ]);
 }
 
 function TotemVisualizer({
@@ -4460,6 +4404,8 @@ function TotemVisualizer({
     setAllOcdfgNodes(null);
   }, [filterEnabled, effectiveFilterVersion]);
   const [detailedOcdfgView, setDetailedOcdfgView] = useState(false);
+  /** Per area: `detailSignature` of the graph last requested for it. */
+  const detailSignatureRef = useRef<Record<string, string>>({});
   const [legendOffsets, setLegendOffsets] = useState<Record<number, number>>({});
   const [processAreaScale, setProcessAreaScale] = useState(DEFAULT_PROCESS_AREA_SCALE);
   const [smoothedProcessAreaScale, setSmoothedProcessAreaScale] = useState(DEFAULT_PROCESS_AREA_SCALE);
@@ -5066,25 +5012,8 @@ function TotemVisualizer({
     levelMinimumWidthRef.current = levelMinimumWidth;
   }, [levelMinimumWidth]);
 
-  const filteredDetailCache = useMemo(() => {
-    const result: Record<string, OcdfgGraph> = {};
-    layers.forEach((layer) => {
-      layer.areas.forEach((area) => {
-        if (expandedAreas[area.id] && detailCache[area.id]) {
-          const filtered = getFilteredDetailData(
-            detailCache[area.id],
-            detailedOcdfgView,
-            layers,
-            area
-          );
-          if (filtered) {
-            result[area.id] = filtered;
-          }
-        }
-      });
-    });
-    return result;
-  }, [detailCache, detailedOcdfgView, layers, expandedAreas]);
+  // The cache holds the graph for the active view (see `fetchDetailOcdfg`).
+  const filteredDetailCache = detailCache;
   const detailEdgeSegments = useMemo(
     () => edgeSegments.filter((segment) => segment.relation === 'A'),
     [edgeSegments],
@@ -5211,9 +5140,25 @@ function TotemVisualizer({
           setDetailLoading((p) => ({ ...p, [areaId]: false }));
           return;
         }
+        detailSignatureRef.current[areaId] = detailSignature(area, detailedOcdfgView);
         const detailParams = new URLSearchParams({ file_id: String(eventLogId), object_types: area.objectTypes.join(',') });
         if (detailFilterConfig.params) {
           Object.entries(detailFilterConfig.params).forEach(([k, v]) => detailParams.set(k, v));
+        }
+        const activities = detailActivityRestriction(
+          area,
+          detailedOcdfgView,
+          detailFilterConfig.params?.activities,
+        );
+        if (activities !== null) {
+          if (activities.length === 0) {
+            // Nothing of its own to show (every activity is claimed by a
+            // lower area, or filtered out). An empty request parameter would
+            // mean "no restriction", so answer locally.
+            setDetailCache((p) => ({ ...p, [areaId]: { nodes: [], links: [] } }));
+            return;
+          }
+          detailParams.set('activities', activities.join(','));
         }
         const { data: payload } = await axios.get<{ dfg?: OcdfgGraph; all_nodes?: OcdfgNodeSummary[]; filter_error?: string; error?: string; trace_variants?: TraceVariantsMap } & Partial<OcdfgGraph>>(
           `${backendBaseUrl}/api/new-ocdfg/?${detailParams.toString()}`,
@@ -5272,7 +5217,7 @@ function TotemVisualizer({
         });
       }
     },
-    [backendBaseUrl, eventLogId, filterEnabled, effectiveFilterVersion, localFilterParams],
+    [backendBaseUrl, eventLogId, filterEnabled, effectiveFilterVersion, localFilterParams, detailedOcdfgView],
   );
 
   const toggleAreaDetail = useCallback(
@@ -5285,15 +5230,34 @@ function TotemVisualizer({
           delete rest[area.id];
           return rest;
         }
-        // Kick off detail fetch on first open
-        if (!detailCache[area.id] && !detailLoading[area.id]) {
+        // Kick off detail fetch on first open, or when the area changed
+        // (a different composition) since its graph was fetched.
+        const stale =
+          detailSignatureRef.current[area.id] !== detailSignature(area, detailedOcdfgView);
+        if ((!detailCache[area.id] || stale) && !detailLoading[area.id]) {
           fetchDetailOcdfg(area);
         }
         return { ...prev, [area.id]: true };
       });
     },
-    [detailCache, detailLoading, fetchDetailOcdfg],
+    [detailCache, detailLoading, fetchDetailOcdfg, detailedOcdfgView],
   );
+
+  // An open drill-down follows its area: adjusting the object types or
+  // activities of an area (Process Area editor) refetches its graph.
+  useEffect(() => {
+    layers.forEach((layer) =>
+      layer.areas.forEach((area) => {
+        if (!expandedAreas[area.id] || detailLoading[area.id]) return;
+        const fetched = detailSignatureRef.current[area.id];
+        if (fetched !== undefined && fetched !== detailSignature(area, detailedOcdfgView)) {
+          fetchDetailOcdfg(area);
+        }
+      }),
+    );
+    // Only when the areas themselves change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layers]);
 
   useEffect(() => {
     fetchTotem();
@@ -6387,6 +6351,24 @@ function TotemVisualizer({
                                         >
                                           Retry
                                         </Button>
+                                      </div>
+                                    ) : detailData && detailData.nodes.length === 0 ? (
+                                      <div
+                                        data-testid="process-area-detail-empty"
+                                        title={
+                                          detailedOcdfgView
+                                            ? 'The filter leaves no activity of these object types.'
+                                            : 'Every activity of these object types belongs to a lower process area. The detailed view (eye button) shows all of them.'
+                                        }
+                                        style={{
+                                          fontSize: 12,
+                                          color: '#475569',
+                                          padding: '6px 8px',
+                                          textAlign: 'center',
+                                          lineHeight: 1.3,
+                                        }}
+                                      >
+                                        {detailedOcdfgView ? 'No activities' : 'No activities of its own'}
                                       </div>
                                     ) : detailData ? (
                                       <OCDFGDetailVisualizer
