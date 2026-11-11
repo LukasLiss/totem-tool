@@ -34,8 +34,9 @@ Click **Settings** to configure the three steps of the computation:
    - *Connected components*: one execution per connected component of the object graph.
    - *Resource-aware*: you choose the business object types (and optionally the business
      activities) that define the executions. Shared resources such as workers or machines never
-     merge executions. You can also start from a discovered
-     [process area](process-area-discovery.md).
+     merge executions. You can also start from a
+     [process area](process-area-discovery.md): the picker lists the discovered areas and the
+     named areas of every composition stored in the project assets.
 2. **Variant grouping**: the isomorphism strategy that decides when two executions have the same
    structure. *WL + VF2* is the recommended default; faster but less exact strategies are available
    for large logs. A timeout keeps the computation bounded.

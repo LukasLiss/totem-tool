@@ -16,6 +16,7 @@ import { OCAlignmentView } from "./components/oc-alignment/OCAlignmentView";
 import { ModelAssetsView } from "./components/ModelAssetsView";
 import { ImageAssetsView } from "./components/ImageAssetsView";
 import { QueryAssetsView } from "./components/QueryAssetsView";
+import { ProcessAreaAssetsView } from "./components/ProcessAreaAssetsView";
 import { EditorView } from "./editors/EditorView";
 import { PlayoutView } from "./playout/PlayoutView";
 import Grid from './components/grid';
@@ -51,6 +52,8 @@ export function ProcessOverview() {
         return <ImageAssetsView />;
       case 'queryAssets':
         return <QueryAssetsView initialAssetId={viewMode.openAssetId} />;
+      case 'processAreaAssets':
+        return <ProcessAreaAssetsView />;
       case 'conformance':
         if (viewMode.component === 'totem') {
           return <TotemConformanceView initialAssetId={viewMode.assetId} />;

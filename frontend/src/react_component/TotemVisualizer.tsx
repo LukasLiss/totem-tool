@@ -53,6 +53,8 @@ type ProcessAreaDefinition = {
   id: string;
   level: number;
   label: string;
+  /** User-given name; only areas of a named composition have one. */
+  name?: string;
   objectTypes: string[];
   /** Activities the backend assigned to this area (not claimed by a lower one). */
   activities: string[];
@@ -72,6 +74,7 @@ import {
   type ProcessAreaParams,
 } from './processAreaParams';
 import { useGridLayout } from './process-area/useGridLayout';
+import { detailActivityRestriction } from './process-area/detailActivities';
 import { useTouchMouseBridge } from '@/hooks/use-touch-mouse-bridge';
 
 /** Every committed slider change is a backend round-trip; don't fire per pixel. */
@@ -90,6 +93,16 @@ export type TotemVisualizerControls = {
   params: ProcessAreaParams;
   onParamChange: (key: keyof ProcessAreaParams, value: number) => void;
   onParamsReset: () => void;
+};
+
+/** What a discovery returned, for callers that build compositions from it. */
+export type ProcessAreaDiscoveryInfo = {
+  algorithm: ProcessAreaAlgorithm;
+  filtered: boolean;
+  layers: MlpaLayer[];
+  objectTypeToActivities: Record<string, string[]>;
+  allObjectTypes: string[];
+  allActivities: string[];
 };
 
 type TotemVisualizerProps = {
@@ -112,6 +125,16 @@ type TotemVisualizerProps = {
     algorithm: ProcessAreaAlgorithm;
     params: ProcessAreaParams;
   }) => void;
+  /**
+   * A hand-edited or stored composition to draw instead of the discovered
+   * areas (highest level first). The discovery still runs: it supplies the
+   * relations between the object types. While set, the discovered areas are
+   * not published to the shared process-area store; the caller publishes
+   * the composition instead.
+   */
+  compositionLayers?: ProcessLayer[] | null;
+  /** Fired with every discovery result. */
+  onDiscoveryLoaded?: (info: ProcessAreaDiscoveryInfo) => void;
 };
 
 type RelationType = 'P' | 'D' | 'I' | 'A';
@@ -4260,70 +4283,13 @@ function buildLayersFromBackend(data: TotemApiResponse): ProcessLayer[] {
   }));
 }
 
-function getFilteredDetailData(
-  cachedDetail: OcdfgGraph | undefined,
-  detailedOcdfgView: boolean,
-  layers: ProcessLayer[],
-  area: ProcessAreaDefinition,
-): OcdfgGraph | null {
-  if (!cachedDetail) return null;
-  if (detailedOcdfgView) return cachedDetail;
-
-  const objectTypeToLevel = new Map<string, number>();
-  layers.forEach((layer) => {
-    layer.areas.forEach((a) => {
-      a.objectTypes.forEach((ot) => {
-        objectTypeToLevel.set(ot, layer.level);
-      });
-    });
-  });
-
-  const minLevel = layers.length > 0 ? Math.min(...layers.map((l) => l.level)) : 0;
-  if (area.level <= minLevel) {
-    return cachedDetail;
-  }
-
-  const filteredNodes = cachedDetail.nodes.filter((node) => {
-    const nodeTypes = node.types ?? [];
-    const hasLowerLevelType = nodeTypes.some((ot) => {
-      const otLevel = objectTypeToLevel.get(ot);
-      return otLevel !== undefined && otLevel < area.level;
-    });
-    return !hasLowerLevelType;
-  });
-
-  const filteredNodeIds = new Set(filteredNodes.map((n) => n.id));
-  const filteredLinks = cachedDetail.links.filter((link) => {
-    return filteredNodeIds.has(link.source) && filteredNodeIds.has(link.target);
-  });
-
-  const originalDegree = new Map<string, number>();
-  cachedDetail.links.forEach((l) => {
-    originalDegree.set(l.source, (originalDegree.get(l.source) || 0) + 1);
-    originalDegree.set(l.target, (originalDegree.get(l.target) || 0) + 1);
-  });
-
-  const filteredDegree = new Map<string, number>();
-  filteredLinks.forEach((l) => {
-    filteredDegree.set(l.source, (filteredDegree.get(l.source) || 0) + 1);
-    filteredDegree.set(l.target, (filteredDegree.get(l.target) || 0) + 1);
-  });
-
-  const finalFilteredNodes = filteredNodes.filter((n) => {
-    const orig = originalDegree.get(n.id) || 0;
-    const curr = filteredDegree.get(n.id) || 0;
-    // Remove the node if it had edges originally, but lost all of them due to filtering
-    if (orig > 0 && curr === 0) {
-      return false;
-    }
-    return true;
-  });
-
-  return {
-    ...cachedDetail,
-    nodes: finalFilteredNodes,
-    links: filteredLinks,
-  };
+/** Identifies what a cached drill-down graph was computed for. */
+function detailSignature(area: ProcessAreaDefinition, detailedView: boolean): string {
+  return JSON.stringify([
+    detailedView,
+    [...area.objectTypes].sort(),
+    detailedView ? [] : [...area.activities].sort(),
+  ]);
 }
 
 function TotemVisualizer({
@@ -4340,11 +4306,18 @@ function TotemVisualizer({
   initialAlgorithm,
   initialParams,
   onSettingsChange,
+  compositionLayers,
+  onDiscoveryLoaded,
 }: TotemVisualizerProps) {
   const filterVersion = useFilterVersion();
   const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
   const localFilterParamsRef = useRef(localFilterParams);
   localFilterParamsRef.current = localFilterParams;
+  // Read inside `fetchTotem` without making a composition change refetch.
+  const compositionActiveRef = useRef(Boolean(compositionLayers));
+  compositionActiveRef.current = Boolean(compositionLayers);
+  const onDiscoveryLoadedRef = useRef(onDiscoveryLoaded);
+  onDiscoveryLoadedRef.current = onDiscoveryLoaded;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rawTotem, setRawTotem] = useState<TotemApiResponse | null>(null);
@@ -4432,6 +4405,8 @@ function TotemVisualizer({
     setAllOcdfgNodes(null);
   }, [filterEnabled, effectiveFilterVersion]);
   const [detailedOcdfgView, setDetailedOcdfgView] = useState(false);
+  /** Per area: `detailSignature` of the graph last requested for it. */
+  const detailSignatureRef = useRef<Record<string, string>>({});
   const [legendOffsets, setLegendOffsets] = useState<Record<number, number>>({});
   const [processAreaScale, setProcessAreaScale] = useState(DEFAULT_PROCESS_AREA_SCALE);
   const [smoothedProcessAreaScale, setSmoothedProcessAreaScale] = useState(DEFAULT_PROCESS_AREA_SCALE);
@@ -4920,7 +4895,10 @@ function TotemVisualizer({
   // drawn — `shownTotem`, `layers`, `allEdges`, `layoutInfo` — belongs to the
   // last response whose layout is done, so the previous hierarchy stays on
   // screen until the new one is laid out.
-  const latestLayers = useMemo(() => (rawTotem ? buildLayersFromBackend(rawTotem) : []), [rawTotem]);
+  const latestLayers = useMemo(
+    () => compositionLayers ?? (rawTotem ? buildLayersFromBackend(rawTotem) : []),
+    [rawTotem, compositionLayers],
+  );
   const baseEdges = useMemo(
     () => extractEdges(rawTotem?.tempgraph),
     [rawTotem?.tempgraph],
@@ -5037,25 +5015,8 @@ function TotemVisualizer({
     levelMinimumWidthRef.current = levelMinimumWidth;
   }, [levelMinimumWidth]);
 
-  const filteredDetailCache = useMemo(() => {
-    const result: Record<string, OcdfgGraph> = {};
-    layers.forEach((layer) => {
-      layer.areas.forEach((area) => {
-        if (expandedAreas[area.id] && detailCache[area.id]) {
-          const filtered = getFilteredDetailData(
-            detailCache[area.id],
-            detailedOcdfgView,
-            layers,
-            area
-          );
-          if (filtered) {
-            result[area.id] = filtered;
-          }
-        }
-      });
-    });
-    return result;
-  }, [detailCache, detailedOcdfgView, layers, expandedAreas]);
+  // The cache holds the graph for the active view (see `fetchDetailOcdfg`).
+  const filteredDetailCache = detailCache;
   const detailEdgeSegments = useMemo(
     () => edgeSegments.filter((segment) => segment.relation === 'A'),
     [edgeSegments],
@@ -5117,10 +5078,20 @@ function TotemVisualizer({
       });
       if (!isCurrent()) return;
       setRawTotem(payload);
+      onDiscoveryLoadedRef.current?.({
+        algorithm,
+        filtered: filterEnabled,
+        layers: payload.layers ?? [],
+        objectTypeToActivities: payload.object_type_to_event_types ?? {},
+        allObjectTypes:
+          payload.tempgraph?.nodes ?? Object.keys(payload.object_type_to_event_types ?? {}),
+        allActivities: payload.all_event_types ?? [],
+      });
       // Share the result so other components (the Variants Explorer's
       // resource-aware mode) can pick one of these areas without recomputing.
+      // A shown composition is published by its owner instead.
       const numericFileId = Number(eventLogId);
-      if (Number.isFinite(numericFileId) && numericFileId > 0) {
+      if (Number.isFinite(numericFileId) && numericFileId > 0 && !compositionActiveRef.current) {
         useProcessAreaStore.getState().publish({
           fileId: numericFileId,
           algorithm,
@@ -5172,9 +5143,25 @@ function TotemVisualizer({
           setDetailLoading((p) => ({ ...p, [areaId]: false }));
           return;
         }
+        detailSignatureRef.current[areaId] = detailSignature(area, detailedOcdfgView);
         const detailParams = new URLSearchParams({ file_id: String(eventLogId), object_types: area.objectTypes.join(',') });
         if (detailFilterConfig.params) {
           Object.entries(detailFilterConfig.params).forEach(([k, v]) => detailParams.set(k, v));
+        }
+        const activities = detailActivityRestriction(
+          area,
+          detailedOcdfgView,
+          detailFilterConfig.params?.activities,
+        );
+        if (activities !== null) {
+          if (activities.length === 0) {
+            // Nothing of its own to show (every activity is claimed by a
+            // lower area, or filtered out). An empty request parameter would
+            // mean "no restriction", so answer locally.
+            setDetailCache((p) => ({ ...p, [areaId]: { nodes: [], links: [] } }));
+            return;
+          }
+          detailParams.set('activities', activities.join(','));
         }
         const { data: payload } = await axios.get<{ dfg?: OcdfgGraph; all_nodes?: OcdfgNodeSummary[]; filter_error?: string; error?: string; trace_variants?: TraceVariantsMap } & Partial<OcdfgGraph>>(
           `${backendBaseUrl}/api/new-ocdfg/?${detailParams.toString()}`,
@@ -5233,7 +5220,7 @@ function TotemVisualizer({
         });
       }
     },
-    [backendBaseUrl, eventLogId, filterEnabled, effectiveFilterVersion, localFilterParams],
+    [backendBaseUrl, eventLogId, filterEnabled, effectiveFilterVersion, localFilterParams, detailedOcdfgView],
   );
 
   const toggleAreaDetail = useCallback(
@@ -5246,15 +5233,34 @@ function TotemVisualizer({
           delete rest[area.id];
           return rest;
         }
-        // Kick off detail fetch on first open
-        if (!detailCache[area.id] && !detailLoading[area.id]) {
+        // Kick off detail fetch on first open, or when the area changed
+        // (a different composition) since its graph was fetched.
+        const stale =
+          detailSignatureRef.current[area.id] !== detailSignature(area, detailedOcdfgView);
+        if ((!detailCache[area.id] || stale) && !detailLoading[area.id]) {
           fetchDetailOcdfg(area);
         }
         return { ...prev, [area.id]: true };
       });
     },
-    [detailCache, detailLoading, fetchDetailOcdfg],
+    [detailCache, detailLoading, fetchDetailOcdfg, detailedOcdfgView],
   );
+
+  // An open drill-down follows its area: adjusting the object types or
+  // activities of an area (Process Area editor) refetches its graph.
+  useEffect(() => {
+    layers.forEach((layer) =>
+      layer.areas.forEach((area) => {
+        if (!expandedAreas[area.id] || detailLoading[area.id]) return;
+        const fetched = detailSignatureRef.current[area.id];
+        if (fetched !== undefined && fetched !== detailSignature(area, detailedOcdfgView)) {
+          fetchDetailOcdfg(area);
+        }
+      }),
+    );
+    // Only when the areas themselves change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layers]);
 
   useEffect(() => {
     fetchTotem();
@@ -6169,6 +6175,30 @@ function TotemVisualizer({
                                   zIndex: 2,
                                 }}
                               />
+                              {area.name ? (
+                                <span
+                                  data-testid="process-area-name"
+                                  title={area.name}
+                                  style={{
+                                    position: 'absolute',
+                                    bottom: '100%',
+                                    left: processAreaRadius / 2,
+                                    maxWidth: `calc(100% - ${processAreaRadius}px)`,
+                                    marginBottom: 2,
+                                    fontSize: 11,
+                                    fontWeight: 600,
+                                    lineHeight: 1.3,
+                                    color: '#1E3A8A',
+                                    whiteSpace: 'nowrap',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    pointerEvents: 'none',
+                                    zIndex: 3,
+                                  }}
+                                >
+                                  {area.name}
+                                </span>
+                              ) : null}
                               <ProcessAreaFilterAction
                                 fileId={eventLogId}
                                 area={area}
@@ -6324,6 +6354,24 @@ function TotemVisualizer({
                                         >
                                           Retry
                                         </Button>
+                                      </div>
+                                    ) : detailData && detailData.nodes.length === 0 ? (
+                                      <div
+                                        data-testid="process-area-detail-empty"
+                                        title={
+                                          detailedOcdfgView
+                                            ? 'The filter leaves no activity of these object types.'
+                                            : 'Every activity of these object types belongs to a lower process area. The detailed view (eye button) shows all of them.'
+                                        }
+                                        style={{
+                                          fontSize: 12,
+                                          color: '#475569',
+                                          padding: '6px 8px',
+                                          textAlign: 'center',
+                                          lineHeight: 1.3,
+                                        }}
+                                      >
+                                        {detailedOcdfgView ? 'No activities' : 'No activities of its own'}
                                       </div>
                                     ) : detailData ? (
                                       <OCDFGDetailVisualizer

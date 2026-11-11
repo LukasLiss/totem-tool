@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, Database, Play, SlidersHorizontal, ZoomIn, ZoomOut } from "lucide-react";
 import { toast } from "sonner";
 
@@ -26,8 +26,11 @@ import { Switch } from "@/components/ui/switch";
 import { VisualizerEmptyState } from "@/components/ui/VisualizerEmptyState";
 import { useFilterVersion } from "@/store/filterStore";
 import { useProcessAreaStore, useProcessAreasForFile } from "@/store/processAreaStore";
+import { useProcessAreaAssets } from "@/store/processAreaAssetsStore";
+import { SelectedFileContext } from "@/contexts/SelectedFileContext";
+import { assetSnapshotAreas } from "./process-area/processAreaGroups";
 
-import { ProcessAreaSettingsPanel } from "./variants/ProcessAreaSettingsPanel";
+import { ProcessAreaSettingsPanel, ProcessAreaSourceSelect } from "./variants/ProcessAreaSettingsPanel";
 import { ProcessAreaVariantTabs } from "./variants/ProcessAreaVariantTabs";
 import { ProcessExecutionStoreSummary } from "./variants/ProcessExecutionStoreSummary";
 import { VariantRow } from "./variants/VariantRow";
@@ -92,6 +95,7 @@ type VariantsExplorerProps = {
   defaultLeadingType?: string;                    // Pre-select this type if provided and valid
   defaultMode?: VariantsMode;                     // "process_areas" (default) or "custom"
   defaultProcessAreaColumns?: ProcessAreaColumns; // Columns the process-area mode writes
+  defaultProcessAreaAssetId?: number | null;      // Stored composition the process-area mode runs on
   defaultExtraction?: Extraction;                 // Persisted settings (dashboard)
   defaultIso?: IsoStrategy;
   defaultTimeoutS?: number;
@@ -131,6 +135,7 @@ export default function VariantsExplorer({
   defaultLeadingType,
   defaultMode = DEFAULT_VARIANTS_MODE,
   defaultProcessAreaColumns,
+  defaultProcessAreaAssetId = null,
   defaultExtraction = "leading_1hop",
   defaultIso = "wl+vf2",
   defaultTimeoutS = 10,
@@ -161,6 +166,11 @@ export default function VariantsExplorer({
   const [areaColumns, setAreaColumns] = useState<ProcessAreaColumns>(
     defaultProcessAreaColumns ?? DEFAULT_PROCESS_AREA_COLUMNS,
   );
+  /** Stored composition (PROCESS_AREAS asset) to use; null = the areas shown now. */
+  const [areaAssetId, setAreaAssetId] = useState<number | null>(defaultProcessAreaAssetId);
+  const { selectedFile } = useContext(SelectedFileContext);
+  const storedCompositions = useProcessAreaAssets(selectedFile?.project ?? null);
+  const areaAsset = areaAssetId ? storedCompositions.assets.find((a) => a.id === areaAssetId) ?? null : null;
   const isAreaMode = mode === "process_areas";
   // The advanced options stay hidden unless the user asks for them (or the
   // persisted settings already use a custom extraction that needs input).
@@ -172,7 +182,7 @@ export default function VariantsExplorer({
   const defaultsKey = JSON.stringify([
     defaultExtraction, defaultIso, defaultTimeoutS, defaultLeadingType ?? "",
     defaultBusinessObjectTypes ?? [], defaultBusinessActivities ?? [],
-    defaultMode, defaultProcessAreaColumns ?? null,
+    defaultMode, defaultProcessAreaColumns ?? null, defaultProcessAreaAssetId,
   ]);
   const seededKeyRef = useRef(defaultsKey);
   useEffect(() => {
@@ -187,8 +197,10 @@ export default function VariantsExplorer({
     setGrouping({ iso: defaultIso, timeoutS: defaultTimeoutS });
     setMode(defaultMode);
     if (defaultProcessAreaColumns) setAreaColumns(defaultProcessAreaColumns);
+    setAreaAssetId(defaultProcessAreaAssetId);
   }, [defaultsKey, defaultExtraction, defaultIso, defaultTimeoutS, defaultLeadingType,
-      defaultBusinessObjectTypes, defaultBusinessActivities, defaultMode, defaultProcessAreaColumns]);
+      defaultBusinessObjectTypes, defaultBusinessActivities, defaultMode, defaultProcessAreaColumns,
+      defaultProcessAreaAssetId]);
 
   // Persist whenever a setting changes. Skipped on the initial mount so we
   // don't echo back the values the parent just gave us.
@@ -199,10 +211,10 @@ export default function VariantsExplorer({
       return;
     }
     onAdvancedChange?.(
-      toAdvancedSettings(execution, grouping.iso, grouping.timeoutS, mode, areaColumns),
+      toAdvancedSettings(execution, grouping.iso, grouping.timeoutS, mode, areaColumns, areaAssetId),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [execution, grouping, mode, areaColumns]);
+  }, [execution, grouping, mode, areaColumns, areaAssetId]);
 
   // ---- log metadata ---------------------------------------------------------
   const [availableTypes, setAvailableTypes] = useState<string[]>([]);
@@ -286,9 +298,15 @@ export default function VariantsExplorer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileId, resetResults]);
 
+  const missingAreaAsset = Boolean(areaAssetId) && storedCompositions.loaded && !areaAsset;
   const blocker = useMemo(
-    () => (isAreaMode ? processAreaColumnsBlocker(areaColumns) : settingsBlocker(execution, store)),
-    [isAreaMode, areaColumns, execution, store],
+    () =>
+      isAreaMode
+        ? missingAreaAsset
+          ? "The selected stored process areas no longer exist. Pick other process areas in the advanced options."
+          : processAreaColumnsBlocker(areaColumns)
+        : settingsBlocker(execution, store),
+    [isAreaMode, missingAreaAsset, areaColumns, execution, store],
   );
   // The process areas take part in the key so recomputing them in the
   // Process Area component marks the shown variants as outdated.
@@ -296,14 +314,18 @@ export default function VariantsExplorer({
     () =>
       JSON.stringify(
         isAreaMode
-          ? { mode, fileId, areaColumns, grouping, areas: processAreas?.computedAt ?? null, filterEnabled, effectiveFilterVersion, localFilterParams }
+          ? {
+              mode, fileId, areaColumns, grouping, filterEnabled, effectiveFilterVersion, localFilterParams,
+              areas: areaAssetId ? `asset:${areaAssetId}:${areaAsset?.updated_at ?? ""}` : processAreas?.computedAt ?? null,
+            }
           : { mode, fileId, execution, grouping, store, filterEnabled, effectiveFilterVersion, localFilterParams },
       ),
-    [isAreaMode, mode, fileId, areaColumns, processAreas?.computedAt, execution, grouping, store, filterEnabled, effectiveFilterVersion, localFilterParams],
+    [isAreaMode, mode, fileId, areaColumns, areaAssetId, areaAsset?.updated_at, processAreas?.computedAt, execution, grouping, store, filterEnabled, effectiveFilterVersion, localFilterParams],
   );
   const stale = lastRunKey !== null && lastRunKey !== runKey;
   const optionsReady = isAreaMode
-    || (!optionsLoading && (availableTypes.length > 0 || !isLeadingExtraction(execution.extraction)));
+    ? !areaAssetId || storedCompositions.loaded
+    : (!optionsLoading && (availableTypes.length > 0 || !isLeadingExtraction(execution.extraction)));
   const canRun = Boolean(fileId) && status !== "loading" && blocker === null && optionsReady;
 
   /**
@@ -331,6 +353,39 @@ export default function VariantsExplorer({
           setStatus(areaResult ? "ready" : "idle");
           return;
         }
+      }
+
+      if (areaAsset) {
+        // A stored composition: its areas, named, exactly as saved.
+        const storedAreas = orderProcessAreas(assetSnapshotAreas(areaAsset)).map(toProcessAreaRequest);
+        if (storedAreas.length === 0) {
+          setAreaResult(null);
+          setStatus("empty");
+          setLastRunKey(key);
+          return;
+        }
+        const result = await computeProcessAreaVariants(
+          currentFileId,
+          storedAreas,
+          grouping,
+          { store: storeInLog, columns: areaColumns },
+          filterEnabled,
+          localFilterParams,
+        );
+        if (!isCurrent()) return;
+        setStoreResult(null);
+        setAreaResult(result);
+        const all = result.areas.flatMap((area) => area.variants);
+        setVariants(all);
+        setStatus("ready");
+        onVariantsLoad?.(all);
+        setLastRunKey(key);
+        if (result.stored) {
+          toast.success(
+            `Stored ${result.execution_count} process execution${result.execution_count === 1 ? "" : "s"} in "${result.execution_column}" and their variants in "${result.variant_column}".`,
+          );
+        }
+        return;
       }
 
       let snapshot = processAreas;
@@ -384,7 +439,7 @@ export default function VariantsExplorer({
       setStatus("error");
       setErrorMsg(describeRequestError(e, "Computing the process area variants failed."));
     }
-  }, [fileId, blocker, runKey, areaColumns, areaResult, processAreas, grouping, filterEnabled, localFilterParams, onVariantsLoad]);
+  }, [fileId, blocker, runKey, areaColumns, areaResult, areaAsset, processAreas, grouping, filterEnabled, localFilterParams, onVariantsLoad]);
 
   const run = useCallback(async () => {
     if (isAreaMode) {
@@ -474,8 +529,9 @@ export default function VariantsExplorer({
     [variants],
   );
   const totalSupport = useMemo(() => variants.reduce((s, v) => s + v.support, 0), [variants]);
+  const areaSourceName = areaAsset?.name ?? processAreas?.composition?.name ?? null;
   const summary = isAreaMode
-    ? `Connected components per process area · stored in "${areaColumns.variantColumn.trim()}"`
+    ? `Connected components per process area${areaSourceName ? ` · ${areaSourceName}` : ""} · stored in "${areaColumns.variantColumn.trim()}"`
     : summarizeSettings(execution, grouping.iso, store);
 
   const runLabel = isAreaMode
@@ -525,6 +581,17 @@ export default function VariantsExplorer({
           </p>
 
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            {isAreaMode && storedCompositions.assets.length > 0 ? (
+              <ProcessAreaSourceSelect
+                id="variants-area-source-toolbar"
+                className="h-8 w-[220px]"
+                value={areaAssetId}
+                onChange={setAreaAssetId}
+                storedCompositions={storedCompositions.assets}
+                currentProcessAreas={processAreas}
+                disabled={status === "loading"}
+              />
+            ) : null}
             <div className="flex items-center gap-2" title="Zoom">
               <ZoomOut size={16} className="text-muted-foreground" />
               <Slider
@@ -586,6 +653,10 @@ export default function VariantsExplorer({
             </div>
             {isAreaMode ? (
               <ProcessAreaSettingsPanel
+                areaAssetId={areaAssetId}
+                onAreaAssetChange={setAreaAssetId}
+                storedCompositions={storedCompositions.assets}
+                currentProcessAreas={processAreas}
                 columns={areaColumns}
                 onColumnsChange={setAreaColumns}
                 grouping={grouping}

@@ -160,9 +160,11 @@ export function toAdvancedSettings(
   timeoutS: number,
   mode: VariantsMode = "process_areas",
   areaColumns: ProcessAreaColumns = DEFAULT_PROCESS_AREA_COLUMNS,
+  processAreaAssetId: number | null = null,
 ): AdvancedSettings {
   return {
     mode,
+    process_area_asset: processAreaAssetId,
     area_execution_column: areaColumns.executionColumn,
     area_variant_column: areaColumns.variantColumn,
     extraction: execution.extraction,

@@ -131,6 +131,7 @@ describe("summaries and persistence", () => {
       leading_type: "",
       business_object_types: ["item", "order"],
       business_activities: ["place order"],
+      process_area_asset: null,
     });
   });
 });

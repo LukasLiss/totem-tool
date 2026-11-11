@@ -38,6 +38,8 @@ declare module 'gridstack' {
     variants_mode?: 'process_areas' | 'custom';
     area_execution_column?: string;
     area_variant_column?: string;
+    // Stored process-area composition of the variants' process-area mode
+    process_area_asset?: number | null;
     show_num_events?: boolean;
     show_num_activities?: boolean;
     show_num_objects?: boolean;
@@ -135,5 +137,7 @@ declare module 'gridstack' {
     beta?: number;
     // Local filter params - persisted per widget
     local_filter_params?: Record<string, string> | null;
+    // ProcessAreaComponent: stored composition shown instead of the discovery
+    composition_asset?: number | null;
   }
 }
