@@ -9,7 +9,7 @@
  * graph and reports its size so the surrounding box can follow it.
  */
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { LockIcon, MinusIcon, PlayIcon, PlusIcon, ScanIcon, SlidersHorizontal, UnlockIcon, ZapIcon } from 'lucide-react';
+import { LockIcon, MinusIcon, PlusIcon, ScanIcon, SlidersHorizontal, UnlockIcon, ZapIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
@@ -25,7 +25,7 @@ import { LAYOUT_PANEL_WIDTH, MAX_AUTO_LAYOUT_ARCS, type Aspect } from './options
 import type { LabGraph, LayoutOptions, LayoutResult } from './types';
 import { useLayoutExtras } from './useLayoutExtras';
 import { useLayoutOptions, type SaveLayout } from './useLayoutOptions';
-import TokenPlayback from './TokenPlayback';
+import AnimationPanel from './AnimationPanel';
 import { useOcdfgFlows } from './useOcdfgFlows';
 
 const LEGEND_HEADER_BUTTON_STYLE = {
@@ -541,20 +541,6 @@ export default function OcdfgView({
             >
               <ZapIcon className="h-4 w-4" />
             </Button>
-            {canAnimateTokens && (
-              <Button
-                type="button"
-                variant={tokensOn ? 'secondary' : 'outline'}
-                size="icon"
-                onClick={() => setTokensOn((prev) => !prev)}
-                className="rounded-full h-9 w-9"
-                title={tokensOn ? 'Stop the object animation' : 'Animate the objects: replay the log on the arcs'}
-                aria-label="Animate the objects"
-                aria-pressed={tokensOn}
-              >
-                <PlayIcon className="h-4 w-4" />
-              </Button>
-            )}
             {editable && (
               <Button
                 type="button"
@@ -583,14 +569,17 @@ export default function OcdfgView({
         </div>
       )}
 
-      {tokensOn && canAnimateTokens && (
-        <TokenPlayback
+      {canAnimateTokens && (
+        <AnimationPanel
+          narrow={width > 0 && width < 2.5 * LEGEND_ROOM}
+          active={tokensOn}
+          onStart={() => setTokensOn(true)}
+          onStop={() => setTokensOn(false)}
           state={flows}
           layer={tokenLayer}
           result={result}
           colors={colors}
           variantLimit={sliderMode === 'variants' ? sliderValue : undefined}
-          onClose={() => setTokensOn(false)}
         />
       )}
 

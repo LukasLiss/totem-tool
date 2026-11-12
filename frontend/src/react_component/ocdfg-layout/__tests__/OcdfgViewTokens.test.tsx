@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { act, cleanup, fireEvent, render } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const get = vi.hoisted(() => vi.fn());
@@ -35,59 +35,78 @@ function view(props: Partial<React.ComponentProps<typeof OcdfgView>> = {}) {
   return render(<OcdfgView graph={graph} height={600} sliderMode="weight" layoutDefaults={DEFAULT_OPTIONS} {...props} />);
 }
 
+async function startAnimation(utils: ReturnType<typeof view>) {
+  await act(async () => {
+    fireEvent.click(utils.getByRole('button', { name: 'Animate' }));
+  });
+}
+
+const dots = (container: HTMLElement) =>
+  container.querySelector('[data-testid="ocdfg-token-layer"]')?.querySelectorAll('circle').length ?? null;
+
 beforeEach(() => {
   get.mockReset();
   get.mockResolvedValue({ data: payload });
 });
 afterEach(() => cleanup());
 
-describe('OcdfgView token animation', () => {
-  it('offers the animation only for a view of an event log', () => {
-    expect(view().queryByRole('button', { name: 'Animate the objects' })).toBeNull();
+describe('OcdfgView animation panel', () => {
+  it('is offered only for a view of an event log', () => {
+    expect(view().queryByTestId('ocdfg-animation-panel')).toBeNull();
     cleanup();
-    expect(view({ fileId: 7 }).queryByRole('button', { name: 'Animate the objects' })).not.toBeNull();
+    const utils = view({ fileId: 7 });
+    expect(utils.queryByTestId('ocdfg-animation-panel')).not.toBeNull();
+    expect(utils.queryByRole('button', { name: 'Animate' })).not.toBeNull();
   });
 
-  it('loads nothing until the animation is switched on', () => {
+  it('loads nothing until Animate is clicked', () => {
     view({ fileId: 7 });
     expect(get).not.toHaveBeenCalled();
   });
 
-  it('loads the steps on demand and draws the running tokens', async () => {
-    const { getByRole, queryByTestId, container } = view({ fileId: 7 });
-    await act(async () => {
-      fireEvent.click(getByRole('button', { name: 'Animate the objects' }));
-    });
+  it('loads the steps on demand, draws the running tokens and charts them', async () => {
+    const utils = view({ fileId: 7 });
+    await startAnimation(utils);
     expect(get).toHaveBeenCalledTimes(1);
     expect(get.mock.calls[0][0]).toBe('/api/new-ocdfg/flows/?file_id=7');
-    expect(queryByTestId('ocdfg-token-playback')).not.toBeNull();
     // Paused at the start: the three steps leaving "place" are on their arcs.
-    const layer = container.querySelector('[data-testid="ocdfg-token-layer"]')!;
-    expect(layer.querySelectorAll('circle')).toHaveLength(3);
+    expect(dots(utils.container)).toBe(3);
 
-    // Closing removes the bar and the layer.
-    fireEvent.click(getByRole('button', { name: 'Close the animation' }));
-    expect(queryByTestId('ocdfg-token-playback')).toBeNull();
-    expect(container.querySelector('[data-testid="ocdfg-token-layer"]')).toBeNull();
+    const chart = utils.getByTestId('ocdfg-activity-chart');
+    expect(within(chart).getByText('Objects between events')).not.toBeNull();
+    // Legend values at t = 0: one order and two items between events.
+    expect(within(chart).getByTitle('order · click to show only this').textContent).toBe('1');
+    expect(within(chart).getByTitle('item · click to show only this').textContent).toBe('2');
+
+    // Stop removes the tokens and offers Animate again.
+    fireEvent.click(utils.getByTitle('Stop'));
+    expect(utils.container.querySelector('[data-testid="ocdfg-token-layer"]')).toBeNull();
+    expect(utils.queryByRole('button', { name: 'Animate' })).not.toBeNull();
   });
 
-  it('draws no tokens of hidden object types', async () => {
-    const { getByRole, getByLabelText, container } = view({ fileId: 7 });
+  it('neither draws nor charts hidden object types', async () => {
+    const utils = view({ fileId: 7 });
     await act(async () => {
-      fireEvent.click(getByLabelText('Show item'));
+      fireEvent.click(utils.getByLabelText('Show item'));
     });
-    await act(async () => {
-      fireEvent.click(getByRole('button', { name: 'Animate the objects' }));
-    });
-    const layer = container.querySelector('[data-testid="ocdfg-token-layer"]')!;
-    expect(layer.querySelectorAll('circle')).toHaveLength(1);
+    await startAnimation(utils);
+    expect(dots(utils.container)).toBe(1);
+    const chart = utils.getByTestId('ocdfg-activity-chart');
+    expect(within(chart).queryByTitle('item · click to show only this')).toBeNull();
+    expect(within(chart).getByTitle('order · click to show only this').textContent).toBe('1');
+  });
+
+  it('keeps animating while the panel is collapsed', async () => {
+    const utils = view({ fileId: 7 });
+    await startAnimation(utils);
+    fireEvent.click(utils.getByRole('button', { name: 'Hide Animation' }));
+    expect(utils.queryByTestId('ocdfg-animation-panel')).toBeNull();
+    expect(dots(utils.container)).toBe(3);
   });
 
   it('asks for variant ranks in the variants view', async () => {
-    const { getByRole } = view({ fileId: 7, sliderMode: 'variants' });
-    await act(async () => {
-      fireEvent.click(getByRole('button', { name: 'Animate the objects' }));
-    });
+    const utils = view({ fileId: 7, sliderMode: 'variants' });
+    await startAnimation(utils);
     expect(get.mock.calls[0][0]).toBe('/api/new-ocdfg/flows/?file_id=7&variant_ranks=1');
   });
 });
