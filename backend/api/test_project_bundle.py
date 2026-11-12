@@ -88,9 +88,21 @@ class ArchiveSafetyTests(SimpleTestCase):
         with self.assertRaises(ProjectBundleError):
             check_archive_safety(self._zip({"../escape.json": b"{}"}))
 
-    def test_refuses_too_many_members(self):
-        with self.assertRaises(ProjectBundleError):
-            check_archive_safety(self._zip({f"f{i}.txt": b"x" for i in range(1001)}))
+    def test_does_not_limit_how_much_a_project_holds(self):
+        """Neither the entry count nor the total size is capped.
+
+        A hosted install decides how large a request body it accepts and the
+        desktop takes the user's own file, so a ceiling here would only ever
+        refuse something legitimate. The declared sizes are rewritten rather
+        than really producing gigabytes: `check_archive_safety` reads the
+        central directory, which is exactly what needs driving.
+        """
+        zf = self._zip({f"f{i}.txt": b"x" * 64 for i in range(2000)})
+        for info in zf.infolist():
+            info.file_size = 10 * 1024**2      # 20 GB across 2000 members
+            info.compress_size = 3 * 1024**2   # ~3x, what a real log gives
+
+        check_archive_safety(zf)  # must not raise
 
     def test_refuses_a_zip_bomb_without_expanding_it(self):
         # Highly compressible: a few KB on disk claiming megabytes on extract.
@@ -131,9 +143,12 @@ class ManifestValidationTests(SimpleTestCase):
                 with self.assertRaises(ProjectBundleError):
                     validate_project_manifest(self._manifest(version=version))
 
-    def test_rejects_too_many_dashboards(self):
+    def test_does_not_limit_the_number_of_dashboards(self):
+        validate_project_manifest(self._manifest(dashboards=["d"] * 5000))
+
+    def test_still_rejects_a_dashboard_list_that_is_not_a_list(self):
         with self.assertRaises(ProjectBundleError):
-            validate_project_manifest(self._manifest(dashboards=["d"] * 101))
+            validate_project_manifest(self._manifest(dashboards="nope"))
 
 
 @override_settings(MEDIA_ROOT=_MEDIA_ROOT)

@@ -36,9 +36,14 @@ build reads an older file but not the reverse, so the manifest records the
 version that wrote it and an import that cannot open the file says so.
 
 A bundle is a *file*, so it is trusted less than anything built in the UI:
-every member name is checked for traversal, every size against a cap, and
-asset contents are re-validated with the same validators the asset endpoints
-use.
+every member name is checked for traversal, a bomb's compression ratio is
+refused, and asset contents are re-validated with the same validators the
+asset endpoints use.
+
+What is deliberately **not** limited is how large a project is or how much it
+holds. A hosted install decides how big a request body it accepts
+(``MAX_UPLOAD_BYTES``); on the desktop the file is the user's own. Neither is
+improved by this module inventing a ceiling.
 """
 
 from __future__ import annotations
@@ -71,16 +76,16 @@ IMAGES_NAME = f"{ASSETS_DIR}/images.json"
 IMAGES_DIR = f"{ASSETS_DIR}/images"
 DASHBOARDS_DIR = "dashboards"
 
-# What a bundle may contain. A file is less trusted than a grid the user built,
-# which is the same reasoning behind `MAX_BUNDLE_COMPONENTS` next door.
-MAX_DASHBOARDS = 100
-MAX_MODEL_ASSETS = 500
-MAX_IMAGES = 200
-MAX_ZIP_MEMBERS = 1000
-# Enough for a very large log, far short of filling a disk.
-MAX_UNCOMPRESSED_BYTES = 2 * 1024**3  # 2 GiB
-MAX_IMAGE_BYTES = 25 * 1024**2
-# A zip claiming to expand far beyond its own size is a bomb, not a project.
+# Deliberately no limit on how large a project is, or on how many dashboards,
+# assets or images it holds. A hosted install decides how big a request body it
+# will accept (MAX_UPLOAD_BYTES), and on the desktop the file is the user's
+# own — neither case is improved by this module guessing a ceiling.
+#
+# A zip claiming to expand far beyond its own size is still refused: that is a
+# bomb, not a big project, and it is the one thing an upload-size limit cannot
+# catch, because the uploaded file is small. The ratio is what separates the
+# two — a DuckDB log compresses around 3x and JSON around 10x, so nothing
+# genuine comes near this.
 MAX_COMPRESSION_RATIO = 200
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg", ".gif", ".webp"}
@@ -148,16 +153,14 @@ def safe_member_path(name):
 def check_archive_safety(zf):
     """Refuse a zip that is hostile rather than merely invalid.
 
-    Checked against the *declared* sizes before a single member is read, so a
-    bomb is refused without being expanded.
+    Neither size nor item counts are limited — an event log is as big as it is,
+    and how many dashboards a project holds is the user's business. What is
+    refused is a file whose *shape* is an attack: a member path that escapes
+    the extraction directory, or a compression ratio no real content reaches.
+    Checked against the declared metadata before a single member is read, so a
+    bomb is refused without expanding it.
     """
     infos = zf.infolist()
-    _require(
-        len(infos) <= MAX_ZIP_MEMBERS,
-        f"The file contains {len(infos)} entries; at most {MAX_ZIP_MEMBERS} "
-        f"can be imported.",
-    )
-
     total_uncompressed = 0
     total_compressed = 0
     for info in infos:
@@ -170,11 +173,9 @@ def check_archive_safety(zf):
         total_uncompressed += info.file_size
         total_compressed += info.compress_size
 
-    _require(
-        total_uncompressed <= MAX_UNCOMPRESSED_BYTES,
-        f"The file expands to {total_uncompressed // 1024**2} MB, more than the "
-        f"{MAX_UNCOMPRESSED_BYTES // 1024**2} MB a project may contain.",
-    )
+    # No ceiling on the total: a project is as large as its event log. Only the
+    # ratio is checked, which a real project never approaches.
+    #
     # A small archive claiming a huge expansion is the classic bomb. Only
     # meaningful once there is something to compare against.
     if total_compressed > 4096:
@@ -360,11 +361,6 @@ def validate_project_manifest(raw):
     listed = raw.get("dashboards")
     if listed is not None:
         _require(isinstance(listed, list), "The file's dashboard list is not a list.")
-        _require(
-            len(listed) <= MAX_DASHBOARDS,
-            f"The file describes {len(listed)} dashboards; at most "
-            f"{MAX_DASHBOARDS} can be imported at once.",
-        )
     return raw
 
 
@@ -382,19 +378,9 @@ def read_bundle(zf):
 
     models = _read_json_member(zf, MODELS_NAME, required=False, default=[]) or []
     _require(isinstance(models, list), "The file's model asset list is not a list.")
-    _require(
-        len(models) <= MAX_MODEL_ASSETS,
-        f"The file describes {len(models)} saved models; at most "
-        f"{MAX_MODEL_ASSETS} can be imported at once.",
-    )
 
     images = _read_json_member(zf, IMAGES_NAME, required=False, default=[]) or []
     _require(isinstance(images, list), "The file's image list is not a list.")
-    _require(
-        len(images) <= MAX_IMAGES,
-        f"The file describes {len(images)} images; at most {MAX_IMAGES} can be "
-        f"imported at once.",
-    )
 
     names = set(zf.namelist())
 
@@ -549,10 +535,6 @@ def restore_images(project, entries, zf, user):
             continue
         if not isinstance(member, str) or member not in names:
             skipped.append(f'"{name}" (its picture is missing from the file)')
-            continue
-        info = zf.getinfo(member)
-        if info.file_size > MAX_IMAGE_BYTES:
-            skipped.append(f'"{name}" (larger than {MAX_IMAGE_BYTES // 1024**2} MB)')
             continue
         ext = os.path.splitext(member)[1].lower()
         if ext not in IMAGE_EXTENSIONS:
