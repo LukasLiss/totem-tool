@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import tempfile
+import zipfile
 from contextlib import contextmanager
 
 import duckdb
@@ -19,7 +20,11 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.utils.text import slugify
+from django.conf import settings
 from django.core.cache import cache
+from django.core.files import File as DjangoFile
+from django.db import transaction
+from django.http import FileResponse
 
 from totem_lib.dfg import NewOCDFGDb
 from totem_lib import (
@@ -64,7 +69,22 @@ from ..serializers import (
 from ..cache_utils import get_cached_result, set_cached_result
 from ..jobs import JobCancelled, cancelled_response, job_scope
 from ..limits import ProjectLimitReached, check_project_limit, create_project
+from ..project_bundle import (
+    ProjectBundleError,
+    build_project_bundle,
+    bundle_filename,
+    check_archive_safety,
+    read_bundle,
+    restore_dashboards,
+    restore_images,
+    restore_model_assets,
+    totem_version,
+    unique_display_name,
+    unique_project_name,
+)
 from ..query_refs import QueryReferenceError, resolve_query_references
+# Streams a scratch file and deletes it once the response has gone out.
+from ..views_ocel_editor import _DeleteOnCloseFile
 from totem_lib.progress import Progress
 from ._ocel_db import (
     LARGE_LOG_EVENT_LIMIT,
@@ -99,6 +119,7 @@ from ._process_view import (
     _serialize_relation_stats,
     _serialize_process_layers,
 )
+from .dashboards import DashboardViewSet
 from .occn import _get_or_discover_base_occn
 from .oc_alignment import OCAlignmentActionsMixin
 # Bounds for the client-supplied discovery watchdog (seconds).
@@ -474,6 +495,178 @@ class EventLogViewSet(OCAlignmentActionsMixin, viewsets.ModelViewSet):
 
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    @action(detail=True, methods=["get"], url_path="export-project")
+    def export_project(self, request, pk=None):
+        """Download this log's whole project as one `.totem` file.
+
+        Reached through the event log because that is how the frontend
+        addresses a project everywhere else. Authorization comes from
+        `get_object()` against the membership-scoped queryset, so somebody
+        else's project is a 404.
+        """
+        project = self.get_object().project
+
+        # Built into a scratch file and streamed: the event log alone can be
+        # hundreds of megabytes, and `FileResponse` removes the file once the
+        # response has gone out (`_DeleteOnCloseFile`, views_ocel_editor.py).
+        handle, path = tempfile.mkstemp(prefix="totem-export-", suffix=".totem")
+        os.close(handle)
+        try:
+            with job_scope(request, "Exporting project") as job:
+                build_project_bundle(
+                    project,
+                    path,
+                    totem_version=totem_version(),
+                    progress=job.report,
+                )
+        except JobCancelled:
+            _remove_file(path)
+            return cancelled_response()
+        except Exception:
+            _remove_file(path)
+            raise
+
+        response = FileResponse(
+            _DeleteOnCloseFile(path),
+            as_attachment=True,
+            filename=bundle_filename(project),
+            content_type="application/zip",
+        )
+        return response
+
+    @action(detail=False, methods=["post"], url_path="import-project")
+    def import_project(self, request):
+        """Create a whole project from a `.totem` file.
+
+        Always creates; never merges into an existing project. Everything the
+        dashboards reference travels in the same file, so unlike a dashboard
+        import this one normally has nothing to report.
+        """
+        # Before the body is read, so a user at their limit does not upload a
+        # large file for nothing. `MaxSizeUploadHandler` caps the body itself.
+        check_project_limit(request.user)
+
+        upload = request.FILES.get("file")
+        if upload is None:
+            return Response(
+                {"error": "No file was uploaded."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        work_dir = tempfile.mkdtemp(prefix="totem-import-")
+        try:
+            with job_scope(request, "Importing project") as job:
+                return self._import_project_bundle(request, upload, work_dir, job)
+        except ProjectBundleError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except zipfile.BadZipFile:
+            return Response(
+                {"error": "That file is not a TOTeM project (it is not a valid archive)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except JobCancelled:
+            return cancelled_response()
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+    def _import_project_bundle(self, request, upload, work_dir, job):
+        """The body of `import_project`, so its error handling stays readable."""
+        user = request.user
+
+        with zipfile.ZipFile(upload) as zf:
+            job.report(0.05, "Reading the file")
+            # Everything is validated before a row or a file is written, so a
+            # rejected bundle leaves nothing behind to clean up.
+            bundle = read_bundle(zf)
+
+            job.report(0.2, "Creating the project")
+            display_name = (bundle["project"].get("display_name") or "").strip()
+            desired = display_name or os.path.splitext(upload.name or "project")[0]
+
+            warnings = []
+            with transaction.atomic():
+                project = create_project(unique_project_name(desired), user)
+                if display_name:
+                    # Suffixed when the user already has a project by that
+                    # name, so the switcher does not show two identical rows.
+                    project.display_name = unique_display_name(user, display_name)
+                view_settings = bundle["project"].get("view_settings")
+                if isinstance(view_settings, dict):
+                    project.view_settings = view_settings
+                project.save(update_fields=["display_name", "view_settings"])
+
+                event_log = None
+                if bundle["event_log"]:
+                    job.report(0.35, "Restoring the event log")
+                    event_log = self._restore_event_log(
+                        project, zf, bundle["event_log"], work_dir
+                    )
+                event_log_id = event_log.pk if event_log else None
+
+                job.report(0.6, "Restoring saved models and images")
+                _, skipped_models = restore_model_assets(project, bundle["models"], user)
+                _, skipped_images = restore_images(project, bundle["images"], zf, user)
+                for skipped in skipped_models + skipped_images:
+                    warnings.append(
+                        {
+                            "code": "asset_skipped",
+                            "component_name": None,
+                            "detail": f"Could not import {skipped}.",
+                        }
+                    )
+
+                job.report(0.8, "Restoring dashboards")
+                warnings.extend(
+                    restore_dashboards(
+                        project,
+                        bundle["dashboards"],
+                        zf,
+                        user=user,
+                        event_log_id=event_log_id,
+                        replace_components=lambda dashboard, layout: (
+                            DashboardViewSet._replace_components(
+                                dashboard, layout, request
+                            )
+                        ),
+                    )
+                )
+
+        job.report(1.0, "Done")
+        return Response(
+            {
+                "project": {
+                    "id": project.pk,
+                    "name": project.name,
+                    "display_name": project.display_name,
+                },
+                "event_log": event_log_id,
+                # Serialized exactly as the upload and the project list return
+                # it, so the client can select the restored project directly.
+                "file": (
+                    self.get_serializer(event_log).data if event_log else None
+                ),
+                "warnings": warnings,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    def _restore_event_log(self, project, zf, member, work_dir):
+        """Write the bundled log into storage and register it.
+
+        Streamed through a scratch file rather than read whole: a log can be
+        far larger than it is sensible to hold in memory.
+        """
+        scratch = os.path.join(work_dir, "log.duckdb")
+        with zf.open(member) as source, open(scratch, "wb") as target:
+            shutil.copyfileobj(source, target, 1024 * 1024)
+
+        event_log = EventLog(project=project)
+        with open(scratch, "rb") as handle:
+            event_log.file.save(
+                f"{project.name}.duckdb", DjangoFile(handle), save=True
+            )
+        return event_log
 
     @action(detail=True, methods=["get"])
     def NoE(self, request, pk=None):

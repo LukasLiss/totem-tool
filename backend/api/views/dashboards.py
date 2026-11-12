@@ -615,7 +615,8 @@ class DashboardViewSet(viewsets.ModelViewSet):
             status=status.HTTP_201_CREATED,
         )
 
-    def _replace_components(self, dashboard, layout, request):
+    @staticmethod
+    def _replace_components(dashboard, layout, request):
         # Clear existing components
         dashboard.components.all().delete()
 
