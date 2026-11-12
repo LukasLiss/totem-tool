@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { downloadJson } from './io';
+import { downloadJson, saveProjectBundle } from './io';
 
 type Stub = (options?: unknown) => Promise<unknown>;
 
@@ -59,7 +59,10 @@ describe('downloadJson', () => {
     const outcome = await downloadJson('alpha', { a: 1 });
 
     expect(outcome).toBe('saved');
-    expect(JSON.parse(String(write.mock.calls[0][0]))).toEqual({ a: 1 });
+    // A Blob, not a string: the same path now saves binary project bundles,
+    // and `FileSystemWritableFileStream.write` takes either.
+    const written = write.mock.calls[0][0] as Blob;
+    expect(JSON.parse(await written.text())).toEqual({ a: 1 });
     expect(close).toHaveBeenCalled();
     expect(seen[0].suggestedName).toBe('alpha.json');
     // The picker wrote the file; the browser was never handed a download.
@@ -110,5 +113,60 @@ describe('downloadJson', () => {
     // Not also downloaded elsewhere: the user picked a place, and that write
     // failing is theirs to hear about.
     expect(clicked).toEqual([]);
+  });
+});
+
+describe('saveProjectBundle', () => {
+  let clicked: string[];
+
+  beforeEach(() => {
+    clicked = [];
+    URL.createObjectURL = vi.fn(() => 'blob:stub') as never;
+    URL.revokeObjectURL = vi.fn() as never;
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(
+      function (this: HTMLAnchorElement) {
+        clicked.push(this.download);
+      },
+    );
+  });
+
+  afterEach(() => {
+    delete (window as unknown as Record<string, unknown>).showSaveFilePicker;
+    vi.restoreAllMocks();
+  });
+
+  it('writes the archive bytes untouched', async () => {
+    const write = vi.fn();
+    const seen: { suggestedName?: string }[] = [];
+    (window as unknown as Record<string, unknown>).showSaveFilePicker = async (
+      options: { suggestedName?: string },
+    ) => {
+      seen.push(options);
+      return { createWritable: async () => ({ write, close: async () => {} }) };
+    };
+
+    const bytes = new Blob([new Uint8Array([80, 75, 3, 4])]);
+    expect(await saveProjectBundle('demo', bytes)).toBe('saved');
+    // The same Blob, not re-encoded: a project archive is binary.
+    expect(write.mock.calls[0][0]).toBe(bytes);
+    expect(seen[0].suggestedName).toBe('demo.totem');
+  });
+
+  it('does not double the extension', async () => {
+    const seen: { suggestedName?: string }[] = [];
+    (window as unknown as Record<string, unknown>).showSaveFilePicker = async (
+      options: { suggestedName?: string },
+    ) => {
+      seen.push(options);
+      return { createWritable: async () => ({ write: vi.fn(), close: async () => {} }) };
+    };
+
+    await saveProjectBundle('demo.totem', new Blob(['x']));
+    expect(seen[0].suggestedName).toBe('demo.totem');
+  });
+
+  it('falls back to a download where there is no picker', async () => {
+    expect(await saveProjectBundle('demo', new Blob(['x']))).toBe('downloaded');
+    expect(clicked).toEqual(['demo.totem']);
   });
 });

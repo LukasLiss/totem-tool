@@ -21,6 +21,10 @@ looking at is highlighted in the list.
 
 ## Sharing a dashboard between projects
 
+> To move a **whole project** — the event log, every dashboard, the models, the queries and the
+> images — see [Projects](projects.md). A project file carries its own dependencies, so nothing
+> needs reconnecting on the other side.
+
 A dashboard's **structure** can be moved to another project, including one built on a different
 event log.
 
