@@ -36,6 +36,16 @@ describe('OcdfgView', () => {
     expect(getByRole('button', { name: 'Collapse the controls' })).not.toBeNull();
   });
 
+  it('shows the fit mode on the fit button until the user zooms, and again after fitting', () => {
+    const { getByRole } = view();
+    const fit = () => getByRole('button', { name: 'Fit to view' });
+    expect(fit().getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(getByRole('button', { name: 'Zoom in' }));
+    expect(fit().getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(fit());
+    expect(fit().getAttribute('aria-pressed')).toBe('true');
+  });
+
   it('replaces the dim-terminal button by a layout button that opens the panel', () => {
     const { queryByTitle, queryByTestId, getByRole } = view();
     expect(queryByTitle('Dim edges touching start/end')).toBeNull();

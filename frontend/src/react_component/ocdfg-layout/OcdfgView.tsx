@@ -15,6 +15,7 @@ import { Slider } from '@/components/ui/slider';
 import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
 import { ControlPill, type PillRegion, type PillSpot } from '@/components/canvas/ControlPill';
 import { roomBelowForPill } from '@/components/canvas/pillSpots';
+import { CHIP_HEIGHT, FIT_GAP, pillRect, TITLE_LEGEND_GAP, type FitRect } from './fitMargins';
 import { ObjectTypePanel } from '@/components/canvas/ObjectTypePanel';
 import { mapTypesToColors } from '@/utils/objectColors';
 import OcdfgLayoutStatusCard from '../OcdfgLayoutStatusCard';
@@ -32,14 +33,8 @@ import { useOcdfgFlows } from './useOcdfgFlows';
 
 /** How far the legend column reaches from the left edge: its 16 px offset plus the panel's widest 280 px. */
 const LEGEND_PANEL_REACH = 16 + 280;
-/** Screen space the legend column takes on the left of the canvas: its reach plus 24 px to the graph. */
-const LEGEND_ROOM = LEGEND_PANEL_REACH + 24;
 const LEGEND_AUTO_COLLAPSE_WIDTH = 480;
 const DETAIL_PADDING = 16;
-/** Space between the title and the legend below it. */
-const TITLE_LEGEND_GAP = 8;
-/** Title (30 px) and collapsed legend chip (30 px) stacked in the top-left corner, from the view's top. */
-const STACKED_CHROME_HEIGHT = 16 + 30 + TITLE_LEGEND_GAP + 30;
 /** Free places for the control pill: the legend holds the top left, the animation panel the top right. */
 const OCDFG_PILL_SPOTS: readonly PillSpot[] = ['bottom-left', 'bottom-right', 'left', 'right'];
 
@@ -199,6 +194,8 @@ export default function OcdfgView({
   // --- toolbar state ----------------------------------------------------------
   const [locked, setLocked] = useState(initialInteractionLocked);
   const [animate, setAnimate] = useState(false);
+  // The fit mode: on until the user zooms or pans, on again with the fit button.
+  const [fitted, setFitted] = useState(true);
   // Where the control pill sits, so the legend (left) and the animation panel
   // (right) end above it instead of running underneath.
   const [pillRegion, setPillRegion] = useState<PillRegion | null>(null);
@@ -282,8 +279,8 @@ export default function OcdfgView({
     ...(areas.status === 'error' ? [`Process areas: ${areas.message}`] : []),
   ];
 
-  // Keep the graph clear of the legend and the layout panel when there is
-  // room for that; in narrow boxes (dashboard widgets) they overlay it.
+  // The view's size, for the automatic fit and the legend's default; the
+  // layout panel keeps the graph clear when there is room for that.
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(0);
   useEffect(() => {
@@ -298,16 +295,55 @@ export default function OcdfgView({
   // Phone-sized boxes: the open legend would cover the whole graph, so it
   // starts collapsed there until the user expands it.
   const legendCollapsed = legendCollapsedChoice ?? (width > 0 && width < LEGEND_AUTO_COLLAPSE_WIDTH);
-  const legendRoom = chrome && !legendCollapsed && width >= 2.5 * LEGEND_ROOM ? LEGEND_ROOM : 24;
-  const panelRoom = editable && panelOpen && width - legendRoom >= 2 * LAYOUT_PANEL_WIDTH ? LAYOUT_PANEL_WIDTH + 36 : 24;
-  // Where there is no room beside the legend, the title and the collapsed
-  // legend sit stacked in the top-left corner; start the graph below them.
-  // (The control pill is a movable ControlPill of its own, bottom left by default.)
-  const stackedChromeRoom =
-    chrome && legendCollapsed && width > 0 && width < LEGEND_AUTO_COLLAPSE_WIDTH ? STACKED_CHROME_HEIGHT + 24 : 24;
-  const fitPadding = detail
-    ? { top: 4, right: 4, bottom: 4, left: 4 }
-    : { top: stackedChromeRoom, bottom: 24, left: legendRoom, right: panelRoom };
+  // Room kept free for the open layout panel where the box is wide enough;
+  // in narrow boxes it lies over the graph.
+  const panelRoom = editable && panelOpen && width - 24 >= 2 * LAYOUT_PANEL_WIDTH ? LAYOUT_PANEL_WIDTH + 36 : 24;
+
+  // The boxes of the title and the legend (chip or open panel) in the
+  // top-left corner, measured, for the fit.
+  const chromeColumnRef = useRef<HTMLDivElement | null>(null);
+  const [chromeRects, setChromeRects] = useState<{ title: FitRect | null; legend: FitRect | null }>({ title: null, legend: null });
+  const hasTitle = Boolean(title);
+  useEffect(() => {
+    const column = chromeColumnRef.current;
+    if (!column || typeof ResizeObserver === 'undefined') return;
+    const rectOf = (el: Element | null): FitRect | null =>
+      el instanceof HTMLElement
+        ? { x: column.offsetLeft + el.offsetLeft, y: column.offsetTop + el.offsetTop, w: el.offsetWidth, h: el.offsetHeight }
+        : null;
+    const measure = () => {
+      const next = {
+        title: rectOf(column.querySelector('[data-testid="ocdfg-title"]')),
+        legend: rectOf(column.querySelector('[data-testid="ocdfg-legend"]')),
+      };
+      setChromeRects((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(column);
+    for (const child of Array.from(column.children)) observer.observe(child);
+    return () => observer.disconnect();
+    // The legend swaps between its chip and its panel when it collapses.
+  }, [chrome, hasTitle, legendCollapsed, types.length]);
+
+  // The fit mode (the fit button pressed): the graph is placed clear of the
+  // canvas controls (see bestFit: only the view, never the layout), centred
+  // while it has room and moved or shrunk only as far as a control would
+  // cover it. Zooming or panning ends the mode.
+  const fitPadding = detail ? { top: 4, right: 4, bottom: 4, left: 4 } : { top: FIT_GAP, bottom: FIT_GAP, left: FIT_GAP, right: panelRoom };
+  const fitAvoid: FitRect[] =
+    detail || !chrome
+      ? []
+      : [
+          // The header row: the title and the animation chip at its height.
+          ...(chromeRects.title ? [{ ...chromeRects.title, header: true }] : []),
+          // The legend, chip or open panel, is cleared on its best side (the
+          // graph may sit beside it); the open panel is large, so in narrow
+          // boxes it lies over the graph.
+          ...(chromeRects.legend ? [{ ...chromeRects.legend, optional: !legendCollapsed }] : []),
+          ...(canAnimateTokens && width > 0 ? [{ x: width - 16 - CHIP_HEIGHT, y: 16, w: CHIP_HEIGHT, h: CHIP_HEIGHT, header: true }] : []),
+          ...(pillRegion ? [pillRect(pillRegion)] : []),
+        ];
   const fitKey = `${options.direction}|${types.join(',')}`;
 
   return (
@@ -327,8 +363,10 @@ export default function OcdfgView({
           tokenLayerRef={tokensOn && canAnimateTokens ? tokenLayer : undefined}
           dimArcs={tokensOn && canAnimateTokens && flows.status === 'ready' && flows.tokens.count > 0}
           fitPadding={fitPadding}
+          fitAvoid={fitAvoid}
           maxFitScale={detail ? 1 : 1.4}
           fitKey={fitKey}
+          onFittedChange={setFitted}
           highlightType={hoverType}
         />
       )}
@@ -383,6 +421,7 @@ export default function OcdfgView({
 
       {chrome && (
         <div
+          ref={chromeColumnRef}
           onPointerDown={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}
           style={{
@@ -404,6 +443,8 @@ export default function OcdfgView({
             <div
               data-testid="ocdfg-title"
               style={{
+                // As wide as the title (not the column), for the fit.
+                alignSelf: 'flex-start',
                 display: 'flex',
                 alignItems: 'center',
                 minHeight: 30,
@@ -446,7 +487,16 @@ export default function OcdfgView({
             <Button type="button" variant="outline" size="icon" onClick={() => canvasRef.current?.zoom(1.25)} className="rounded-full h-9 w-9" title="Zoom out">
               <MinusIcon className="h-4 w-4" />
             </Button>
-            <Button type="button" variant="outline" size="icon" onClick={() => canvasRef.current?.fit()} className="rounded-full h-9 w-9" title="Fit to view">
+            <Button
+              type="button"
+              variant={fitted ? 'secondary' : 'outline'}
+              size="icon"
+              onClick={() => canvasRef.current?.fit()}
+              className="rounded-full h-9 w-9"
+              title={fitted ? 'Fitted to view: follows the panels until you zoom or pan' : 'Fit to view'}
+              aria-label="Fit to view"
+              aria-pressed={fitted}
+            >
               <ScanIcon className="h-4 w-4" />
             </Button>
             <Button

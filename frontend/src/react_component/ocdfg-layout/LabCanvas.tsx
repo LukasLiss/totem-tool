@@ -6,6 +6,7 @@
 import { forwardRef, useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { backgroundForTypes, textColorForBackground } from '@/utils/objectColors';
 import { HoverTooltip, type TooltipRow } from '../MetricTooltip';
+import { bestFit, type FitRect } from './fitMargins';
 import { dist, pathD, pointAt, polylineLength, trimEnd } from './geometry';
 import type { LayoutOptions, LayoutResult, PlacedNode, Pt, RoutedArc } from './types';
 
@@ -35,10 +36,18 @@ interface LabCanvasProps {
   dimArcs?: boolean;
   /** Screen space (px) kept free around the graph when fitting, e.g. for a legend. */
   fitPadding?: Partial<Record<'top' | 'right' | 'bottom' | 'left', number>>;
+  /** Controls on the canvas (px boxes) the fit keeps the graph clear of, each on its best side. */
+  fitAvoid?: FitRect[];
   /** Largest zoom used when fitting a small graph. */
   maxFitScale?: number;
   /** Changes of this key re-fit the view even after the user panned/zoomed. */
   fitKey?: string;
+  /**
+   * Whether the view follows the fit: true until the user zooms or pans, then
+   * false until `fit()` (or a new `fitKey`). While it is true, a changed
+   * `fitPadding` or box size re-fits the view.
+   */
+  onFittedChange?: (fitted: boolean) => void;
   highlightType?: string | null;
   className?: string;
 }
@@ -50,6 +59,8 @@ type Hover =
   | null;
 
 const PAD = 36;
+/** Pointer movement (px) from which pressing and moving counts as panning. */
+const DRAG_THRESHOLD = 3;
 /** Opacity of the arcs while the token animation runs (`dimArcs`). */
 const DIMMED_ARC_OPACITY = 0.3;
 const FONT = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
@@ -65,8 +76,10 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
     tokenLayerRef,
     dimArcs = false,
     fitPadding,
+    fitAvoid,
     maxFitScale = 1.6,
     fitKey,
+    onFittedChange,
     highlightType = null,
     className,
     view: controlledView,
@@ -89,6 +102,7 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
     return () => observer.disconnect();
   }, []);
   const padKey = JSON.stringify(fitPadding ?? {});
+  const avoidKey = JSON.stringify(fitAvoid ?? []);
   const fitBox = useMemo(() => {
     const b = result.bounds;
     if (!Number.isFinite(b.minX)) return { x: -100, y: -100, w: 200, h: 200 };
@@ -98,13 +112,10 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
       return { x: b.minX - PAD, y: b.minY - PAD, w: bw + 2 * PAD, h: bh + 2 * PAD };
     }
     const p = { top: PAD / 2, right: PAD / 2, bottom: PAD / 2, left: PAD / 2, ...JSON.parse(padKey) };
-    const availW = Math.max(40, size.w - p.left - p.right);
-    const availH = Math.max(40, size.h - p.top - p.bottom);
-    const s = Math.min(availW / bw, availH / bh, maxFitScale);
-    const offX = p.left + (availW - bw * s) / 2;
-    const offY = p.top + (availH - bh * s) / 2;
-    return { x: b.minX - offX / s, y: b.minY - offY / s, w: size.w / s, h: size.h / s };
-  }, [result.bounds, size, padKey, maxFitScale]);
+    // As large as the free room allows, clear of the controls (see bestFit).
+    const fit = bestFit(size, { w: bw, h: bh }, p, JSON.parse(avoidKey) as FitRect[], maxFitScale);
+    return { x: b.minX - fit.x / fit.scale, y: b.minY - fit.y / fit.scale, w: size.w / fit.scale, h: size.h / fit.scale };
+  }, [result.bounds, size, padKey, avoidKey, maxFitScale]);
   const [ownView, setOwnView] = useState(fitBox);
   const view = controlledView ?? ownView;
   const viewRef = useRef(view);
@@ -117,16 +128,24 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
     },
     [onViewChange],
   );
+  // The fit mode: the view follows the fit until the user zooms or pans.
   const userMoved = useRef(false);
+  const onFittedChangeRef = useRef(onFittedChange);
+  onFittedChangeRef.current = onFittedChange;
+  const setUserMoved = useCallback((moved: boolean) => {
+    if (userMoved.current === moved) return;
+    userMoved.current = moved;
+    onFittedChangeRef.current?.(!moved);
+  }, []);
   const lastFitKey = useRef(fitKey);
 
   useEffect(() => {
     if (lastFitKey.current !== fitKey) {
       lastFitKey.current = fitKey;
-      userMoved.current = false;
+      setUserMoved(false);
     }
     if (!onViewChange && (!userMoved.current || !interactive)) setOwnView(fitBox);
-  }, [fitBox, fitKey, interactive, onViewChange]);
+  }, [fitBox, fitKey, interactive, onViewChange, setUserMoved]);
 
   const scaleOf = useCallback(() => {
     const el = wrapRef.current;
@@ -142,17 +161,17 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
       const h = (v.h * w) / v.w;
       return { x: px - ((px - v.x) * w) / v.w, y: py - ((py - v.y) * h) / v.h, w, h };
     });
-    userMoved.current = true;
-  }, [setView]);
+    setUserMoved(true);
+  }, [setView, setUserMoved]);
 
   useImperativeHandle(ref, () => ({
     fit: () => {
-      userMoved.current = false;
+      setUserMoved(false);
       setView(fitBox);
     },
     zoom: (f) => zoomAt(f),
     svg: () => svgRef.current,
-  }), [fitBox, zoomAt, setView]);
+  }), [fitBox, zoomAt, setView, setUserMoved]);
 
   // Wheel zoom must be a non-passive listener to prevent page scrolling.
   useEffect(() => {
@@ -171,18 +190,21 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
     return () => el.removeEventListener('wheel', onWheel);
   }, [panZoom, zoomAt]);
 
-  const drag = useRef<{ x: number; y: number; vx: number; vy: number } | null>(null);
+  const drag = useRef<{ x: number; y: number; vx: number; vy: number; panning: boolean } | null>(null);
   const onPointerDown = (e: React.PointerEvent) => {
     if (!panZoom || e.button !== 0) return;
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
-    drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y };
+    drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, panning: false };
   };
   const onPointerMove = (e: React.PointerEvent) => {
     if (!drag.current) return;
-    const s = scaleOf();
     const d = drag.current;
+    // A click that wobbles a few pixels is no pan (and keeps the fit).
+    if (!d.panning && Math.abs(e.clientX - d.x) + Math.abs(e.clientY - d.y) < DRAG_THRESHOLD) return;
+    d.panning = true;
+    const s = scaleOf();
     setView((v: ViewBox) => ({ ...v, x: d.vx - (e.clientX - d.x) * s, y: d.vy - (e.clientY - d.y) * s }));
-    userMoved.current = true;
+    setUserMoved(true);
   };
   const onPointerUp = () => {
     drag.current = null;
