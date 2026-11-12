@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
+import { ControlPill, type PillSpot } from '@/components/canvas/ControlPill';
 import { mapTypesToColors } from '@/utils/objectColors';
 import OcdfgLayoutStatusCard from '../OcdfgLayoutStatusCard';
 import Gallery from './Gallery';
@@ -39,6 +40,8 @@ const LEGEND_HEADER_BUTTON_STYLE = {
 const LEGEND_ROOM = 360;
 const LEGEND_AUTO_COLLAPSE_WIDTH = 480;
 const DETAIL_PADDING = 16;
+/** Free places for the control pill: the legend holds the top left, the animation panel the top right. */
+const OCDFG_PILL_SPOTS: readonly PillSpot[] = ['bottom-left', 'bottom-right', 'left', 'right'];
 
 export interface OcdfgViewProps {
   /** The full graph; null while there is none (yet). */
@@ -253,8 +256,9 @@ export default function OcdfgView({
   const legendCollapsed = legendCollapsedChoice ?? (width > 0 && width < LEGEND_AUTO_COLLAPSE_WIDTH);
   const legendRoom = chrome && !legendCollapsed && width >= 2.5 * LEGEND_ROOM ? LEGEND_ROOM : 24;
   const panelRoom = editable && panelOpen && width - legendRoom >= 2 * LAYOUT_PANEL_WIDTH ? LAYOUT_PANEL_WIDTH + 36 : 24;
-  // Where there is no room beside the legend, the collapsed legend and the
-  // toolbar sit stacked in the top-left corner; start the graph below them.
+  // Where there is no room beside the legend, the title and the collapsed
+  // legend sit stacked in the top-left corner; start the graph below them.
+  // (The control pill is a movable ControlPill of its own, bottom left by default.)
   const stackedChromeRoom =
     chrome && legendCollapsed && width > 0 && width < LEGEND_AUTO_COLLAPSE_WIDTH ? 136 : 24;
   const fitPadding = detail
@@ -500,19 +504,12 @@ export default function OcdfgView({
             </div>
           )}
 
-          <div
-            style={{
-              display: 'flex',
-              gap: 8,
-              alignItems: 'center',
-              alignSelf: 'flex-start',
-              background: '#FFFFFF',
-              border: '1px solid #E2E8F0',
-              borderRadius: 9999,
-              padding: '6px 12px',
-              boxShadow: '0 10px 24px rgba(15, 23, 42, 0.14)',
-            }}
-          >
+        </div>
+      )}
+
+      {chrome && (
+        // The legend holds the top-left corner and the animation panel the top right.
+        <ControlPill spots={OCDFG_PILL_SPOTS} storageKey={`ocdfg:${layoutScope ?? 'default'}`}>
             <Button type="button" variant="outline" size="icon" onClick={() => canvasRef.current?.zoom(1 / 1.25)} className="rounded-full h-9 w-9" title="Zoom in">
               <PlusIcon className="h-4 w-4" />
             </Button>
@@ -566,8 +563,7 @@ export default function OcdfgView({
                 className="rounded-full h-9 w-9"
               />
             )}
-          </div>
-        </div>
+        </ControlPill>
       )}
 
       {canAnimateTokens && (

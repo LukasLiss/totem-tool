@@ -29,6 +29,13 @@ afterEach(() => {
 });
 
 describe('OcdfgView', () => {
+  it('puts its toolbar into the shared movable pill, bottom left by default', () => {
+    const { getByRole } = view();
+    const pill = getByRole('button', { name: 'Zoom in' }).closest('[data-pill-spot]') as HTMLElement;
+    expect(pill.dataset.pillSpot).toBe('bottom-left');
+    expect(getByRole('button', { name: 'Collapse the controls' })).not.toBeNull();
+  });
+
   it('replaces the dim-terminal button by a layout button that opens the panel', () => {
     const { queryByTitle, queryByTestId, getByRole } = view();
     expect(queryByTitle('Dim edges touching start/end')).toBeNull();

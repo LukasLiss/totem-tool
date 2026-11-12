@@ -23,6 +23,10 @@ import { HoverTooltip, type TooltipRow } from './MetricTooltip';
 import { useProcessAreaStore } from '../store/processAreaStore';
 import { ProcessAreaFilterAction } from './process-area/ProcessAreaFilterAction';
 import { RelationLegend } from './process-area/RelationLegend';
+import { ControlPill, type PillSpot } from '@/components/canvas/ControlPill';
+
+/** Free places for the control pill: the relation legend holds the bottom-left corner. */
+const TOTEM_PILL_SPOTS: readonly PillSpot[] = ['bottom-right', 'top-right'];
 import { RelationStatsCard } from './process-area/RelationStatsCard';
 import { indexRelationStats, type RelationStats } from './process-area/relationStats';
 
@@ -5594,24 +5598,14 @@ function TotemVisualizer({
         {/* Bottom-left legend of the relation arcs */}
         {eventLogId && <RelationLegend />}
 
-        {/* Floating HUD Controls */}
-        <div
-          data-totem-control
-          style={{
-            position: 'absolute',
-            bottom: 16,
-            right: 16,
-            zIndex: 50,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            background: '#ffffff',
-            border: '1px solid #e2e8f0',
-            borderRadius: 9999, // capsule shape
-            padding: '4px 8px',
-            boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -2px rgba(0,0,0,0.1)',
-            pointerEvents: 'auto',
-          }}
+        {/* Floating HUD Controls: the shared control pill. The relation legend
+            holds the bottom-left corner; the zoom label keeps it horizontal. */}
+        <ControlPill
+          spots={TOTEM_PILL_SPOTS}
+          storageKey="totem"
+          insetTop={resolvedTopInset}
+          zIndex={50}
+          rootProps={{ 'data-totem-control': '' }}
         >
           {/* Zoom % label */}
           <span style={{ fontSize: 12, fontWeight: 600, color: '#475569', minWidth: 42, textAlign: 'center', fontVariantNumeric: 'tabular-nums', marginRight: 4 }}>
@@ -5754,7 +5748,7 @@ function TotemVisualizer({
               </svg>
             )}
           </button>
-        </div>
+        </ControlPill>
 
         {/* Transform viewport wrapper: visually positions & scales the diagram without affecting layout measurements */}
         <div

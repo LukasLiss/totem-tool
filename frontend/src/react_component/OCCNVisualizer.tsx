@@ -53,7 +53,11 @@ import {
 } from '@/editors/occn/types';
 import OccnOverflowBadges from './OccnOverflowBadges';
 import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
+import { ControlPill, type PillSpot } from '@/components/canvas/ControlPill';
 import { toast } from 'sonner';
+
+/** Free places for the control pill: the legend holds the top-left corner. */
+const OCCN_PILL_SPOTS: readonly PillSpot[] = ['bottom-right', 'bottom-left', 'top-right'];
 
 interface OCCNVisualizerProps {
   height?: string | number;
@@ -630,28 +634,8 @@ function OCCNVisualizer({
           )}
         </div>
 
-          <div
-            onPointerDown={(e) => e.stopPropagation()}
-            onMouseDown={(e) => e.stopPropagation()}
-            style={{
-              position: 'absolute',
-              bottom: 16,
-              right: 16,
-              // Narrow boxes (phones): wrap onto a second row instead of
-              // running off the left edge.
-              maxWidth: 'calc(100% - 32px)',
-              flexWrap: 'wrap',
-              justifyContent: 'flex-end',
-              display: 'flex',
-              gap: 8,
-              alignItems: 'center',
-              background: '#FFFFFF',
-              border: '1px solid #E2E8F0',
-              borderRadius: 28,
-              padding: '6px 12px',
-              boxShadow: '0 10px 24px rgba(15, 23, 42, 0.14)',
-            }}
-          >
+          {/* The legend holds the top-left corner; the threshold slider keeps the pill horizontal. */}
+          <ControlPill spots={OCCN_PILL_SPOTS} storageKey="occn">
             <div
               style={{ display: 'flex', alignItems: 'center', gap: 8, paddingRight: 4 }}
               title="Relative occurrence threshold — commits on release and re-discovers the net"
@@ -753,7 +737,7 @@ function OCCNVisualizer({
                 className="rounded-full h-9 w-9"
               />
             )}
-          </div>
+          </ControlPill>
         </>
       )}
       {tooltipState && <HoverTooltip {...tooltipState} />}

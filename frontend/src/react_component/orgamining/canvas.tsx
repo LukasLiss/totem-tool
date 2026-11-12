@@ -278,51 +278,12 @@ export function CanvasSelect<T extends string>({
   );
 }
 
-/** The rounded control bar OCCN puts in the bottom-right of its canvas. */
-export function ControlPill({
-  children,
-  style,
-}: {
-  children: React.ReactNode;
-  style?: React.CSSProperties;
-}) {
-  // Every control in the profiling pill is conditional — reset zoom, the
-  // cluster overlay, the relationship edges — so with none of them applicable
-  // the bar rendered as an empty rounded box that read as a broken control.
-  // toArray drops the `false`s those conditions leave behind, which
-  // Children.count would have counted as children.
-  if (React.Children.toArray(children).length === 0) return null;
-
-  return (
-    <div
-      onPointerDown={(e) => e.stopPropagation()}
-      onMouseDown={(e) => e.stopPropagation()}
-      style={{
-        position: "absolute",
-        bottom: 12,
-        right: 12,
-        // Above the canvas's panels and the widget title, below its popovers,
-        // which open from this bar. Without an explicit value the pill paints
-        // below anything with a positive z-index, including the title.
-        zIndex: 16,
-        display: "flex",
-        gap: 8,
-        alignItems: "center",
-        flexWrap: "wrap",
-        justifyContent: "flex-end",
-        maxWidth: "calc(100% - 24px)",
-        ...GLASS_SURFACE,
-        border: "1px solid #E2E8F0",
-        borderRadius: 9999,
-        padding: "6px 12px",
-        boxShadow: "0 10px 24px rgba(15, 23, 42, 0.14)",
-        ...style,
-      }}
-    >
-      {children}
-    </div>
-  );
-}
+/**
+ * The rounded control bar, bottom right. It is the shared pill of all graph
+ * canvases now (components/canvas/ControlPill); the explorers use it fixed,
+ * since their popovers open at a fixed place above it.
+ */
+export { ControlPill } from "@/components/canvas/ControlPill";
 
 /** Segmented control for the explorers' view modes, sized for the pill. */
 export function SegmentedControl<T extends string>({
