@@ -29,8 +29,10 @@ interface LabCanvasProps {
   panZoom?: boolean;
   /** Flowing dashes along the arcs. */
   animate?: boolean;
-  /** Layer above the graph for the token animation (drawn into by TokenPlayback). */
+  /** Layer above the graph for the token animation (drawn into by AnimationPanel). */
   tokenLayerRef?: React.Ref<SVGGElement>;
+  /** Fade the arcs (token animation running), so the tokens stand out. */
+  dimArcs?: boolean;
   /** Screen space (px) kept free around the graph when fitting, e.g. for a legend. */
   fitPadding?: Partial<Record<'top' | 'right' | 'bottom' | 'left', number>>;
   /** Largest zoom used when fitting a small graph. */
@@ -48,6 +50,8 @@ type Hover =
   | null;
 
 const PAD = 36;
+/** Opacity of the arcs while the token animation runs (`dimArcs`). */
+const DIMMED_ARC_OPACITY = 0.3;
 const FONT = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
 
 const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas(
@@ -59,6 +63,7 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
     panZoom = interactive,
     animate = false,
     tokenLayerRef,
+    dimArcs = false,
     fitPadding,
     maxFitScale = 1.6,
     fitKey,
@@ -299,6 +304,8 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
             <line key={`rank-${i}`} x1={r.a.x} y1={r.a.y} x2={r.b.x} y2={r.b.y} stroke="#94a3b8" strokeOpacity={0.35} strokeDasharray="2 6" />
           ))}
 
+        {/* Everything arc-like sits in one group, so the token animation can fade it. */}
+        <g opacity={dimArcs ? DIMMED_ARC_OPACITY : undefined} data-testid="ocdfg-arc-layer">
         {/* Halos first, so crossings read as over/under. */}
         {o.arcHalo &&
           result.arcs.map((a) =>
@@ -358,6 +365,7 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
             </g>
           );
         })}
+        </g>
 
         {result.nodes.map((n) => (
           <NodeShape
@@ -372,8 +380,9 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
           />
         ))}
 
-        {o.arcLabels === 'frequency' &&
-          result.arcs.map((a) =>
+        {o.arcLabels === 'frequency' && (
+          <g opacity={dimArcs ? DIMMED_ARC_OPACITY : undefined}>
+          {result.arcs.map((a) =>
             a.labelPos && (!a.mergedGroup || a.mergedGroup.index === 0) ? (
               <text
                 key={`lbl-${a.id}`}
@@ -393,6 +402,8 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
               </text>
             ) : null,
           )}
+          </g>
+        )}
 
         {tokenLayerRef && <g ref={tokenLayerRef} pointerEvents="none" data-testid="ocdfg-token-layer" />}
       </svg>

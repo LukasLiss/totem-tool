@@ -84,6 +84,17 @@ describe('OcdfgView animation panel', () => {
     expect(utils.queryByRole('button', { name: 'Animate' })).not.toBeNull();
   });
 
+  it('fades the arcs while the tokens are shown, not the activities', async () => {
+    const utils = view({ fileId: 7 });
+    const arcLayer = () => utils.getByTestId('ocdfg-arc-layer');
+    expect(arcLayer().getAttribute('opacity')).toBeNull();
+    await startAnimation(utils);
+    expect(arcLayer().getAttribute('opacity')).toBe('0.3');
+    expect(arcLayer().querySelector('[data-testid^="ocdfg-node"], text')).toBeNull();
+    fireEvent.click(utils.getByTitle('Stop'));
+    expect(arcLayer().getAttribute('opacity')).toBeNull();
+  });
+
   it('neither draws nor charts hidden object types', async () => {
     const utils = view({ fileId: 7 });
     await act(async () => {

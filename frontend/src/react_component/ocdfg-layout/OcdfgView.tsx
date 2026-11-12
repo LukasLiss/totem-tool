@@ -277,6 +277,7 @@ export default function OcdfgView({
           panZoom={!detail && !locked}
           animate={animate}
           tokenLayerRef={tokensOn && canAnimateTokens ? tokenLayer : undefined}
+          dimArcs={tokensOn && canAnimateTokens && flows.status === 'ready' && flows.tokens.count > 0}
           fitPadding={fitPadding}
           maxFitScale={detail ? 1 : 1.4}
           fitKey={fitKey}
