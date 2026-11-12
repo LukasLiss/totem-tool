@@ -1,4 +1,5 @@
 import axios from "axios";
+import { filterRequestConfig } from "@/store/filterStore";
 
 export interface ColumnSchema {
   name: string;
@@ -31,6 +32,10 @@ export interface QueryPageOptions {
   offset?: number;
   /** rows per page; omitted = the server cap (10 000) */
   limit?: number;
+  /** pass true to bypass the global filter interceptor */
+  skipGlobalFilter?: boolean;
+  /** per-widget local filter params to append to the request */
+  localFilterParams?: Record<string, string>;
 }
 
 function extractErrorMessage(err: unknown, fallback: string): string {
@@ -68,7 +73,11 @@ export async function executeQuery(
     const body: Record<string, unknown> = { query };
     if (page.offset !== undefined) body.offset = page.offset;
     if (page.limit !== undefined) body.limit = page.limit;
-    const { data } = await axios.post(`/api/files/${fileId}/execute_query/`, body);
+    const { data } = await axios.post(
+      `/api/files/${fileId}/execute_query/`,
+      body,
+      filterRequestConfig(page.localFilterParams, !page.skipGlobalFilter),
+    );
     const hasMore = Boolean(data.has_more ?? data.truncated ?? false);
     return {
       data: data.data ?? [],

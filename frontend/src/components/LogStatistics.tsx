@@ -10,6 +10,8 @@ import {
 
 interface LogStatisticsProps {
   fileId: number | undefined;
+  filterEnabled?: boolean;
+  localFilterParams?: Record<string, string>;
   showNumEvents?: boolean;
   showNumActivities?: boolean;
   showNumObjects?: boolean;
@@ -22,6 +24,8 @@ interface LogStatisticsProps {
 
 const LogStatistics: React.FC<LogStatisticsProps> = ({
   fileId,
+  filterEnabled = true,
+  localFilterParams,
   showNumEvents = true,
   showNumActivities = true,
   showNumObjects = true,
@@ -31,7 +35,7 @@ const LogStatistics: React.FC<LogStatisticsProps> = ({
   showDuration = false,
   className = '',
 }) => {
-  const { stats, loading, error } = useLogStatistics(fileId);
+  const { stats, loading, error } = useLogStatistics(fileId, { filterEnabled, localFilterParams });
   const box = useElementSize();
 
   const shown: Record<LogStatisticKey, boolean> = {

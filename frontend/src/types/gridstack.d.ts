@@ -140,6 +140,8 @@ declare module 'gridstack' {
     w_divergence?: number;
     alpha?: number;
     beta?: number;
+    // Local filter params - persisted per widget
+    local_filter_params?: Record<string, string> | null;
     // ProcessAreaComponent: stored composition shown instead of the discovery
     composition_asset?: number | null;
   }

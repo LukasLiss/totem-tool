@@ -210,6 +210,10 @@ class DashboardComponent(models.Model):
 
     order = models.IntegerField(default=0)  # for z-order or stable sorting
 
+    # Per-widget local filter params (activity/date/object-type selections).
+    # Stored as a flat string→string dict matching the axios `params` shape.
+    local_filter_params = models.JSONField(null=True, blank=True, default=None)
+
     class Meta:
         verbose_name = "Dashboard Component"
         verbose_name_plural = "Dashboard Components"
@@ -630,6 +634,16 @@ class ResourceProfilingComponent(DashboardComponent):
     )
     transparent_points = models.BooleanField(default=False)
 
+
+class ProjectComponentFilter(models.Model):
+    """Per-user, per-project, per-component local filter params."""
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="component_filters")
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="component_filters")
+    component_key = models.CharField(max_length=100)
+    local_filter_params = models.JSONField(default=dict)
+
+    class Meta:
+        unique_together = [("user", "project", "component_key")]
 
 class SeedState(models.Model):
     """Records one-off provisioning that must never run twice.

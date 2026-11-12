@@ -8,7 +8,7 @@ from rest_framework.response import Response
 from django.conf import settings
 
 from .. import jobs
-from ..models import Project, UserSettings
+from ..models import Project, ProjectComponentFilter, UserSettings
 
 
 @api_view(["GET"])
@@ -155,3 +155,44 @@ def job_cancel(request, job_id):
     if not jobs.valid_job_id(job_id):
         return Response({"error": "Invalid job id"}, status=status.HTTP_400_BAD_REQUEST)
     return Response(jobs.cancel(job_id, request.user.pk), status=status.HTTP_200_OK)
+
+
+# ---------------------------------------------------------------------------
+# Per-user, per-project component filter persistence 
+# ---------------------------------------------------------------------------
+
+@api_view(["GET", "PUT"])
+@permission_classes([IsAuthenticated])
+def component_filters(request, project_id):
+    """Read or update local filter params.
+
+    GET  → returns a dict of {component_key: local_filter_params}
+    PUT  → body {"component_key": str, "local_filter_params": dict}
+           upserts one record and returns 204
+    """
+    try:
+        project = Project.objects.get(pk=project_id, users=request.user)
+    except Project.DoesNotExist:
+        return Response({"error": "Not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == "GET":
+        filters = ProjectComponentFilter.objects.filter(
+            user=request.user, project=project
+        ).values("component_key", "local_filter_params")
+        return Response({f["component_key"]: f["local_filter_params"] for f in filters})
+
+    # PUT
+    key = request.data.get("component_key")
+    params = request.data.get("local_filter_params")
+    if not key or not isinstance(key, str):
+        return Response({"error": "component_key required"}, status=status.HTTP_400_BAD_REQUEST)
+    if not isinstance(params, dict):
+        return Response({"error": "local_filter_params must be an object"}, status=status.HTTP_400_BAD_REQUEST)
+    cleaned = {str(k): str(v) for k, v in params.items() if k and v is not None and str(v) != ""}
+    ProjectComponentFilter.objects.update_or_create(
+        user=request.user,
+        project=project,
+        component_key=key,
+        defaults={"local_filter_params": cleaned},
+    )
+    return Response(status=status.HTTP_204_NO_CONTENT)

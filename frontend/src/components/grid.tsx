@@ -71,8 +71,12 @@ const layoutFingerprint = (layout: LayoutFingerprintItem[]): string =>
 
 const GridContent: React.FC = () => {
   const { getLayout: getGridLayout, loadLayout, resetGrid } = useGrid();
-  const { viewMode, setViewMode, registerNavigationGuard } =
-    useContext(DashboardContext);
+  const {
+    viewMode,
+    setViewMode,
+    registerNavigationGuard,
+    registerUnsavedChangesProbe,
+  } = useContext(DashboardContext);
   const { isEditMode, setIsEditMode } = useGridMode();
   // A phone shows the dashboard as one stacked column. Editing there would
   // save that column as the dashboard's layout, so it is view-only.
@@ -125,6 +129,14 @@ const GridContent: React.FC = () => {
     });
     return () => registerNavigationGuard(null);
   }, [isEditMode, registerNavigationGuard, hasUnsavedChanges]);
+
+  // Lets the sidebar's Export say when it is about to write the last saved
+  // layout rather than what is on screen.
+  useEffect(() => {
+    if (!isEditMode || !registerUnsavedChangesProbe) return;
+    registerUnsavedChangesProbe(hasUnsavedChanges);
+    return () => registerUnsavedChangesProbe(null);
+  }, [isEditMode, registerUnsavedChangesProbe, hasUnsavedChanges]);
 
   useEffect(() => {
 

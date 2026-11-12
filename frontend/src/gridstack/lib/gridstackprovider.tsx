@@ -51,6 +51,17 @@ const DEFAULT_MIN_SIZE = { minW: 2, minH: 2 };
 const getMinSize = (componentName?: string) =>
   (componentName && MIN_SIZES[componentName]) || DEFAULT_MIN_SIZE;
 
+/**
+ * Both spellings of the NumberOfEvents widget name.
+ *
+ * `_replace_components` writes "NumberOfEventsComponent" (capital O) and the
+ * React registry agrees, but rows written before that was settled carry the
+ * lowercase form, so both have to be accepted. One helper, so the two cannot
+ * drift apart again.
+ */
+const isNumberOfEvents = (name?: string) =>
+  name === "NumberOfEventsComponent" || name === "NumberofEventsComponent";
+
 interface GridProviderProps {
   children: ReactNode;
   options?: GridStackOptions;
@@ -318,8 +329,12 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       const h =
         node.h ??
         1; // necessary because GS sets h=1 to undefined
-      if (component_name === "NumberofEventsComponent") {
-        props = { color: "blue" };
+      if (isNumberOfEvents(component_name)) {
+        // The old test here spelled the name with a lowercase o, so it never
+        // matched a row `_replace_components` had written and no `color` was
+        // sent — the backend then fell back to "blue" and the widget lost its
+        // colour on the first save after any import or edit.
+        props = { color: node.color ?? "blue" };
       } else if (component_name === "TextBoxComponent") {
         // Formatting comes off the node via one helper, so the save and
         // load lists below cannot drift apart as options are added.
@@ -520,6 +535,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         h,
         order: index,
         ...props,
+        local_filter_params: node.local_filter_params ?? null,
         id: component_id,  // Now always set — spread last so this always wins
       };
     });
@@ -556,7 +572,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
     if (layout.length > 0) {
       layout.forEach((item) => {
         let content = "";
-        if (item.component_name === "NumberofEventsComponent") {
+        if (isNumberOfEvents(item.component_name)) {
           content = "Number of Events";
         } else if (item.component_name === "TextBoxComponent") {
           content = "Text Box";
@@ -727,6 +743,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             distance_metric: item.distance_metric,
             point_size: item.point_size,
             transparent_points: item.transparent_points,
+            local_filter_params: item.local_filter_params ?? null,
             // OCAlignmentComponent
             model_asset: item.model_asset,
             execution_source: item.execution_source,
@@ -851,6 +868,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node.distance_metric = item.distance_metric;
               node.point_size = item.point_size;
               node.transparent_points = item.transparent_points;
+              node.local_filter_params = item.local_filter_params ?? null;
               // OCAlignmentComponent
               node.model_asset = item.model_asset;
               node.execution_source = item.execution_source;

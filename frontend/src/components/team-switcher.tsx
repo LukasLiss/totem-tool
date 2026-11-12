@@ -179,7 +179,11 @@ export function Switcher() {
                   // of the new project mount (see prepareLargeLogFilter).
                   await prepareLargeLogFilter(Number(project.id));
                   setSelectedFile(project);
-                  setViewMode({ type: 'overview' });
+                  // Batched with the line above, so the view of the project
+                  // being left never renders against the new one. Forced
+                  // because the view the guard would defend belongs to that
+                  // old project — and DashboardProvider resets it regardless.
+                  setViewMode({ type: 'overview' }, { force: true });
                 }}
                 className="gap-2 p-2"
               >

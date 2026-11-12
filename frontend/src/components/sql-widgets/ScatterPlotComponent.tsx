@@ -27,6 +27,7 @@ import { POINT_RADIUS_PX, TRANSPARENT_POINT_OPACITY, buildScatterSeries, scatter
 import WidgetDraftTile from "@/components/WidgetDraftTile";
 import ScatterPlotSketch from "./ScatterPlotSketch";
 import ScatterPlotSettingsDialog, { type ScatterPlotSettings } from "./ScatterPlotSettingsDialog";
+import { useDashboardLocalFilter } from "@/hooks/useDashboardLocalFilter";
 
 export interface ScatterPlotNodeFields extends SqlWidgetNodeFields {
   x_column?: string;
@@ -42,7 +43,13 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
   onUpdate,
   isEditMode = false,
   selectedFile,
+  dashboardId,
 }) => {
+  const [filterEnabled, setFilterEnabled] = useState(true);
+  const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
+    node, dashboardId, onUpdate,
+  );
+
   const [title, setTitle] = useState(node.title ?? "");
   const [query, setQuery] = useState(node.query ?? SCATTER_DEFAULT_QUERY);
   const [linked, setLinked] = useState<LinkedQuery | null>(linkedQueryOf(node));
@@ -134,6 +141,8 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
     queryAssetId: linked?.id,
     enabled: !isEditMode,
     limit: 5000,
+    filterEnabled,
+    localFilterParams: Object.keys(localFilterParams).length > 0 ? localFilterParams : undefined,
   });
 
   const { series, xKey, yKey, seriesKey, config, legendItems } = useMemo(() => {
@@ -181,19 +190,30 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
     );
   }
 
-  if (!fileId) return <WidgetMessage>Select an event log to draw this plot.</WidgetMessage>;
-  if (data.error) return <WidgetMessage tone="error">{data.error}</WidgetMessage>;
-  if (data.loading) return <WidgetMessage>Loading…</WidgetMessage>;
-  if (series.length === 0) {
-    return <WidgetMessage>No numeric points to display. Configure the query and columns in edit mode.</WidgetMessage>;
-  }
-
   const showLegend = Boolean(seriesKey) && (legendPosition === "bottom" || legendPosition === "columns");
 
+  // The header (with the filters) stays while there is nothing to draw.
   return (
     <Card className="flex h-full w-full flex-col overflow-hidden rounded-none">
-      <ChartTitle title={title} />
+      <ChartTitle
+        title={title}
+        fileId={fileId}
+        filterEnabled={filterEnabled}
+        onToggleFilter={() => setFilterEnabled((p) => !p)}
+        localFilterParams={localFilterParams}
+        onLocalFilterChange={handleLocalFilterChange}
+      />
       <CardContent className="flex min-h-0 flex-1 flex-col gap-2 p-3">
+        {!fileId ? (
+          <WidgetMessage>Select an event log to draw this plot.</WidgetMessage>
+        ) : data.error ? (
+          <WidgetMessage tone="error">{data.error}</WidgetMessage>
+        ) : data.loading ? (
+          <WidgetMessage>Loading…</WidgetMessage>
+        ) : series.length === 0 ? (
+          <WidgetMessage>No numeric points to display. Configure the query and columns in edit mode.</WidgetMessage>
+        ) : (
+          <>
         <ChartContainer config={config} className="aspect-auto min-h-0 w-full flex-1">
           <ScatterChart margin={{ top: 8, right: 16, bottom: xLabel ? 24 : 8, left: yLabel ? 16 : 4 }}>
             <CartesianGrid strokeDasharray="3 3" />
@@ -244,6 +264,8 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
         )}
         {data.truncated && (
           <p className="text-[11px] text-muted-foreground">showing the first 5,000 rows</p>
+        )}
+          </>
         )}
       </CardContent>
     </Card>

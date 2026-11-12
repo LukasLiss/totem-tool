@@ -26,6 +26,7 @@ from .event_log import EventLogViewSet
 from .misc import (
     cache_clear,
     cache_stats,
+    component_filters,
     delete_user_data,
     greeting,
     health_check,
@@ -66,6 +67,7 @@ __all__ = [
     "user_settings",
     "jobs_status",
     "job_cancel",
+    "component_filters",
     # Private helpers re-exported for tests and signals that reference
     # ``api.views.<name>`` directly.
     "_OCEL_DB_REGISTRY",

@@ -87,6 +87,8 @@ export type ProcessAreaProps = {
     algorithm: ProcessAreaAlgorithm;
     params: ProcessAreaParams;
   }) => void;
+  initialLocalFilterParams?: Record<string, string>;
+  onLocalFilterChange?: (params: Record<string, string>) => void;
   /** Stored composition (PROCESS_AREAS asset) to show instead of the discovery. */
   initialCompositionAssetId?: number | null;
   /** Fired when the user switches between the discovery and a stored composition. */
@@ -115,13 +117,24 @@ export default function ProcessArea({
   initialAlgorithm,
   initialParams,
   onSettingsChange,
+  initialLocalFilterParams,
+  onLocalFilterChange,
   initialCompositionAssetId,
   onCompositionAssetChange,
 }: ProcessAreaProps) {
   const [totemControls, setTotemControls] = useState<TotemVisualizerControls | null>(null);
   const [reloadSignal, setReloadSignal] = useState(0);
   const [filterEnabled, setFilterEnabled] = useState(true);
-  const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>({});
+  const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>(initialLocalFilterParams ?? {});
+
+  // Follow the host's filter when it changes from outside (loaded
+  // asynchronously, or reset on a project switch).
+  const initialLocalFilterJson = JSON.stringify(initialLocalFilterParams ?? {});
+  useEffect(() => {
+    setLocalFilterParams((prev) =>
+      JSON.stringify(prev) === initialLocalFilterJson ? prev : JSON.parse(initialLocalFilterJson),
+    );
+  }, [initialLocalFilterJson]);
 
   // ---- compositions ------------------------------------------------------
   const { selectedFile } = useContext(SelectedFileContext);
@@ -321,11 +334,14 @@ export default function ProcessArea({
     <Card
       className={`@container/card w-full flex flex-col ${fillContainer ? 'h-full rounded-none' : ''}`}
     >
-      <CardHeader className="items-center relative z-10 justify-between flex-shrink-0">
+      <CardHeader className="items-center relative z-10 justify-between flex-shrink-0 px-4 py-2 text-left border-b">
         <div className="flex flex-wrap items-center gap-2">
-          <CardTitle>Process Area Visualizer</CardTitle>
+          <CardTitle className="text-sm">Process Area Visualizer</CardTitle>
           <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(prev => !prev)} />
-          <LocalFilterDropdown fileId={fileId} onFilterChange={setLocalFilterParams} />
+          <LocalFilterDropdown fileId={fileId} value={localFilterParams} onFilterChange={(params) => {
+            setLocalFilterParams(params);
+            onLocalFilterChange?.(params);
+          }} />
         </div>
         <CardAction className="flex flex-wrap items-center justify-end gap-2">
           <Select value={sourceValue} onValueChange={handleSourceChange}>

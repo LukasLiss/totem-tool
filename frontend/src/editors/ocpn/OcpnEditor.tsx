@@ -868,10 +868,17 @@ function OcpnEditorInner() {
     }
   }, [applyModel, record]);
 
-  const handleExport = useCallback(() => {
+  const handleExport = useCallback(async () => {
     const filename = toFilename(modelName, 'ocpn-model');
-    downloadJson(filename, serializeRef.current());
-    toast.success(`Saved ${filename}.json`);
+    try {
+      const outcome = await downloadJson(filename, serializeRef.current());
+      if (outcome === 'cancelled') return;
+      toast.success(
+        outcome === 'saved' ? `Saved ${filename}.json` : `Downloading ${filename}.json`,
+      );
+    } catch {
+      toast.error('Could not save the model.');
+    }
   }, [modelName]);
 
   const handleLoadExample = useCallback(() => {

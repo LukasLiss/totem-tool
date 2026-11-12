@@ -13,6 +13,9 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useFilterVersion } from "@/store/filterStore";
+import { GlobalFilterToggle } from "@/components/ui/GlobalFilterToggle";
+import { LocalFilterDropdown } from "@/components/ui/LocalFilterDropdown";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -108,6 +111,14 @@ export interface SqlQueryEditorProps {
   /** called after each successful test run with the query text and its first page */
   onResult?: (result: { query: string; columns: string[]; rows: Record<string, unknown>[] }) => void;
   className?: string;
+  /** when false, queries run without the global filter (shows the unfiltered log) */
+  filterEnabled?: boolean;
+  /** called when the user clicks the filter toggle in view mode */
+  onToggleFilter?: () => void;
+  /** per-widget local filter params */
+  localFilterParams?: Record<string, string>;
+  /** called when the user changes the local filter */
+  onLocalFilterChange?: (params: Record<string, string>) => void;
 }
 
 export const SQL_QUERY_DEFAULT =
@@ -154,6 +165,10 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
   hideName = false,
   onResult,
   className,
+  filterEnabled = true,
+  onToggleFilter,
+  localFilterParams,
+  onLocalFilterChange,
 }) => {
   const rowLimit = value.rowLimit ?? 25;
   // Kept in a ref so a new callback each render doesn't change the run function.
@@ -161,6 +176,8 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
   useEffect(() => {
     onResultRef.current = onResult;
   }, [onResult]);
+  const filterVersion = useFilterVersion();
+  const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
 
   // Some hosts (e.g. the dashboard grid) mount this via a one-off ReactDOM
   // root that isn't re-rendered on every onChange. So text fields need
@@ -287,7 +304,7 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
       setRunning(true);
       const t0 = performance.now();
       try {
-        const page = await runSqlQuery(fileId, q, { offset: 0, limit: rowLimit });
+        const page = await runSqlQuery(fileId, q, { offset: 0, limit: rowLimit, skipGlobalFilter: !filterEnabled, localFilterParams });
         if (seq !== runSeq.current) return;
         setResult({
           rows: page.data,
@@ -306,7 +323,7 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
         if (seq === runSeq.current) setRunning(false);
       }
     },
-    [query, fileId, rowLimit]
+    [query, fileId, rowLimit, filterEnabled, localFilterParams]
   );
 
   const loadMore = useCallback(async () => {
@@ -317,6 +334,8 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
       const page = await runSqlQuery(fileId, query, {
         offset: result.rows.length,
         limit: rowLimit,
+        skipGlobalFilter: !filterEnabled,
+        localFilterParams,
       });
       if (seq !== runSeq.current) return;
       setResult((prev) =>
@@ -330,7 +349,7 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
     } finally {
       if (seq === runSeq.current) setLoadingMore(false);
     }
-  }, [fileId, result, loadingMore, running, query, rowLimit]);
+  }, [fileId, result, loadingMore, running, query, rowLimit, filterEnabled, localFilterParams]);
 
   // Lazy loading: fetch the next page when the sentinel below the last row
   // scrolls into view.
@@ -349,12 +368,14 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
 
   // View mode auto-runs; edit-mode authoring runs are explicit (Run / ⌘↵).
   // While linked, wait for the stored text before running anything.
+  // A changed global filter, filter toggle or local filter re-runs the query.
+  const localFilterKey = JSON.stringify(localFilterParams ?? {});
   useEffect(() => {
     if (isEditMode) return;
     if (linked && storedQueryText == null) return;
     void run(linked ? storedQueryText ?? "" : query);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isEditMode, query, fileId, linked, storedQueryText, rowLimit]);
+  }, [isEditMode, query, fileId, linked, storedQueryText, rowLimit, effectiveFilterVersion, filterEnabled, localFilterKey]);
 
   const patchName = (v: string) => {
     setName(v);
@@ -591,10 +612,16 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
   if (!isEditMode) {
     return (
       <Card className={cn("flex h-full w-full flex-col overflow-hidden text-left", className)}>
-        <CardHeader className="flex flex-row items-center gap-2 space-y-0 border-b py-3">
-          <CardTitle className="min-w-0 flex-1 truncate text-sm">
+        <CardHeader className="flex flex-row items-center gap-2 space-y-0 border-b px-4 py-2 text-left">
+          <CardTitle className="shrink min-w-0 truncate text-sm">
             {name || linkedQuery?.name || "SQL query"}
           </CardTitle>
+          {onToggleFilter && (
+            <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggleFilter} stopPropagation />
+          )}
+          {onLocalFilterChange && (
+            <LocalFilterDropdown fileId={fileId} onFilterChange={onLocalFilterChange} value={localFilterParams} />
+          )}
           {linked && (
             <Badge variant="secondary" className="shrink-0 gap-1 text-[10px]" title={`linked to stored query "${linkedQuery?.name}"`}>
               <Link2 className="size-3" /> linked
@@ -633,7 +660,7 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
 
   return (
     <Card className={cn("flex h-full w-full flex-col overflow-hidden text-left", className)}>
-      <CardHeader className="flex flex-row items-center gap-2 space-y-0 border-b py-2.5">
+      <CardHeader className="flex flex-row items-center gap-2 space-y-0 border-b px-4 py-2 text-left">
         <span
           className="h-2 w-2 shrink-0 rounded-[2px]"
           style={{

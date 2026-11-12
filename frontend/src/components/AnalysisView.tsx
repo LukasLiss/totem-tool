@@ -1,4 +1,4 @@
-import React, { useCallback, useContext, useState } from "react";
+import { useCallback, useContext, useState } from "react";
 import { ReactFlowProvider } from "@xyflow/react";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import { DashboardContext } from "@/contexts/DashboardContext";
@@ -25,6 +25,7 @@ import OrgaMiningExplorer from "@/react_component/OrgaMiningExplorer";
 import OCHandoverExplorer from "@/react_component/OCHandoverExplorer";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { usePersistedLocalFilter } from "@/hooks/usePersistedLocalFilter";
 
 /**
  * Height of the graph canvases. On a phone a 700px canvas is taller than the
@@ -39,12 +40,19 @@ export function AnalysisView() {
   const { selectedFile } = useContext(SelectedFileContext);
   const [filterEnabled, setFilterEnabled] = useState(true);
   const toggleFilter = useCallback(() => setFilterEnabled(p => !p), []);
-  const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>({});
 
-  // Reset local filter when switching components or files
-  const viewComponent = viewMode.type === "analysis" ? viewMode.component : null;
-  React.useEffect(() => { setLocalFilterParams({}); }, [viewComponent, selectedFile?.id]);
+  const projectId = selectedFile?.project ?? null;
+  const [ocdfgFilter, setOcdfgFilter] = usePersistedLocalFilter(projectId, "ocdfg");
+  const [occnFilter, setOccnFilter] = usePersistedLocalFilter(projectId, "occn");
+  const [variantsFilter, setVariantsFilter] = usePersistedLocalFilter(projectId, "variants");
+  const [dottedChartFilter, setDottedChartFilter] = usePersistedLocalFilter(projectId, "dottedChart");
+  const [ocPetriNetFilter, setOcPetriNetFilter] = usePersistedLocalFilter(projectId, "ocPetriNet");
+  const [totemMinerFilter, setTotemMinerFilter] = usePersistedLocalFilter(projectId, "totemMiner");
+  const [processAreaFilter, setProcessAreaFilter] = usePersistedLocalFilter(projectId, "processArea");
+  const [orgaMiningFilter, setOrgaMiningFilter] = usePersistedLocalFilter(projectId, "orgaMining");
+  const [ocHandoverFilter, setOcHandoverFilter] = usePersistedLocalFilter(projectId, "ocHandover");
   // The OC-DFG layout is stored with the project (shared with the overview).
+  const viewComponent = viewMode.type === "analysis" ? viewMode.component : null;
   const ocdfgLayout = useProjectLayoutStorage(
     viewComponent === "ocdfg" ? selectedFile?.project : undefined,
     OCDFG_PROJECT_LAYOUT_KEY,
@@ -63,6 +71,8 @@ export function AnalysisView() {
               fileId={selectedFile?.id}
               height={CANVAS_HEIGHT}
               initialCompositionAssetId={viewMode.openAssetId ?? null}
+              initialLocalFilterParams={processAreaFilter}
+              onLocalFilterChange={setProcessAreaFilter}
             />
           </div>
         );
@@ -75,7 +85,7 @@ export function AnalysisView() {
                 <div className="flex flex-wrap items-center gap-2">
                   <CardTitle>Object-Centric DFG</CardTitle>
                   <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={toggleFilter} />
-                  <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setLocalFilterParams} />
+                  <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setOcdfgFilter} value={ocdfgFilter} />
                 </div>
                 <CardDescription>Directly-Follows Graph visualization</CardDescription>
               </CardHeader>
@@ -86,7 +96,7 @@ export function AnalysisView() {
                   filterEnabled={filterEnabled}
                   onToggleFilter={toggleFilter}
                   showTitle={false}
-                  localFilterParams={localFilterParams}
+                  localFilterParams={ocdfgFilter}
                   storedLayout={ocdfgLayout.stored}
                   onLayoutChange={ocdfgLayout.save}
                   layoutScope={ocdfgLayout.scope}
@@ -104,7 +114,7 @@ export function AnalysisView() {
                 <div className="flex flex-wrap items-center gap-2">
                   <CardTitle>Object-Centric Causal Net</CardTitle>
                   <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={toggleFilter} />
-                  <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setLocalFilterParams} />
+                  <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setOccnFilter} value={occnFilter} />
                 </div>
                 <CardDescription>Causal net with activity bindings and automatic layout</CardDescription>
               </CardHeader>
@@ -116,7 +126,7 @@ export function AnalysisView() {
                     showTitle={false}
                     filterEnabled={filterEnabled}
                     onToggleFilter={toggleFilter}
-                    localFilterParams={localFilterParams}
+                    localFilterParams={occnFilter}
                   />
                 </ReactFlowProvider>
               </CardContent>
@@ -132,7 +142,7 @@ export function AnalysisView() {
                 <div className="flex flex-wrap items-center gap-2">
                   <CardTitle>Variants Explorer</CardTitle>
                   <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={toggleFilter} />
-                  <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setLocalFilterParams} />
+                  <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setVariantsFilter} value={variantsFilter} />
                 </div>
                 <CardDescription>Object-centric variant analysis</CardDescription>
               </CardHeader>
@@ -142,7 +152,7 @@ export function AnalysisView() {
                   colWidth={120}
                   embedded={true}
                   filterEnabled={filterEnabled}
-                  localFilterParams={localFilterParams}
+                  localFilterParams={variantsFilter}
                 />
               </CardContent>
             </Card>
@@ -157,7 +167,7 @@ export function AnalysisView() {
                 <div className="flex flex-wrap items-center gap-2">
                   <CardTitle>OC Dotted Chart</CardTitle>
                   <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={toggleFilter} />
-                  <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setLocalFilterParams} />
+                  <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setDottedChartFilter} value={dottedChartFilter} />
                 </div>
                 <CardDescription>Object-centric event distribution</CardDescription>
               </CardHeader>
@@ -173,7 +183,7 @@ export function AnalysisView() {
                   maxPoints={10000}
                   showControls={true}
                   filterEnabled={filterEnabled}
-                  localFilterParams={localFilterParams}
+                  localFilterParams={dottedChartFilter}
                   className="md:min-h-[700px]"
                 />
               </CardContent>
@@ -189,7 +199,7 @@ export function AnalysisView() {
                 <div className="flex flex-wrap items-center gap-2">
                   <CardTitle>OC Petri Net</CardTitle>
                   <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={toggleFilter} />
-                  <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setLocalFilterParams} />
+                  <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setOcPetriNetFilter} value={ocPetriNetFilter} />
                 </div>
                 <CardDescription>
                   Object-Centric Petri Net discovered from the event log
@@ -202,7 +212,7 @@ export function AnalysisView() {
                   autoStart={true}
                   showControls={true}
                   filterEnabled={filterEnabled}
-                  localFilterParams={localFilterParams}
+                  localFilterParams={ocPetriNetFilter}
                 />
               </CardContent>
             </Card>
@@ -217,6 +227,8 @@ export function AnalysisView() {
               height={CANVAS_HEIGHT}
               filterEnabled={filterEnabled}
               onToggleFilter={toggleFilter}
+              initialLocalFilterParams={totemMinerFilter}
+              onLocalFilterChange={setTotemMinerFilter}
             />
           </div>
         );
@@ -238,6 +250,10 @@ export function AnalysisView() {
             fileName={selectedFile?.file?.split("/").pop()}
             filterEnabled={filterEnabled}
             onToggleFilter={toggleFilter}
+            orgaMiningFilter={orgaMiningFilter}
+            onOrgaMiningFilterChange={setOrgaMiningFilter}
+            ocHandoverFilter={ocHandoverFilter}
+            onOcHandoverFilterChange={setOcHandoverFilter}
           />
         );
 
@@ -276,13 +292,22 @@ function OrgaMiningView({
   fileName,
   filterEnabled,
   onToggleFilter,
+  orgaMiningFilter,
+  onOrgaMiningFilterChange,
+  ocHandoverFilter,
+  onOcHandoverFilterChange,
 }: {
   fileId?: number;
   fileName?: string;
   filterEnabled: boolean;
   onToggleFilter: () => void;
+  orgaMiningFilter?: Record<string, string>;
+  onOrgaMiningFilterChange?: (params: Record<string, string>) => void;
+  ocHandoverFilter?: Record<string, string>;
+  onOcHandoverFilterChange?: (params: Record<string, string>) => void;
 }) {
   const [activeIdx, setActiveIdx] = useState(0);
+  const activeFilterChange = activeIdx === 0 ? onOrgaMiningFilterChange : onOcHandoverFilterChange;
 
   return (
     <div className="w-full max-w-7xl flex flex-col gap-3">
@@ -300,6 +325,10 @@ function OrgaMiningView({
             {SLIDES[activeIdx].label}
           </span>
           <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggleFilter} />
+          {activeFilterChange && (
+            // Keyed per slide so the dropdown's rule state never carries over.
+            <LocalFilterDropdown key={activeIdx} fileId={fileId} onFilterChange={activeFilterChange} value={activeIdx === 0 ? orgaMiningFilter : ocHandoverFilter} />
+          )}
         </div>
         <Button
           variant="outline"
@@ -311,10 +340,19 @@ function OrgaMiningView({
         </Button>
       </div>
       <div className={activeIdx !== 0 ? "hidden" : undefined}>
-        <OrgaMiningExplorer fileId={fileId} filterEnabled={filterEnabled} />
+        <OrgaMiningExplorer
+          fileId={fileId}
+          filterEnabled={filterEnabled}
+          localFilterParams={Object.keys(orgaMiningFilter ?? {}).length > 0 ? orgaMiningFilter : undefined}
+        />
       </div>
       <div className={activeIdx !== 1 ? "hidden" : undefined}>
-        <OCHandoverExplorer fileId={fileId} fileName={fileName} filterEnabled={filterEnabled} />
+        <OCHandoverExplorer
+          fileId={fileId}
+          fileName={fileName}
+          filterEnabled={filterEnabled}
+          localFilterParams={Object.keys(ocHandoverFilter ?? {}).length > 0 ? ocHandoverFilter : undefined}
+        />
       </div>
     </div>
   );

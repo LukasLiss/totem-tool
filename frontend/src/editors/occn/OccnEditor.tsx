@@ -970,13 +970,20 @@ function OccnEditorInner() {
     }
   }, [applyModel, history, serialize, modelName]);
 
-  const onExport = useCallback(() => {
+  const onExport = useCallback(async () => {
     const filename = toFilename(modelName, 'occn-model');
     // Save in the canonical asset-store format so the file can be uploaded to
     // the project model asset store directly; the editor's layout (positions,
     // colors, bindingless arcs) travels in the optional `layout` block.
-    downloadJson(filename, occnModelToAsset(serialize()));
-    toast.success(`Saved ${filename}.json`);
+    try {
+      const outcome = await downloadJson(filename, occnModelToAsset(serialize()));
+      if (outcome === 'cancelled') return;
+      toast.success(
+        outcome === 'saved' ? `Saved ${filename}.json` : `Downloading ${filename}.json`,
+      );
+    } catch {
+      toast.error('Could not save the model.');
+    }
   }, [modelName, serialize]);
 
   const onLoadExample = useCallback(async () => {

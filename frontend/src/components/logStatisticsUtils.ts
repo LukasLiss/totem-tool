@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from "react";
 import axios from "axios";
-import { useFilterVersion } from "@/store/filterStore";
+import { filterRequestConfig, useFilterVersion } from "@/store/filterStore";
 import { isCancelledError } from "@/store/computationStore";
 
 export interface Statistics {
@@ -178,13 +178,21 @@ export function selectionFromNode(node: Partial<Record<LogStatisticKey, boolean>
   ) as LogStatisticsSelection;
 }
 
-/** Loads the statistics of an event log; reloads when the filter changes. */
-export function useLogStatistics(fileId: number | undefined) {
+/**
+ * Loads the statistics of an event log; reloads when the filter changes.
+ * `filterEnabled: false` skips the global filter; `localFilterParams` is the
+ * widget's own filter.
+ */
+export function useLogStatistics(
+  fileId: number | undefined,
+  { filterEnabled = true, localFilterParams }: { filterEnabled?: boolean; localFilterParams?: Record<string, string> } = {},
+) {
   const [stats, setStats] = useState<Statistics | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const filterVersion = useFilterVersion();
+  const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
 
   useEffect(() => {
     if (!fileId) {
@@ -197,7 +205,10 @@ export function useLogStatistics(fileId: number | undefined) {
       setLoading(true);
       setError(null);
       try {
-        const { data } = await axios.get(`/api/files/${fileId}/statistics/`, { signal: controller.signal });
+        const { data } = await axios.get(`/api/files/${fileId}/statistics/`, {
+          signal: controller.signal,
+          ...filterRequestConfig(localFilterParams, filterEnabled),
+        });
         setStats(data);
       } catch (err) {
         if (controller.signal.aborted) return;
@@ -209,7 +220,7 @@ export function useLogStatistics(fileId: number | undefined) {
     fetchStats();
     // Leaving the page or changing the filter stops the running computation.
     return () => controller.abort();
-  }, [fileId, filterVersion]);
+  }, [fileId, effectiveFilterVersion, filterEnabled, localFilterParams]);
 
   return { stats, loading, error };
 }

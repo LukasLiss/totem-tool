@@ -14,6 +14,7 @@ import NewOCDFGVariantsVisualizer from "@/react_component/NewOCDFGVariantsVisual
 import { OCDFG_PROJECT_LAYOUT_KEY } from "@/react_component/ocdfg-layout/options";
 import { useProjectLayoutStorage } from "@/react_component/ocdfg-layout/useLayoutOptions";
 import LogStatistics from "@/components/LogStatistics";
+import { usePersistedLocalFilter } from "@/hooks/usePersistedLocalFilter";
 
 /**
  * The Overview page: a first look at the selected event log.
@@ -27,8 +28,10 @@ import LogStatistics from "@/components/LogStatistics";
  */
 export function DevDashboard() {
   const { selectedFile } = useContext(SelectedFileContext);
+  const projectId = selectedFile?.project ?? null;
   const [dfgFilterEnabled, setDfgFilterEnabled] = useState(true);
-  const [dfgLocalFilter, setDfgLocalFilter] = useState<Record<string, string>>({});
+  const [processAreaFilter, setProcessAreaFilter] = usePersistedLocalFilter(projectId, "overview_processArea");
+  const [dfgLocalFilter, setDfgLocalFilter] = usePersistedLocalFilter(projectId, "overview_dfg");
   // Same project-stored layout as Analysis → OC-DFG.
   const ocdfgLayout = useProjectLayoutStorage(selectedFile?.project, OCDFG_PROJECT_LAYOUT_KEY);
 
@@ -42,13 +45,17 @@ export function DevDashboard() {
           showNumObjects={true}
           showNumObjectTypes={true}
         />
-        <ProcessArea fileId={selectedFile?.id} />
+        <ProcessArea
+          fileId={selectedFile?.id}
+          initialLocalFilterParams={processAreaFilter}
+          onLocalFilterChange={setProcessAreaFilter}
+        />
         <Card className="@container/card" data-testid="overview-dfg-card">
           <CardHeader className="items-center relative z-10 justify-between">
             <div className="flex flex-wrap items-center gap-2">
               <CardTitle>Object-Centric Directly-Follows Graph</CardTitle>
               <GlobalFilterToggle filterEnabled={dfgFilterEnabled} onToggle={() => setDfgFilterEnabled(p => !p)} />
-              <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setDfgLocalFilter} />
+              <LocalFilterDropdown fileId={selectedFile?.id} onFilterChange={setDfgLocalFilter} value={dfgLocalFilter} />
             </div>
             <CardDescription>Directly-follows relations per object type with arc weights and automatic layout</CardDescription>
           </CardHeader>

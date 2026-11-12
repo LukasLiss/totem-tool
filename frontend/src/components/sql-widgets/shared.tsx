@@ -11,6 +11,8 @@ import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { GlobalFilterToggle } from "@/components/ui/GlobalFilterToggle";
+import { LocalFilterDropdown } from "@/components/ui/LocalFilterDropdown";
 import type { ExpectedResult } from "@/react_component/SqlQueryEditor";
 import type { LinkedQuery } from "@/react_component/sql/linkedQuery";
 import { SqlQueryField } from "@/react_component/sql/SqlQueryField";
@@ -192,17 +194,33 @@ export function SegmentedControl<T extends string>({
 /* ------------------------------------------------------------------ */
 
 /**
- * A chart widget's title above the chart: the same size for every chart,
- * cut off with an ellipsis when too long (the full title shows on hover).
- * Renders nothing without a title.
+ * A chart widget's header row (as the other dashboard widgets have it): the
+ * title, cut off with an ellipsis when too long (the full title shows on
+ * hover), then the global filter switch and the widget's local filter.
+ * Always shown, also without a title, so the filters stay reachable.
  */
-export function ChartTitle({ title }: { title: string }) {
-  if (!title) return null;
+export function ChartTitle({
+  title,
+  fileId,
+  filterEnabled,
+  onToggleFilter,
+  localFilterParams,
+  onLocalFilterChange,
+}: {
+  title: string;
+  fileId?: number;
+  filterEnabled: boolean;
+  onToggleFilter: () => void;
+  localFilterParams: Record<string, string>;
+  onLocalFilterChange: (params: Record<string, string>) => void;
+}) {
   return (
-    <CardHeader className="pb-0 text-center">
-      <CardTitle className="truncate text-base" title={title}>
+    <CardHeader className="flex flex-row items-center gap-2 space-y-0 px-4 py-2 border-b text-left">
+      <CardTitle className="shrink min-w-0 truncate text-sm" title={title || undefined}>
         {title}
       </CardTitle>
+      <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggleFilter} />
+      <LocalFilterDropdown fileId={fileId} onFilterChange={onLocalFilterChange} value={localFilterParams} />
     </CardHeader>
   );
 }

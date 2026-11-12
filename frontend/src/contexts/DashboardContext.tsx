@@ -1,5 +1,14 @@
-import React, { createContext, useCallback, useRef, useState } from "react";
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { useNavigate } from "react-router-dom";
+
+import { SelectedFileContext } from "./SelectedFileContext";
 
 export type AnalysisComponent =
   | "processArea"
@@ -48,6 +57,14 @@ type DashboardContextType = {
   setViewMode: (mode: ViewMode, options?: SetViewModeOptions) => void;
   /** Install the guard, or pass null to remove it. Only one can be active. */
   registerNavigationGuard?: (guard: NavigationGuard | null) => void;
+  /**
+   * Install a check for unsaved dashboard edits, or pass null to remove it.
+   * Separate from the guard, which also *asks* the user: some callers only
+   * need to know, e.g. an export that reads the last saved layout.
+   */
+  registerUnsavedChangesProbe?: (probe: (() => boolean) | null) => void;
+  /** Whether the open dashboard has edits that are not saved yet. */
+  hasUnsavedChanges?: () => boolean;
 };
 
 // eslint-disable-next-line react-refresh/only-export-components
@@ -55,6 +72,8 @@ export const DashboardContext = createContext<DashboardContextType>({
   viewMode: { type: "overview" },
   setViewMode: () => {},
   registerNavigationGuard: () => {},
+  registerUnsavedChangesProbe: () => {},
+  hasUnsavedChanges: () => false,
 });
 
 export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({
@@ -63,11 +82,47 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({
   const [viewMode, setViewModeState] = useState<ViewMode>({ type: "overview" });
   const navigate = useNavigate();
   const navigationGuard = useRef<NavigationGuard | null>(null);
+  const unsavedChangesProbe = useRef<(() => boolean) | null>(null);
+
+  // Every view but the overview belongs to the project it was opened from: a
+  // dashboard of one project is not in another's sidebar and its widgets would
+  // compute against the wrong log, and the asset ids carried by the model,
+  // query, conformance and editor views are project-scoped just the same. So
+  // changing the open event log drops the app back to the overview.
+  //
+  // Keyed on the id rather than the object: renaming the open project hands
+  // back a fresh object for the same log (`team-switcher.tsx`), and that must
+  // not eject the user from what they are looking at. Editors keep their
+  // unsaved models across the unmount via `editors/shared/sessionCache.ts`.
+  const { selectedFile } = useContext(SelectedFileContext);
+  const openFileId = selectedFile?.id ?? null;
+  const lastOpenFileId = useRef(openFileId);
+
+  useEffect(() => {
+    if (lastOpenFileId.current === openFileId) return;
+    lastOpenFileId.current = openFileId;
+    // `setViewModeState`, not `setViewMode`: navigating would throw the user
+    // off the start page while they are still choosing which project to open,
+    // and the navigation guard defends a view whose project has just been left.
+    setViewModeState({ type: "overview" });
+  }, [openFileId]);
 
   const registerNavigationGuard = useCallback(
     (guard: NavigationGuard | null) => {
       navigationGuard.current = guard;
     },
+    []
+  );
+
+  const registerUnsavedChangesProbe = useCallback(
+    (probe: (() => boolean) | null) => {
+      unsavedChangesProbe.current = probe;
+    },
+    []
+  );
+
+  const hasUnsavedChanges = useCallback(
+    () => unsavedChangesProbe.current?.() ?? false,
     []
   );
 
@@ -92,7 +147,13 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({
 
   return (
     <DashboardContext.Provider
-      value={{ viewMode, setViewMode, registerNavigationGuard }}
+      value={{
+        viewMode,
+        setViewMode,
+        registerNavigationGuard,
+        registerUnsavedChangesProbe,
+        hasUnsavedChanges,
+      }}
     >
       {children}
     </DashboardContext.Provider>

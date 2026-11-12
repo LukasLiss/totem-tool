@@ -16,6 +16,9 @@ import { formatKpiValue, pickKpiValue } from "./kpiUtils";
 import WidgetDraftTile from "@/components/WidgetDraftTile";
 import KpiSketch from "./KpiSketch";
 import KpiSettingsDialog, { type KpiSettings } from "./KpiSettingsDialog";
+import { GlobalFilterToggle } from "@/components/ui/GlobalFilterToggle";
+import { LocalFilterDropdown } from "@/components/ui/LocalFilterDropdown";
+import { useDashboardLocalFilter } from "@/hooks/useDashboardLocalFilter";
 
 export interface KpiNodeFields extends SqlWidgetNodeFields {
   value_column?: string;
@@ -34,7 +37,13 @@ const KpiComponent: React.FC<SqlWidgetProps<KpiNodeFields>> = ({
   onUpdate,
   isEditMode = false,
   selectedFile,
+  dashboardId,
 }) => {
+  const [filterEnabled, setFilterEnabled] = useState(true);
+  const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
+    node, dashboardId, onUpdate,
+  );
+
   const [title, setTitle] = useState(node.title ?? "");
   const [query, setQuery] = useState(node.query ?? KPI_DEFAULT_QUERY);
   const [linked, setLinked] = useState<LinkedQuery | null>(linkedQueryOf(node));
@@ -85,6 +94,8 @@ const KpiComponent: React.FC<SqlWidgetProps<KpiNodeFields>> = ({
     query,
     queryAssetId: linked?.id,
     limit: 1,
+    filterEnabled,
+    localFilterParams: Object.keys(localFilterParams).length > 0 ? localFilterParams : undefined,
   });
 
   const value = useMemo(
@@ -125,33 +136,40 @@ const KpiComponent: React.FC<SqlWidgetProps<KpiNodeFields>> = ({
     );
   }
 
-  if (!fileId) return <WidgetMessage>Select an event log to compute this KPI.</WidgetMessage>;
-  if (data.error) return <WidgetMessage tone="error">{data.error}</WidgetMessage>;
-  if (data.loading) return <WidgetMessage>Loading…</WidgetMessage>;
-  if (!value) return <WidgetMessage>The query returned no rows.</WidgetMessage>;
-
-  const formatted = formatKpiValue(value.raw, decimals);
+  const formatted = value ? formatKpiValue(value.raw, decimals) : null;
 
   return (
     <Card className="flex h-full w-full flex-col overflow-hidden rounded-none">
-      {title && (
-        <CardHeader className="pb-0">
-          <CardTitle className="truncate text-sm font-medium text-muted-foreground">{title}</CardTitle>
-        </CardHeader>
-      )}
+      <CardHeader className="flex flex-row items-center gap-2 space-y-0 px-4 py-2 border-b text-left">
+        <CardTitle className="shrink min-w-0 truncate text-sm font-medium text-muted-foreground">{title}</CardTitle>
+        <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} />
+        <LocalFilterDropdown fileId={fileId} onFilterChange={handleLocalFilterChange} value={localFilterParams} />
+      </CardHeader>
       <CardContent className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 p-4">
-        <div className="flex items-baseline gap-1 whitespace-nowrap">
-          {prefix && <span className="text-lg text-muted-foreground">{prefix}</span>}
-          <span
-            className="font-semibold tabular-nums tracking-tight"
-            style={{ fontSize: "clamp(1.75rem, 12cqw, 3.5rem)", lineHeight: 1.1 }}
-            title={value.column}
-          >
-            {formatted}
-          </span>
-          {suffix && <span className="text-lg text-muted-foreground">{suffix}</span>}
-        </div>
-        {!title && <span className="font-mono text-[11px] text-muted-foreground">{value.column}</span>}
+        {!fileId ? (
+          <WidgetMessage>Select an event log to compute this KPI.</WidgetMessage>
+        ) : data.error ? (
+          <WidgetMessage tone="error">{data.error}</WidgetMessage>
+        ) : data.loading ? (
+          <WidgetMessage>Loading…</WidgetMessage>
+        ) : !value || formatted == null ? (
+          <WidgetMessage>The query returned no rows.</WidgetMessage>
+        ) : (
+          <>
+            <div className="flex items-baseline gap-1 whitespace-nowrap">
+              {prefix && <span className="text-lg text-muted-foreground">{prefix}</span>}
+              <span
+                className="font-semibold tabular-nums tracking-tight"
+                style={{ fontSize: "clamp(1.75rem, 12cqw, 3.5rem)", lineHeight: 1.1 }}
+                title={value.column}
+              >
+                {formatted}
+              </span>
+              {suffix && <span className="text-lg text-muted-foreground">{suffix}</span>}
+            </div>
+            {!title && <span className="font-mono text-[11px] text-muted-foreground">{value.column}</span>}
+          </>
+        )}
       </CardContent>
     </Card>
   );

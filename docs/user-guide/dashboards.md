@@ -16,7 +16,48 @@ Dashboards belong to a project and are saved with it.
 4. Click the **save** icon to store the layout, and the **×** to leave edit mode. If you leave with
    unsaved changes, the tool asks whether to keep editing or discard them.
 
-Dashboards can be renamed or deleted from the sidebar.
+Dashboards can be renamed, exported or deleted from the sidebar. The dashboard you are currently
+looking at is highlighted in the list.
+
+## Sharing a dashboard between projects
+
+A dashboard's **structure** can be moved to another project, including one built on a different
+event log.
+
+1. In the sidebar, open the **⚙** menu next to a dashboard and choose **Export**, then choose where
+   to put the `.json` file. In browsers without a save dialog (Firefox, Safari) it goes to your
+   downloads folder instead.
+2. Open the project you want it in, then click **Import Dashboard** under the dashboard list and
+   pick the file.
+
+The import always creates a new dashboard and never overwrites an existing one; if the name is
+already taken it gets a suffix, for example `Operations (imported)`.
+
+Only the structure travels — the layout, the components and their settings. The results are always
+computed from the event log of the project you import into, so a dashboard will look different
+against a different log. That is expected.
+
+Some things cannot cross a project boundary, and the tool lists them after the import so you know
+what to fix:
+
+- **Stored SQL queries** are matched by name. If the target project has no stored query of that
+  name, the widget keeps a copy of the query instead of the link. That copy may well name columns
+  the new log does not have — the widget then shows the error and you can edit the query.
+- **Images** are matched by name too. Without a matching image in the target project's assets, the
+  image component imports empty.
+- **OC Petri Net models** are matched by name as well, for the widgets that run against a saved
+  net — flattened replay and object-centric alignments. Without a net of that name in the target
+  project, the widget imports with no model selected and you pick one.
+- **Links to other dashboards** in a Text Box only work inside one project. The words stay, the
+  link is removed.
+- A **dotted chart** is re-pointed at the event log you imported into, so check its axis settings.
+- Widgets configured against **particular object types, activities or resources** — the variants
+  explorer, a filter stack, OC Causal Net, handover and resource profiling, object-centric
+  alignments — keep those names. The new log may not have them, in which case the widget shows
+  nothing until you open it and pick again. The import lists the widget types affected.
+
+Discovery components — OC-DFG, OC Causal Net, OC Petri Net, Process Areas, variants — need nothing
+from the old project and work immediately.
 
 ## Edit mode
 

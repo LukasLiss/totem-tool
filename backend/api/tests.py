@@ -1,10 +1,12 @@
 import copy
 import json
 import os
+import re
 import shutil
 import tempfile
 import time
 from contextlib import nullcontext
+from pathlib import Path
 from unittest.mock import patch
 
 import polars as pl
@@ -16,6 +18,17 @@ from django.db import IntegrityError
 from django.test import SimpleTestCase, TestCase, override_settings
 from rest_framework import status
 from rest_framework.test import APIClient, APIRequestFactory, force_authenticate
+
+from api.dashboard_bundle import (
+    DASHBOARD_BUNDLE_SCHEMA,
+    DASHBOARD_BUNDLE_VERSION,
+    KNOWN_COMPONENT_NAMES,
+    MAX_BUNDLE_COMPONENTS,
+    links_to_ids,
+    links_to_names,
+    unique_dashboard_name,
+    validate_dashboard_bundle_dict,
+)
 from totem_lib import (
     CONNECTED_COMPONENTS_REPLAY_STRATEGY,
     LEADING_OBJECT_REPLAY_STRATEGY,
@@ -47,9 +60,17 @@ from .lru_filecache import LRUFileBasedCache
 from .models import (
     Dashboard,
     EventLog,
+    ImageAsset,
+    ImageComponent,
+    KpiComponent,
+    NumberofEventsComponent,
+    OCAlignmentComponent,
+    OCDottedChartComponent,
+    OCPNFlattenedReplayComponent,
     ProcessAreaComponent,
     Project,
     ProjectAsset,
+    SqlQueryComponent,
     TextBoxComponent,
 )
 from .serializers import ProjectAssetSerializer
@@ -4754,6 +4775,38 @@ class ExecuteQuerySandboxTests(APITestCase):
         self.assertEqual(response.data["limit"], views.event_log.EXECUTE_QUERY_MAX_ROWS)
 
 
+    def _run_filtered(self, query, params):
+        return self.client.post(
+            f"/api/files/{self.log.pk}/execute_query/?{params}", {"query": query}, format="json"
+        )
+
+    def test_filter_params_restrict_the_events_table(self):
+        response = self._run_filtered(
+            "SELECT activity FROM events ORDER BY activity", "activities=ship%20order"
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual([r["activity"] for r in response.data["data"]], ["ship order"])
+
+    def test_filter_works_with_recursive_and_user_ctes(self):
+        recursive = (
+            "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 2) "
+            "SELECT count(*) AS c FROM events, r"
+        )
+        response = self._run_filtered(recursive, "activities=ship%20order")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["data"], [{"c": 2}])
+        own_cte = "WITH x AS (SELECT activity FROM events) SELECT count(*) AS c FROM x"
+        response = self._run_filtered(own_cte, "activities=ship%20order")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["data"], [{"c": 1}])
+
+    def test_impossible_time_window_returns_no_rows_with_columns(self):
+        response = self._run_filtered("SELECT activity FROM events", "after=1&before=0")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["data"], [])
+        self.assertEqual(response.data["columns"], ["activity"])
+
+
 @override_settings(MEDIA_ROOT=_MEDIA_ROOT)
 class QueryColumnsEndpointTests(APITestCase):
     """The SQL editor's schema browser."""
@@ -6211,6 +6264,1124 @@ class SampleProjectRichTextTests(SimpleTestCase):
                 self.assertEqual(dead & set(fields), set())
 
 
+class DashboardBundleFormatTests(SimpleTestCase):
+    """The bundle format itself: what it accepts, and what it refuses."""
+
+    def _bundle(self, **overrides):
+        bundle = {
+            "schema": DASHBOARD_BUNDLE_SCHEMA,
+            "version": DASHBOARD_BUNDLE_VERSION,
+            "dashboard": {"name": "D"},
+            "components": [
+                {
+                    "component_name": "TotemMinerComponent",
+                    "x": 0,
+                    "y": 0,
+                    "w": 4,
+                    "h": 4,
+                }
+            ],
+        }
+        bundle.update(overrides)
+        return bundle
+
+    def test_accepts_a_well_formed_bundle(self):
+        validate_dashboard_bundle_dict(self._bundle())
+
+    def test_unknown_extra_keys_are_ignored(self):
+        # Forward compatibility: a newer export may carry keys we do not read.
+        validate_dashboard_bundle_dict(self._bundle(exported_by="some future build"))
+
+    def test_known_component_names_match_what_the_writer_accepts(self):
+        """The frozenset must mirror `_replace_components`' if/elif chain.
+
+        A name in one and not the other vanishes silently: the importer would
+        either skip a widget it could have stored, or pass one the writer drops.
+        """
+        source = (
+            Path(__file__).resolve().parent / "views" / "dashboards.py"
+        ).read_text()
+        chain = source.split("def _replace_components", 1)[1]
+        written = set(re.findall(r"component_name == ['\"]([A-Za-z]+)['\"]", chain))
+        written |= set(
+            re.findall(r"component_name in \(\s*['\"]([A-Za-z]+)['\"]", chain)
+        )
+        written |= set(
+            re.findall(
+                r"component_name in \([^)]*?['\"]([A-Za-z]+)['\"]\s*,?\s*\)", chain
+            )
+        )
+        self.assertEqual(written, set(KNOWN_COMPONENT_NAMES))
+
+    def test_rejects_a_non_object_root(self):
+        for root in ([], "x", None, 3):
+            with self.assertRaises(ValueError):
+                validate_dashboard_bundle_dict(root)
+
+    def test_rejects_another_schema(self):
+        with self.assertRaisesMessage(ValueError, "Not a dashboard file"):
+            validate_dashboard_bundle_dict(self._bundle(schema="totem"))
+
+    def test_rejects_a_newer_format_version(self):
+        with self.assertRaisesMessage(ValueError, "newer version of TOTeM"):
+            validate_dashboard_bundle_dict(self._bundle(version=2))
+
+    def test_rejects_a_non_integer_version(self):
+        with self.assertRaises(ValueError):
+            validate_dashboard_bundle_dict(self._bundle(version="1"))
+
+    def test_rejects_a_missing_or_blank_name(self):
+        for dashboard in ({}, {"name": ""}, {"name": "   "}, {"name": 7}):
+            with self.assertRaises(ValueError):
+                validate_dashboard_bundle_dict(self._bundle(dashboard=dashboard))
+
+    def test_rejects_components_that_are_not_a_list(self):
+        with self.assertRaises(ValueError):
+            validate_dashboard_bundle_dict(self._bundle(components={}))
+
+    def test_rejects_geometry_a_grid_cannot_lay_out(self):
+        """A file is less trusted than a grid the user dragged into shape."""
+        for geometry, why in (
+            ({"x": 0, "y": 0, "w": 1000000000, "h": 2}, "absurd width"),
+            ({"x": 0, "y": -5000, "w": 2, "h": 2}, "negative origin"),
+            ({"x": -1, "y": 0, "w": 2, "h": 2}, "negative x"),
+            ({"x": 0, "y": 0, "w": 0, "h": 2}, "zero-width span"),
+        ):
+            with self.subTest(why=why):
+                with self.assertRaises(ValueError):
+                    validate_dashboard_bundle_dict(
+                        self._bundle(
+                            components=[
+                                {"component_name": "TotemMinerComponent", **geometry}
+                            ]
+                        )
+                    )
+
+    def test_accepts_ordinary_geometry(self):
+        validate_dashboard_bundle_dict(
+            self._bundle(
+                components=[
+                    {"component_name": "TotemMinerComponent",
+                     "x": 0, "y": 0, "w": 12, "h": 8}
+                ]
+            )
+        )
+
+    def test_rejects_too_many_components(self):
+        many = [
+            {"component_name": "TotemMinerComponent", "x": 0, "y": 0, "w": 1, "h": 1}
+            for _ in range(MAX_BUNDLE_COMPONENTS + 1)
+        ]
+        with self.assertRaisesMessage(ValueError, "at most"):
+            validate_dashboard_bundle_dict(self._bundle(components=many))
+
+    def test_rejects_non_numeric_geometry(self):
+        """`save_layout` lets this through and 500s in `objects.create`.
+
+        A file is less trusted than a grid the user built, so it is checked.
+        """
+        for bad in ("abc", None, 1.5, True):
+            component = {
+                "component_name": "TotemMinerComponent",
+                "x": bad,
+                "y": 0,
+                "w": 1,
+                "h": 1,
+            }
+            with self.assertRaises(ValueError):
+                validate_dashboard_bundle_dict(self._bundle(components=[component]))
+
+    def test_rejects_a_component_without_a_type(self):
+        with self.assertRaises(ValueError):
+            validate_dashboard_bundle_dict(
+                self._bundle(components=[{"x": 0, "y": 0, "w": 1, "h": 1}])
+            )
+
+    def test_links_round_trip_through_names(self):
+        doc = {
+            "type": "doc",
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "go",
+                            "marks": [
+                                {"type": "bold"},
+                                {
+                                    "type": "dashboardLink",
+                                    "attrs": {"dashboardId": 7},
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+        named = links_to_names(doc, {7: "Sales"})
+        marks = named["content"][0]["content"][0]["marks"]
+        self.assertEqual(
+            marks[1], {"type": "dashboardLink", "attrs": {"dashboardName": "Sales"}}
+        )
+        # Other marks are untouched.
+        self.assertEqual(marks[0], {"type": "bold"})
+
+        back, dropped = links_to_ids(named, {"Sales": 42})
+        self.assertEqual(dropped, 0)
+        self.assertEqual(
+            back["content"][0]["content"][0]["marks"][1],
+            {"type": "dashboardLink", "attrs": {"dashboardId": 42}},
+        )
+
+    def test_a_link_to_a_missing_name_is_dropped_and_counted(self):
+        doc = {
+            "type": "doc",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "go",
+                    "marks": [
+                        {"type": "dashboardLink", "attrs": {"dashboardName": "Gone"}}
+                    ],
+                }
+            ],
+        }
+        back, dropped = links_to_ids(doc, {"Sales": 1})
+        self.assertEqual(dropped, 1)
+        # The words stay, only the link goes.
+        self.assertEqual(back["content"][0].get("marks", []), [])
+        self.assertEqual(back["content"][0]["text"], "go")
+
+    def test_export_drops_a_link_whose_target_is_gone(self):
+        doc = {
+            "type": "text",
+            "text": "go",
+            "marks": [{"type": "dashboardLink", "attrs": {"dashboardId": 99}}],
+        }
+        self.assertEqual(links_to_names(doc, {7: "Sales"}).get("marks", []), [])
+
+
+class DashboardExportImportApiTests(TestCase):
+    """Export and import across projects: what travels, and what degrades."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="bundle-owner")
+        self.other = User.objects.create_user(username="bundle-other")
+
+        self.source = Project.objects.create(name="Source")
+        self.source.users.add(self.user)
+        self.target = Project.objects.create(name="Target")
+        self.target.users.add(self.user)
+        self.foreign = Project.objects.create(name="Foreign")
+        self.foreign.users.add(self.other)
+
+        self.dashboard = Dashboard.objects.create(
+            project=self.source, name="Ops", order_in_project=0
+        )
+        self.client.force_authenticate(user=self.user)
+
+    # -- helpers ---------------------------------------------------------
+
+    def _save(self, layout, dashboard=None):
+        response = self.client.post(
+            f"/api/dashboard/{(dashboard or self.dashboard).pk}/save_layout/",
+            {"layout": layout},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        return response
+
+    def _export(self, dashboard=None):
+        response = self.client.get(
+            f"/api/dashboard/{(dashboard or self.dashboard).pk}/export/"
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        return response.data
+
+    def _import(self, bundle, project=None, event_log=None, expect=201):
+        response = self.client.post(
+            "/api/dashboard/import/",
+            {
+                "project": (project or self.target).pk,
+                "event_log": event_log,
+                "bundle": bundle,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, expect, response.data)
+        return response.data
+
+    def _query_asset(self, project, name, query):
+        return ProjectAsset.objects.create(
+            project=project,
+            name=name,
+            asset_type=ProjectAsset.AssetType.QUERY,
+            content_json={"schema": "sql-query", "version": 1, "query": query},
+            created_by=self.user,
+        )
+
+    def _image_asset(self, project, name):
+        return ImageAsset.objects.create(
+            project=project,
+            name=name,
+            image=SimpleUploadedFile("logo.png", b"\x89PNG\r\n\x1a\n", "image/png"),
+            content_type="image/png",
+            created_by=self.user,
+        )
+
+    def _ocpn_asset(self, project, name):
+        return ProjectAsset.objects.create(
+            project=project,
+            name=name,
+            asset_type=ProjectAsset.AssetType.OCPN,
+            content_json={"schema": "ocpn", "version": 1},
+            created_by=self.user,
+        )
+
+    # -- export ----------------------------------------------------------
+
+    def test_export_is_a_stamped_attachment(self):
+        self._save(
+            [{"component_name": "TotemMinerComponent", "x": 0, "y": 0, "w": 4, "h": 4}]
+        )
+        response = self.client.get(f"/api/dashboard/{self.dashboard.pk}/export/")
+        self.assertEqual(
+            response["Content-Disposition"], 'attachment; filename="ops.json"'
+        )
+        self.assertEqual(response.data["schema"], DASHBOARD_BUNDLE_SCHEMA)
+        self.assertEqual(response.data["version"], DASHBOARD_BUNDLE_VERSION)
+        self.assertEqual(response.data["dashboard"]["name"], "Ops")
+
+    def test_export_carries_no_row_identity_or_log_binding(self):
+        self._save(
+            [
+                {
+                    "component_name": "OCDottedChartComponent",
+                    "x": 0,
+                    "y": 0,
+                    "w": 6,
+                    "h": 6,
+                    "file_id": 4242,
+                    "x_axis": "time",
+                }
+            ]
+        )
+        component = self._export()["components"][0]
+        for key in (
+            "id",
+            "dashboard",
+            "resourcetype",
+            "file_id",
+            "query_asset",
+            "image_asset",
+            "image_asset_url",
+            "image",
+        ):
+            self.assertNotIn(key, component)
+        # What the widget is actually configured to show does travel.
+        self.assertEqual(component["x_axis"], "time")
+
+    def test_export_names_its_asset_references(self):
+        asset = self._query_asset(self.source, "Volumes", "SELECT 1 AS n")
+        image = self._image_asset(self.source, "Logo")
+        self._save(
+            [
+                {
+                    "component_name": "KpiComponent",
+                    "x": 0,
+                    "y": 0,
+                    "w": 3,
+                    "h": 2,
+                    "query": "stale inline copy",
+                    "query_asset": asset.pk,
+                },
+                {
+                    "component_name": "ImageComponent",
+                    "x": 3,
+                    "y": 0,
+                    "w": 3,
+                    "h": 2,
+                    "image_asset": image.pk,
+                },
+            ]
+        )
+        kpi, img = self._export()["components"]
+        self.assertEqual(kpi["query_asset_name"], "Volumes")
+        # The linked asset's SQL wins at render time, so that is what travels —
+        # the inline text it made dead would render blank and silent elsewhere.
+        self.assertEqual(kpi["query"], "SELECT 1 AS n")
+        self.assertEqual(img["image_asset_name"], "Logo")
+
+    def test_export_keeps_number_of_events_colour(self):
+        """Regression: the read map spelled this component name differently
+        from the writer, so the row never downcast and `color` was lost."""
+        self._save(
+            [
+                {
+                    "component_name": "NumberOfEventsComponent",
+                    "x": 0,
+                    "y": 0,
+                    "w": 2,
+                    "h": 2,
+                    "color": "#ff0000",
+                }
+            ]
+        )
+        self.assertEqual(self._export()["components"][0]["color"], "#ff0000")
+
+    def test_cannot_export_a_foreign_dashboard(self):
+        theirs = Dashboard.objects.create(
+            project=self.foreign, name="Theirs", order_in_project=0
+        )
+        response = self.client.get(f"/api/dashboard/{theirs.pk}/export/")
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    # -- import: the happy path -------------------------------------------
+
+    def test_cross_project_round_trip_relinks_by_name(self):
+        self._query_asset(self.source, "Volumes", "SELECT 1 AS n")
+        self._image_asset(self.source, "Logo")
+        target_asset = self._query_asset(self.target, "Volumes", "SELECT 2 AS n")
+        target_image = self._image_asset(self.target, "Logo")
+        self._save(
+            [
+                {
+                    "component_name": "KpiComponent",
+                    "x": 1,
+                    "y": 2,
+                    "w": 3,
+                    "h": 4,
+                    "query_asset": ProjectAsset.objects.get(
+                        project=self.source, name="Volumes"
+                    ).pk,
+                    "value_column": "n",
+                },
+                {
+                    "component_name": "ImageComponent",
+                    "x": 4,
+                    "y": 0,
+                    "w": 2,
+                    "h": 2,
+                    "image_asset": ImageAsset.objects.get(
+                        project=self.source, name="Logo"
+                    ).pk,
+                },
+            ]
+        )
+        result = self._import(self._export())
+
+        self.assertEqual(result["warnings"], [])
+        imported = Dashboard.objects.get(pk=result["dashboard"]["id"])
+        self.assertEqual(imported.project, self.target)
+
+        kpi = KpiComponent.objects.get(dashboard=imported)
+        # Pointed at the TARGET project's asset of the same name, not the source's.
+        self.assertEqual(kpi.query_asset, target_asset)
+        self.assertEqual((kpi.x, kpi.y, kpi.w, kpi.h), (1, 2, 3, 4))
+        self.assertEqual(kpi.value_column, "n")
+        self.assertEqual(
+            ImageComponent.objects.get(dashboard=imported).image_asset, target_image
+        )
+
+    def test_import_leaves_the_source_dashboard_alone(self):
+        self._save(
+            [{"component_name": "TotemMinerComponent", "x": 0, "y": 0, "w": 4, "h": 4}]
+        )
+        self._import(self._export())
+        self.assertEqual(self.dashboard.components.count(), 1)
+        self.assertEqual(Dashboard.objects.filter(project=self.source).count(), 1)
+
+    def test_import_appends_to_the_project_order(self):
+        Dashboard.objects.create(project=self.target, name="First", order_in_project=7)
+        self._save(
+            [{"component_name": "TotemMinerComponent", "x": 0, "y": 0, "w": 4, "h": 4}]
+        )
+        result = self._import(self._export())
+        self.assertEqual(result["dashboard"]["order_in_project"], 8)
+
+    # -- import: the degradation paths ------------------------------------
+
+    def test_an_ocpn_backed_widget_relinks_by_name(self):
+        """The replay and alignment widgets point at an OCPN *asset*.
+
+        Both store it as a bare id (`ocpn_asset_id`, `model_asset`), so the
+        same rule as the dashboard links applies: carried as an id, a file
+        imported elsewhere would silently re-point at whatever asset happens to
+        hold that id in the target project.
+        """
+        source_asset = self._ocpn_asset(self.source, "Order net")
+        self._save(
+            [
+                {
+                    "component_name": "OCPNFlattenedReplayComponent",
+                    "x": 0,
+                    "y": 0,
+                    "w": 6,
+                    "h": 6,
+                    "ocpn_asset_id": source_asset.pk,
+                },
+                {
+                    "component_name": "OCAlignmentComponent",
+                    "x": 0,
+                    "y": 6,
+                    "w": 6,
+                    "h": 6,
+                    "model_asset": source_asset.pk,
+                },
+            ]
+        )
+
+        bundle = self._export()
+        replay, alignment = bundle["components"]
+        self.assertEqual(replay["ocpn_asset_name"], "Order net")
+        self.assertEqual(alignment["model_asset_name"], "Order net")
+        # The ids themselves must not be in the file at all.
+        self.assertNotIn("ocpn_asset_id", replay)
+        self.assertNotIn("model_asset", alignment)
+
+        # A different asset id in the target, so a carried id could not pass
+        # for the right one by luck.
+        self._ocpn_asset(self.target, "Decoy")
+        target_asset = self._ocpn_asset(self.target, "Order net")
+        imported = self._import(bundle)
+        self.assertEqual(imported["warnings"], [])
+
+        created = Dashboard.objects.get(pk=imported["dashboard"]["id"])
+        new_replay = OCPNFlattenedReplayComponent.objects.get(dashboard=created)
+        new_alignment = OCAlignmentComponent.objects.get(dashboard=created)
+        self.assertEqual(new_replay.ocpn_asset_id, target_asset.pk)
+        self.assertEqual(new_alignment.model_asset_id, target_asset.pk)
+
+    def test_a_missing_ocpn_model_imports_unselected_and_warns(self):
+        source_asset = self._ocpn_asset(self.source, "Order net")
+        self._save(
+            [
+                {
+                    "component_name": "OCAlignmentComponent",
+                    "x": 0,
+                    "y": 0,
+                    "w": 6,
+                    "h": 6,
+                    "model_asset": source_asset.pk,
+                }
+            ]
+        )
+
+        imported = self._import(self._export())
+
+        self.assertEqual(
+            [w["code"] for w in imported["warnings"]], ["model_asset_missing"]
+        )
+        created = Dashboard.objects.get(pk=imported["dashboard"]["id"])
+        # No model rather than a wrong one, and the import still succeeded.
+        self.assertIsNone(
+            OCAlignmentComponent.objects.get(dashboard=created).model_asset_id
+        )
+
+    def test_a_missing_stored_query_keeps_the_sql_and_warns(self):
+        asset = self._query_asset(self.source, "Volumes", "SELECT c1, c2 FROM abc")
+        self._save(
+            [
+                {
+                    "component_name": "SqlQueryComponent",
+                    "x": 0,
+                    "y": 0,
+                    "w": 6,
+                    "h": 4,
+                    "query_asset": asset.pk,
+                }
+            ]
+        )
+        result = self._import(self._export())
+
+        component = SqlQueryComponent.objects.get(
+            dashboard_id=result["dashboard"]["id"]
+        )
+        self.assertIsNone(component.query_asset)
+        # The SQL has to survive, or the widget renders blank instead of
+        # showing the user the error they need to fix.
+        self.assertEqual(component.query, "SELECT c1, c2 FROM abc")
+
+        codes = [w["code"] for w in result["warnings"]]
+        self.assertEqual(codes, ["query_asset_missing"])
+        self.assertIn("Volumes", result["warnings"][0]["detail"])
+
+    def test_a_missing_image_asset_imports_empty_and_warns(self):
+        image = self._image_asset(self.source, "Logo")
+        self._save(
+            [
+                {
+                    "component_name": "ImageComponent",
+                    "x": 0,
+                    "y": 0,
+                    "w": 2,
+                    "h": 2,
+                    "image_asset": image.pk,
+                }
+            ]
+        )
+        result = self._import(self._export())
+
+        component = ImageComponent.objects.get(dashboard_id=result["dashboard"]["id"])
+        self.assertIsNone(component.image_asset)
+        self.assertEqual([w["code"] for w in result["warnings"]], ["image_asset_missing"])
+
+    def test_a_dotted_chart_is_rebound_to_the_target_log(self):
+        source_log = EventLog.objects.create(
+            project=self.source,
+            file=SimpleUploadedFile("src.json", b"{}", "application/json"),
+        )
+        target_log = EventLog.objects.create(
+            project=self.target,
+            file=SimpleUploadedFile("tgt.json", b"{}", "application/json"),
+        )
+        self._save(
+            [
+                {
+                    "component_name": "OCDottedChartComponent",
+                    "x": 0,
+                    "y": 0,
+                    "w": 6,
+                    "h": 6,
+                    "file_id": source_log.pk,
+                }
+            ]
+        )
+        result = self._import(self._export(), event_log=target_log.pk)
+
+        component = OCDottedChartComponent.objects.get(
+            dashboard_id=result["dashboard"]["id"]
+        )
+        self.assertEqual(component.file_id, target_log.pk)
+        self.assertEqual([w["code"] for w in result["warnings"]], ["event_log_rebound"])
+
+    def test_a_dotted_chart_without_a_log_imports_unbound(self):
+        self._save(
+            [
+                {
+                    "component_name": "OCDottedChartComponent",
+                    "x": 0,
+                    "y": 0,
+                    "w": 6,
+                    "h": 6,
+                }
+            ]
+        )
+        result = self._import(self._export(), event_log=None)
+        component = OCDottedChartComponent.objects.get(
+            dashboard_id=result["dashboard"]["id"]
+        )
+        self.assertIsNone(component.file_id)
+        self.assertEqual([w["code"] for w in result["warnings"]], ["event_log_missing"])
+
+    def test_a_foreign_event_log_is_refused_as_a_rebind_target(self):
+        foreign_log = EventLog.objects.create(
+            project=self.foreign,
+            file=SimpleUploadedFile("f.json", b"{}", "application/json"),
+        )
+        self._save(
+            [
+                {
+                    "component_name": "OCDottedChartComponent",
+                    "x": 0,
+                    "y": 0,
+                    "w": 6,
+                    "h": 6,
+                }
+            ]
+        )
+        result = self._import(self._export(), event_log=foreign_log.pk)
+        component = OCDottedChartComponent.objects.get(
+            dashboard_id=result["dashboard"]["id"]
+        )
+        self.assertIsNone(component.file_id)
+
+    def test_an_unknown_widget_is_skipped_without_failing_the_import(self):
+        bundle = {
+            "schema": DASHBOARD_BUNDLE_SCHEMA,
+            "version": DASHBOARD_BUNDLE_VERSION,
+            "dashboard": {"name": "Ops"},
+            "components": [
+                {
+                    "component_name": "TotemMinerComponent",
+                    "x": 0,
+                    "y": 0,
+                    "w": 4,
+                    "h": 4,
+                },
+                {
+                    "component_name": "TimeTravelComponent",
+                    "x": 4,
+                    "y": 0,
+                    "w": 4,
+                    "h": 4,
+                },
+            ],
+        }
+        result = self._import(bundle)
+        imported = Dashboard.objects.get(pk=result["dashboard"]["id"])
+        self.assertEqual(imported.components.count(), 1)
+        self.assertEqual([w["code"] for w in result["warnings"]], ["component_unknown"])
+        self.assertIn("TimeTravelComponent", result["warnings"][0]["detail"])
+
+    # -- import: dashboard links ------------------------------------------
+
+    def _text_box_linking_to(self, target_name_or_id):
+        attrs = (
+            {"dashboardId": target_name_or_id}
+            if isinstance(target_name_or_id, int)
+            else {"dashboardName": target_name_or_id}
+        )
+        return {
+            "component_name": "TextBoxComponent",
+            "x": 0,
+            "y": 0,
+            "w": 4,
+            "h": 2,
+            "rich_text": {
+                "type": "doc",
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "go there",
+                                "marks": [{"type": "dashboardLink", "attrs": attrs}],
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+
+    def test_a_link_survives_a_same_project_reimport(self):
+        sibling = Dashboard.objects.create(
+            project=self.source, name="Sibling", order_in_project=1
+        )
+        self._save([self._text_box_linking_to(sibling.pk)])
+        result = self._import(self._export(), project=self.source)
+
+        box = TextBoxComponent.objects.get(dashboard_id=result["dashboard"]["id"])
+        marks = box.rich_text["content"][0]["content"][0]["marks"]
+        self.assertEqual(marks[0]["attrs"]["dashboardId"], sibling.pk)
+        self.assertEqual(result["warnings"], [])
+
+    def test_a_link_to_another_project_is_dropped_and_the_text_kept(self):
+        sibling = Dashboard.objects.create(
+            project=self.source, name="Sibling", order_in_project=1
+        )
+        self._save([self._text_box_linking_to(sibling.pk)])
+        result = self._import(self._export(), project=self.target)
+
+        box = TextBoxComponent.objects.get(dashboard_id=result["dashboard"]["id"])
+        self.assertEqual(box.rich_text["content"][0]["content"][0].get("marks", []), [])
+        self.assertEqual(box.rich_text["content"][0]["content"][0]["text"], "go there")
+        self.assertEqual(
+            [w["code"] for w in result["warnings"]], ["dashboard_link_dropped"]
+        )
+
+    def test_a_raw_id_in_a_hand_edited_file_never_becomes_a_link(self):
+        """The reason links travel as names.
+
+        A file written against another database can carry an id that happens to
+        name a real dashboard of the target project. Resolving ids would point
+        the link at a dashboard the author never chose.
+        """
+        decoy = Dashboard.objects.create(
+            project=self.target, name="Decoy", order_in_project=1
+        )
+        bundle = {
+            "schema": DASHBOARD_BUNDLE_SCHEMA,
+            "version": DASHBOARD_BUNDLE_VERSION,
+            "dashboard": {"name": "Ops"},
+            "components": [self._text_box_linking_to(decoy.pk)],
+        }
+        result = self._import(bundle)
+
+        box = TextBoxComponent.objects.get(dashboard_id=result["dashboard"]["id"])
+        self.assertEqual(box.rich_text["content"][0]["content"][0].get("marks", []), [])
+
+    def test_a_self_link_points_at_the_imported_copy(self):
+        self._save([self._text_box_linking_to(self.dashboard.pk)])
+        result = self._import(self._export(), project=self.source)
+
+        new_id = result["dashboard"]["id"]
+        box = TextBoxComponent.objects.get(dashboard_id=new_id)
+        marks = box.rich_text["content"][0]["content"][0]["marks"]
+        self.assertEqual(marks[0]["attrs"]["dashboardId"], new_id)
+        self.assertNotEqual(new_id, self.dashboard.pk)
+
+    # -- import: naming ----------------------------------------------------
+
+    def test_a_name_clash_is_suffixed_never_overwritten(self):
+        self._save(
+            [{"component_name": "TotemMinerComponent", "x": 0, "y": 0, "w": 4, "h": 4}]
+        )
+        bundle = self._export()
+
+        first = self._import(bundle)
+        self.assertEqual(first["dashboard"]["name"], "Ops")
+        second = self._import(bundle)
+        self.assertEqual(second["dashboard"]["name"], "Ops (imported)")
+        third = self._import(bundle)
+        self.assertEqual(third["dashboard"]["name"], "Ops (2)")
+        self.assertEqual(Dashboard.objects.filter(project=self.target).count(), 3)
+
+    def test_a_long_name_still_fits_after_a_suffix(self):
+        limit = Dashboard._meta.get_field("name").max_length
+        long_name = "x" * limit
+        Dashboard.objects.create(
+            project=self.target, name=long_name, order_in_project=0
+        )
+        name = unique_dashboard_name(self.target, long_name)
+        self.assertLessEqual(len(name), limit)
+        self.assertTrue(name.endswith(" (imported)"))
+
+    def test_an_overlong_name_is_truncated_to_the_column(self):
+        limit = Dashboard._meta.get_field("name").max_length
+        name = unique_dashboard_name(self.target, "y" * (limit + 50))
+        self.assertEqual(len(name), limit)
+
+    # -- import: refusals --------------------------------------------------
+
+    def test_a_non_numeric_project_is_refused_without_a_server_error(self):
+        """The id comes from a body a user can hand-write.
+
+        Straight into `filter(pk=...)` it makes the ORM raise, which DRF turns
+        into a 500 — on the one endpoint whose whole job is reading a file.
+        """
+        before = Dashboard.objects.count()
+        for project in ("abc", {}, [], 1.5):
+            with self.subTest(project=project):
+                response = self.client.post(
+                    "/api/dashboard/import/",
+                    {"project": project, "bundle": self._export()},
+                    format="json",
+                )
+                self.assertEqual(response.status_code, 400, response.data)
+        self.assertEqual(Dashboard.objects.count(), before)
+
+    def test_a_non_numeric_event_log_imports_unbound(self):
+        """Same outcome as a log of another project: unbound, and said so."""
+        self._save(
+            [{"component_name": "OCDottedChartComponent",
+              "x": 0, "y": 0, "w": 6, "h": 6}]
+        )
+        response = self.client.post(
+            "/api/dashboard/import/",
+            {"project": self.target.pk, "event_log": "nope",
+             "bundle": self._export()},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertIn(
+            "event_log_missing", [w["code"] for w in response.data["warnings"]]
+        )
+
+    def test_a_bad_field_value_is_a_four_hundred_not_a_five_hundred(self):
+        """`_replace_components` validates many fields, but not all of them.
+
+        Both of these reach `objects.create()` and are rejected by the model
+        itself — a ValueError and a Django ValidationError, neither of which
+        DRF translates on its own.
+        """
+        before = Dashboard.objects.count()
+        for component, why in (
+            ({"component_name": "ProcessAreaComponent",
+              "x": 0, "y": 0, "w": 2, "h": 2, "alpha": "x"}, "float field"),
+            ({"component_name": "OCDottedChartComponent",
+              "x": 0, "y": 0, "w": 2, "h": 2, "show_minimap": "maybe"}, "bool field"),
+        ):
+            with self.subTest(why=why):
+                response = self._import(
+                    {
+                        "schema": DASHBOARD_BUNDLE_SCHEMA,
+                        "version": DASHBOARD_BUNDLE_VERSION,
+                        "dashboard": {"name": "Bad"},
+                        "components": [component],
+                    },
+                    expect=400,
+                )
+                self.assertIn("error", response)
+        # The atomic block rolled back: no half-built dashboard survives.
+        self.assertEqual(Dashboard.objects.count(), before)
+
+    def test_rename_rejects_a_name_over_the_field_limit(self):
+        """`rename` bypasses the serializer, so nothing else enforces this.
+
+        SQLite stores an over-long name silently; Postgres raises DataError,
+        which is a 500.
+        """
+        limit = Dashboard._meta.get_field("name").max_length
+        response = self.client.patch(
+            f"/api/dashboard/{self.dashboard.pk}/rename/",
+            {"name": "x" * (limit + 1)},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+        self.dashboard.refresh_from_db()
+        self.assertEqual(self.dashboard.name, "Ops")
+
+    def test_rename_accepts_a_name_at_the_limit(self):
+        limit = Dashboard._meta.get_field("name").max_length
+        response = self.client.patch(
+            f"/api/dashboard/{self.dashboard.pk}/rename/",
+            {"name": "y" * limit},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+
+    def test_an_ambiguous_link_target_resolves_to_the_oldest_and_warns(self):
+        """Dashboard names are not unique within a project.
+
+        Resolving a link through a plain {name: pk} dict let an unordered
+        queryset decide which row it landed on, so the same file could import
+        differently twice.
+        """
+        first = Dashboard.objects.create(
+            project=self.target, name="Twin", order_in_project=1
+        )
+        Dashboard.objects.create(
+            project=self.target, name="Twin", order_in_project=2
+        )
+        bundle = {
+            "schema": DASHBOARD_BUNDLE_SCHEMA,
+            "version": DASHBOARD_BUNDLE_VERSION,
+            "dashboard": {"name": "Linker"},
+            "components": [
+                {
+                    "component_name": "TextBoxComponent",
+                    "x": 0, "y": 0, "w": 4, "h": 2,
+                    "text": "see twin",
+                    "rich_text": {
+                        "type": "doc",
+                        "content": [{"type": "paragraph", "content": [{
+                            "type": "text", "text": "twin",
+                            "marks": [{"type": "dashboardLink",
+                                       "attrs": {"dashboardName": "Twin"}}],
+                        }]}],
+                    },
+                }
+            ],
+        }
+
+        imported = self._import(bundle)
+        self.assertIn(
+            "dashboard_link_ambiguous",
+            [w["code"] for w in imported["warnings"]],
+        )
+        created = Dashboard.objects.get(pk=imported["dashboard"]["id"])
+        box = TextBoxComponent.objects.get(dashboard=created)
+        self.assertIn(f'"dashboardId": {first.pk}', json.dumps(box.rich_text))
+
+    def test_log_coupled_settings_are_reported_once_for_the_whole_import(self):
+        """Advisory, and about a class of widget — so not one row per widget."""
+        self._save(
+            [
+                {"component_name": "VariantsComponent", "x": 0, "y": 0, "w": 4, "h": 4,
+                 "leading_object_type": "Order"},
+                {"component_name": "OCCNComponent", "x": 4, "y": 0, "w": 4, "h": 4,
+                 "object_types": "Order,Item"},
+            ]
+        )
+        warnings = self._import(self._export())["warnings"]
+        coupled = [w for w in warnings if w["code"] == "log_coupled_settings"]
+        self.assertEqual(len(coupled), 1, warnings)
+        self.assertIn("VariantsComponent", coupled[0]["detail"])
+        self.assertIn("OCCNComponent", coupled[0]["detail"])
+
+    def test_an_untouched_widget_does_not_raise_the_log_coupled_warning(self):
+        self._save(
+            [{"component_name": "VariantsComponent", "x": 0, "y": 0, "w": 4, "h": 4}]
+        )
+        warnings = self._import(self._export())["warnings"]
+        self.assertEqual(
+            [w for w in warnings if w["code"] == "log_coupled_settings"], []
+        )
+
+    def test_cannot_import_into_a_foreign_project(self):
+        self._save(
+            [{"component_name": "TotemMinerComponent", "x": 0, "y": 0, "w": 4, "h": 4}]
+        )
+        self._import(self._export(), project=self.foreign, expect=400)
+        self.assertFalse(Dashboard.objects.filter(project=self.foreign).exists())
+
+    def test_a_malformed_bundle_creates_nothing(self):
+        before = Dashboard.objects.count()
+        for bundle in (
+            {"schema": "totem", "version": 1},
+            {"schema": DASHBOARD_BUNDLE_SCHEMA, "version": 99, "dashboard": {}},
+            "not an object",
+        ):
+            response = self._import(bundle, expect=400)
+            self.assertIn("error", response)
+        self.assertEqual(Dashboard.objects.count(), before)
+class DashboardBundleReviewFixTests(TestCase):
+    """Follow-ups from the second review of the export/import branch."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="bundle-review")
+        self.source = Project.objects.create(name="ReviewSource")
+        self.source.users.add(self.user)
+        self.target = Project.objects.create(name="ReviewTarget")
+        self.target.users.add(self.user)
+        self.dashboard = Dashboard.objects.create(
+            project=self.source, name="Ops", order_in_project=0
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def _export(self):
+        response = self.client.get(f"/api/dashboard/{self.dashboard.pk}/export/")
+        self.assertEqual(response.status_code, 200, response.data)
+        return response.data
+
+    def _import(self, bundle, project):
+        response = self.client.post(
+            "/api/dashboard/import/",
+            {"project": project.pk, "event_log": None, "bundle": bundle},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        return response.data
+
+    def test_version_zero_is_reported_as_corrupt_not_newer(self):
+        bundle = {
+            "schema": DASHBOARD_BUNDLE_SCHEMA,
+            "version": 0,
+            "dashboard": {"name": "D"},
+            "components": [],
+        }
+        with self.assertRaisesMessage(ValueError, "may be corrupt"):
+            validate_dashboard_bundle_dict(bundle)
+
+    def test_a_legacy_number_of_events_row_survives_export_and_import(self):
+        NumberofEventsComponent.objects.create(
+            dashboard=self.dashboard,
+            x=0, y=0, w=2, h=2,
+            component_name="NumberofEventsComponent",
+            color="#00ff00",
+        )
+        bundle = self._export()
+        self.assertEqual(
+            bundle["components"][0]["component_name"], "NumberOfEventsComponent"
+        )
+        # An older file still carries the legacy spelling.
+        bundle["components"][0]["component_name"] = "NumberofEventsComponent"
+        result = self._import(bundle, self.target)
+        self.assertEqual(result["warnings"], [])
+        row = NumberofEventsComponent.objects.get(
+            dashboard_id=result["dashboard"]["id"]
+        )
+        self.assertEqual(row.component_name, "NumberOfEventsComponent")
+        self.assertEqual(row.color, "#00ff00")
+
+    def test_save_layout_keeps_a_legacy_number_of_events_widget(self):
+        response = self.client.post(
+            f"/api/dashboard/{self.dashboard.pk}/save_layout/",
+            {"layout": [{"component_name": "NumberofEventsComponent",
+                         "x": 0, "y": 0, "w": 2, "h": 2, "color": "red"}]},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(
+            list(self.dashboard.components.values_list("component_name", flat=True)),
+            ["NumberOfEventsComponent"],
+        )
+
+    def test_get_layout_downcasts_every_row_in_few_queries(self):
+        for i in range(6):
+            NumberofEventsComponent.objects.create(
+                dashboard=self.dashboard, x=i, y=0, w=1, h=1,
+                component_name="NumberOfEventsComponent", color="red",
+            )
+        TextBoxComponent.objects.create(
+            dashboard=self.dashboard, x=0, y=1, w=2, h=2,
+            component_name="TextBoxComponent", text="hi",
+        )
+        # Dashboard lookup, base rows, then one per concrete type — not one
+        # per row, which was 2 + 7 before.
+        with self.assertNumQueries(4):
+            response = self.client.get(
+                f"/api/dashboard/{self.dashboard.pk}/get_layout/"
+            )
+        self.assertEqual(response.status_code, 200)
+        colours = [c.get("color") for c in response.data if "color" in c]
+        self.assertEqual(colours, ["red"] * 6)
+
+    def test_alignment_execution_id_raises_the_log_coupled_warning(self):
+        OCAlignmentComponent.objects.create(
+            dashboard=self.dashboard, x=0, y=0, w=4, h=4,
+            component_name="OCAlignmentComponent", execution_id="exec-17",
+        )
+        warnings = self._import(self._export(), self.target)["warnings"]
+        coupled = [w for w in warnings if w["code"] == "log_coupled_settings"]
+        self.assertEqual(len(coupled), 1, warnings)
+        self.assertIn("OCAlignmentComponent", coupled[0]["detail"])
+
+    def test_the_name_fallback_never_returns_a_taken_name(self):
+        names = ["X", "X (imported)"] + [f"X ({n})" for n in range(2, 101)]
+        Dashboard.objects.bulk_create(
+            Dashboard(project=self.target, name=n, order_in_project=i)
+            for i, n in enumerate(names)
+        )
+        self.assertEqual(unique_dashboard_name(self.target, "X"), "X (101)")
+
+
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp(prefix="totem-test-bundle-image-"))
+class DashboardBundleLegacyImageTests(TestCase):
+    """A picture uploaded straight to the widget, not through the asset store."""
+
+    def setUp(self):
+        from django.conf import settings as dj_settings
+
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="bundle-image")
+        self.source = Project.objects.create(name="ImgSource")
+        self.source.users.add(self.user)
+        self.target = Project.objects.create(name="ImgTarget")
+        self.target.users.add(self.user)
+        self.dashboard = Dashboard.objects.create(
+            project=self.source, name="Pics", order_in_project=0
+        )
+        project_dir = os.path.join(dj_settings.MEDIA_ROOT, self.source.name)
+        os.makedirs(project_dir, exist_ok=True)
+        with open(os.path.join(project_dir, "logo.png"), "wb") as fh:
+            fh.write(b"\x89PNG\r\n\x1a\n")
+        ImageComponent.objects.create(
+            dashboard=self.dashboard, x=0, y=0, w=2, h=2,
+            component_name="ImageComponent", image=f"{self.source.name}/logo.png",
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def _round_trip(self, project):
+        bundle = self.client.get(
+            f"/api/dashboard/{self.dashboard.pk}/export/"
+        ).data
+        self.assertTrue(bundle["components"][0].get("image"))
+        response = self.client.post(
+            "/api/dashboard/import/",
+            {"project": project.pk, "event_log": None, "bundle": bundle},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        row = ImageComponent.objects.get(dashboard_id=response.data["dashboard"]["id"])
+        return row, response.data["warnings"]
+
+    def test_a_same_project_round_trip_keeps_the_picture(self):
+        row, warnings = self._round_trip(self.source)
+        self.assertEqual(row.image.name, f"{self.source.name}/logo.png")
+        self.assertEqual(warnings, [])
+
+    def test_another_project_imports_empty_and_says_so(self):
+        row, warnings = self._round_trip(self.target)
+        self.assertFalse(row.image)
+        self.assertEqual([w["code"] for w in warnings], ["image_asset_missing"])
+
+
 class HostingLimitsTests(TestCase):
     """TOTEM_MAX_UPLOAD_MB and TOTEM_MAX_PROJECTS_PER_USER."""
 
@@ -6287,6 +7458,66 @@ class HostingLimitsTests(TestCase):
 # ---------------------------------------------------------------------------
 
 _PREFS = {"version": 1, "options": {"edgeStyle": "orthogonal", "selfLoopStyle": "badge"}}
+
+
+class DashboardLocalFilterTests(TestCase):
+    """Per-widget local filters: stored by save_layout and by the view-mode
+    PATCH, which finds the widget by grid position (ids change on save)."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="filter-owner")
+        self.other = User.objects.create_user(username="filter-other")
+        self.project = Project.objects.create(name="Filters")
+        self.project.users.add(self.user)
+        self.dashboard = Dashboard.objects.create(project=self.project, name="D", order_in_project=0)
+        self.client.force_authenticate(user=self.user)
+
+    def _save(self, layout):
+        return self.client.post(
+            f"/api/dashboard/{self.dashboard.pk}/save_layout/", {"layout": layout}, format="json"
+        )
+
+    def _layout(self):
+        return self.client.get(f"/api/dashboard/{self.dashboard.pk}/get_layout/").json()
+
+    def _patch(self, body):
+        return self.client.patch(
+            f"/api/dashboard/{self.dashboard.pk}/local_filter/", body, format="json"
+        )
+
+    def _widgets(self):
+        return [
+            {"x": 0, "y": 0, "w": 4, "h": 4, "component_name": "LogStatisticsComponent",
+             "local_filter_params": {"activities": "a", "after": "", "before": None}},
+            {"x": 4, "y": 0, "w": 4, "h": 4, "component_name": "KpiComponent"},
+        ]
+
+    def test_save_layout_stores_cleaned_params(self):
+        self.assertEqual(self._save(self._widgets()).status_code, 200)
+        self.assertEqual(
+            [c["local_filter_params"] for c in self._layout()], [{"activities": "a"}, None]
+        )
+
+    def test_patch_by_position_survives_a_layout_save(self):
+        self._save(self._widgets())
+        self._save(self._widgets())  # recreates components with new ids
+        response = self._patch({"x": 4, "y": 0, "local_filter_params": {"activities": "b"}})
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(
+            [c["local_filter_params"] for c in self._layout()],
+            [{"activities": "a"}, {"activities": "b"}],
+        )
+        self.assertEqual(self._patch({"x": 0, "y": 0, "local_filter_params": None}).status_code, 204)
+        self.assertEqual(self._layout()[0]["local_filter_params"], None)
+
+    def test_patch_validates_and_404s(self):
+        self._save(self._widgets())
+        self.assertEqual(self._patch({"x": "0", "y": 0, "local_filter_params": {}}).status_code, 400)
+        self.assertEqual(self._patch({"x": 0, "y": 0, "local_filter_params": "a"}).status_code, 400)
+        self.assertEqual(self._patch({"x": 9, "y": 9, "local_filter_params": {}}).status_code, 404)
+        self.client.force_authenticate(user=self.other)
+        self.assertEqual(self._patch({"x": 0, "y": 0, "local_filter_params": {}}).status_code, 404)
 
 
 class OcdfgDashboardLayoutTests(TestCase):

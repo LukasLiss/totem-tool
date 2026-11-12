@@ -35,6 +35,7 @@ import {
 import { downloadJson, toFilename } from '@/editors/shared/io';
 import { modelToFlow } from '@/editors/ocpn/model';
 import { toDisplay } from '@/editors/ocpn/display';
+import { toast } from 'sonner';
 import { layoutOcpn } from '@/editors/ocpn/layout';
 import { nodeTypes } from '@/editors/ocpn/nodes';
 import { edgeTypes } from '@/editors/ocpn/ArcEdge';
@@ -217,7 +218,9 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
 
   const handleDownload = () => {
     if (!model) return;
-    downloadJson(toFilename(model.name, 'discovered-ocpn'), model);
+    downloadJson(toFilename(model.name, 'discovered-ocpn'), model).catch(() => {
+      toast.error('Could not save the model.');
+    });
   };
 
   const onNodesChange = useCallback(

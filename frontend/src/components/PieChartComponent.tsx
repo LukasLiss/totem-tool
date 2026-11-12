@@ -8,7 +8,7 @@ import { GridStackNode } from 'gridstack';
 import type { LinkedQuery } from "@/react_component/sql/linkedQuery";
 import { useSqlQueryData } from "@/react_component/sql/useSqlQueryData";
 import { linkedQueryOf } from "@/components/sql-widgets/sqlWidgetUtils";
-import { ChartTitle } from "@/components/sql-widgets/shared";
+import { ChartTitle, WidgetMessage } from "@/components/sql-widgets/shared";
 import { ChartValueLegend, PieCallout } from "@/components/sql-widgets/chartLegend";
 import { limitCategories, rowsToCategories } from "@/components/sql-widgets/chartData";
 import { CHART_SKETCH_HINT } from "@/components/sql-widgets/constants";
@@ -23,6 +23,7 @@ import PieChartSketch from "./PieChartSketch";
 import WidgetDraftTile from "./WidgetDraftTile";
 import PieChartSettingsDialog, { type PieChartSettings } from "./PieChartSettingsDialog";
 import { SelectedFile } from '@/contexts/SelectedFileContext';
+import { useDashboardLocalFilter } from '@/hooks/useDashboardLocalFilter';
 
 // Matches the `max-h-[450px]` of the chart container below.
 const CHART_MAX_HEIGHT = 450;
@@ -113,8 +114,14 @@ const PieChartComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
-  selectedFile
+  selectedFile,
+  dashboardId,
 }) => {
+  const [filterEnabled, setFilterEnabled] = useState(true);
+  const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
+    node, dashboardId, onUpdate,
+  );
+
   // State for edit mode
   const [query, setQuery] = useState(node.query || '');
   const [linked, setLinked] = useState<LinkedQuery | null>(linkedQueryOf(node));
@@ -159,6 +166,8 @@ const PieChartComponent: React.FC<ComponentProps> = ({
     queryAssetId: linked?.id,
     enabled: !isEditMode && Boolean(labelColumn && valueColumn),
     limit: 500,
+    filterEnabled,
+    localFilterParams: Object.keys(localFilterParams).length > 0 ? localFilterParams : undefined,
   });
   const isLoading = data.loading;
   const error = data.error;
@@ -340,50 +349,27 @@ const PieChartComponent: React.FC<ComponentProps> = ({
   }
 
   // VIEW MODE
-  if (!selectedFile) {
-    return (
-    <Card className="w-full h-full rounded-none overflow-auto">
-      <div className="flex items-center justify-center h-full text-muted-foreground">
-        Please select a file to display the pie chart
-      </div>
-    </Card>
-    );
-  }
-
-  if (error) {
-    return (
-    <Card className="w-full h-full rounded-none overflow-auto">
-      <div className="flex items-center justify-center h-full text-red-600">
-        Error: {error}
-      </div>
-    </Card>
-    );
-  }
-
-  if (isLoading) {
-    return (
-    <Card className="w-full h-full rounded-none overflow-auto">
-      <div className="flex items-center justify-center h-full">
-        Loading chart data...
-      </div>
-    </Card>
-    );
-  }
-
-  if (chartData.length === 0) {
-    return (
-      <Card className="w-full h-full rounded-none overflow-auto">
-        <div className="flex items-center justify-center h-full text-muted-foreground">
-          No data to display. Configure the query and columns in edit mode.
-        </div>
-      </Card>
-    );
-  }
-
   return (
     <Card className="w-full h-full rounded-none flex flex-col overflow-hidden">
-      <ChartTitle title={title} />
+      <ChartTitle
+        title={title}
+        fileId={fileId}
+        filterEnabled={filterEnabled}
+        onToggleFilter={() => setFilterEnabled((p) => !p)}
+        localFilterParams={localFilterParams}
+        onLocalFilterChange={handleLocalFilterChange}
+      />
       <CardContent className="flex-1 flex flex-col items-center gap-3 pb-0 min-h-0">
+        {!selectedFile ? (
+          <WidgetMessage>Select an event log to display the pie chart.</WidgetMessage>
+        ) : error ? (
+          <WidgetMessage tone="error">{error}</WidgetMessage>
+        ) : isLoading ? (
+          <WidgetMessage>Loading…</WidgetMessage>
+        ) : chartData.length === 0 ? (
+          <WidgetMessage>No data to display. Configure the query and columns in edit mode.</WidgetMessage>
+        ) : (
+          <>
         <div ref={setChartArea} className="w-full min-h-0 flex-1 flex items-center justify-center">
         <ChartContainer
           config={chartConfig}
@@ -454,8 +440,10 @@ const PieChartComponent: React.FC<ComponentProps> = ({
             className="w-full max-h-[40%] shrink-0 overflow-y-auto"
           />
         )}
+          </>
+        )}
       </CardContent>
-      {showCategoryCount && (
+      {showCategoryCount && chartData.length > 0 && (
         <CardFooter className="flex-col gap-2 text-sm">
           <div className="leading-none text-muted-foreground">
             {categoryCount} categories

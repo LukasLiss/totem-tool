@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import { useCluster, type ClusterInfo } from "@/contexts/ClusterContext";
-import { useFilterVersion } from "@/store/filterStore";
+import { filterRequestConfig, useFilterVersion } from "@/store/filterStore";
 import { fetchObjectTypeCounts } from "@/react_component/variants/variantsApi";
 import {
   DEFAULT_HANDOVER_SETTINGS,
@@ -106,6 +106,8 @@ type OCHandoverExplorerProps = {
   autoStart?: boolean;
   /** Send the global filter with every request (default true). */
   filterEnabled?: boolean;
+  /** Per-widget local filter params to append to every request. */
+  localFilterParams?: Record<string, string>;
 };
 
 type ViewMode = HandoverViewMode;
@@ -267,11 +269,15 @@ async function requestHandover<T>(
   params: HandoverParams,
   clusterMap: Record<string, string> | null,
   filterEnabled: boolean,
+  localFilterParams?: Record<string, string>,
 ): Promise<T> {
-  const config = { _skipGlobalFilter: !filterEnabled };
+  const filterConfig = filterRequestConfig(localFilterParams, filterEnabled);
   const { data } = clusterMap
-    ? await axios.post<T>("/api/handover/", { ...params, cluster_map: clusterMap }, config)
-    : await axios.get<T>("/api/handover/", { params, ...config });
+    ? await axios.post<T>("/api/handover/", { ...params, cluster_map: clusterMap }, filterConfig)
+    : await axios.get<T>("/api/handover/", {
+        ...filterConfig,
+        params: { ...params, ...filterConfig.params },
+      });
   return data;
 }
 
@@ -449,6 +455,7 @@ export default function OCHandoverExplorer({
   initialSettings,
   autoStart = false,
   filterEnabled = true,
+  localFilterParams,
 }: OCHandoverExplorerProps) {
   // Settings are read once; a host that changes them re-mounts the explorer.
   const [initial] = useState<HandoverSettings>(() => ({ ...DEFAULT_HANDOVER_SETTINGS, ...initialSettings }));
@@ -487,6 +494,11 @@ export default function OCHandoverExplorer({
   const isFirstRender = useRef(true);
   const filterEnabledRef = useRef(filterEnabled);
   useEffect(() => { filterEnabledRef.current = filterEnabled; }, [filterEnabled]);
+  const localFilterParamsRef = useRef(localFilterParams);
+  useEffect(() => { localFilterParamsRef.current = localFilterParams; }, [localFilterParams]);
+  // Content key of the local filter: a changed filter invalidates the result
+  // like a changed global filter does (see the effect on filterVersion).
+  const localFilterKey = JSON.stringify(localFilterParams ?? {});
   const filterVersion = useFilterVersion();
   const [logData, setLogData] = useState<EventLogData | null>(null);
   const [logStatus, setLogStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
@@ -627,9 +639,10 @@ export default function OCHandoverExplorer({
     setLogStatus("loading");
     (async () => {
       try {
+        const filterConfig = filterRequestConfig(localFilterParamsRef.current, filterEnabledRef.current);
         const { data: result } = await axios.get<EventLogData>("/api/event-log/", {
-          params: { file_id: fileId },
-          _skipGlobalFilter: !filterEnabledRef.current,
+          ...filterConfig,
+          params: { file_id: fileId, ...filterConfig.params },
         });
         if (cancelled) return;
         setLogData(result);
@@ -686,7 +699,7 @@ export default function OCHandoverExplorer({
 
       try {
         const activeClusterMap = useClustersRef.current && clusterInfoRef.current ? clusterInfoRef.current.clusterMap : null;
-        const result = await requestHandover<HandoverData>(params, activeClusterMap, filterEnabledRef.current);
+        const result = await requestHandover<HandoverData>(params, activeClusterMap, filterEnabledRef.current, localFilterParamsRef.current);
         if (fileIdRef.current !== currentFileId || cancelled) return;
         setData(result);
         setStatus(result.edges.length > 0 ? "ready" : "empty");
@@ -770,7 +783,7 @@ export default function OCHandoverExplorer({
     }
   // Only the filter is a trigger here; the other values are read when it fires.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterVersion, filterEnabled]);
+  }, [filterVersion, filterEnabled, localFilterKey]);
 
   // Must stay the last effect: everything above checks isFirstRender.
   useEffect(() => { isFirstRender.current = false; }, []);
@@ -809,7 +822,7 @@ export default function OCHandoverExplorer({
     try {
       const activeClusterMap = useClusters && clusterInfo ? clusterInfo.clusterMap : null;
       const result = await requestHandover<{ flows?: FlowEvent[]; timeline?: FlowsData["timeline"] }>(
-        params, activeClusterMap, filterEnabledRef.current,
+        params, activeClusterMap, filterEnabledRef.current, localFilterParamsRef.current,
       );
       if (result.flows && result.timeline) {
         setFlowsData({ flows: result.flows, timeline: result.timeline });
@@ -845,7 +858,7 @@ export default function OCHandoverExplorer({
     }
     try {
       const activeClusterMap = useClusters && clusterInfo ? clusterInfo.clusterMap : null;
-      const result = await requestHandover<{ bindings?: BindingPattern[] }>(params, activeClusterMap, filterEnabledRef.current);
+      const result = await requestHandover<{ bindings?: BindingPattern[] }>(params, activeClusterMap, filterEnabledRef.current, localFilterParamsRef.current);
       if (Array.isArray(result.bindings)) {
         setBindingsData(result.bindings);
         setBindingsStatus("ready");

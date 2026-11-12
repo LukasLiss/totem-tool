@@ -102,6 +102,7 @@ import SqlQueryEditor, {
 import { useFilterVersion } from '@/store/filterStore';
 import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
 import { LocalFilterDropdown } from '@/components/ui/LocalFilterDropdown';
+import { useDashboardLocalFilter } from '@/hooks/useDashboardLocalFilter';
 import TextBoxEditor from '@/components/text-box/TextBoxEditor';
 import RichTextRenderer from '@/components/text-box/RichTextRenderer';
 import { useProjectDashboards } from '@/components/text-box/useProjectDashboards';
@@ -132,19 +133,20 @@ import {
   type TextVerticalAlign,
 } from '@/components/text-box/textBoxFormat';
 
-function WidgetFilterHeader({ title, filterEnabled, onToggle, fileId, onLocalFilterChange }: {
+function WidgetFilterHeader({ title, filterEnabled, onToggle, fileId, onLocalFilterChange, localFilterParams }: {
   title: string;
   filterEnabled: boolean;
   onToggle: () => void;
   fileId?: number | null;
   onLocalFilterChange?: (params: Record<string, string>) => void;
+  localFilterParams?: Record<string, string>;
 }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderBottom: '1px solid var(--border)', background: 'var(--card)', flexShrink: 0 }}>
-      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--card-foreground)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
+    <div className="flex items-center gap-2 px-4 py-2 border-b bg-card flex-shrink-0 text-left">
+      <span className="text-sm font-semibold text-card-foreground shrink min-w-0 truncate">{title}</span>
       <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggle} />
       {onLocalFilterChange && (
-        <LocalFilterDropdown fileId={fileId} onFilterChange={onLocalFilterChange} />
+        <LocalFilterDropdown fileId={fileId} onFilterChange={onLocalFilterChange} value={localFilterParams} />
       )}
     </div>
   );
@@ -453,16 +455,18 @@ export const TextBoxComponent: React.FC<ComponentProps> = ({
 
 
 // NumberOfEventsComponent: Static display with a button (customize as needed)
-export const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile, node }) => {
+export const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile, node, onUpdate, dashboardId }) => {
   const [processedResult, setProcessedResult] = useState(null);
+  const [filterEnabled, setFilterEnabled] = useState(true);
+  const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
+    node, dashboardId, onUpdate,
+  );
 
-  // Refetch when the global filter changes so the count follows the filter.
   const filterVersion = useFilterVersion();
+  const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
 
   const [, setIsLoading] = useState(false);
   const [, setError] = useState(null);
-
-
 
   useEffect(() => {
     const handleProcessFile = async () => {
@@ -475,7 +479,7 @@ export const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile
       setError(null);
 
       try {
-        const result = await processFile(selectedFile.id);
+        const result = await processFile(selectedFile.id, filterEnabled, Object.keys(localFilterParams).length > 0 ? localFilterParams : undefined);
         setProcessedResult(result);
       } catch (err) {
         console.error("Failed to process file in NumberOfEventsComponent:", err);
@@ -486,15 +490,13 @@ export const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile
     };
 
     handleProcessFile();
-  }, [selectedFile, filterVersion]);
+  }, [selectedFile, effectiveFilterVersion, filterEnabled, localFilterParams]);
 
   return (
     <div style={{width: '100%', height: '100%', color: node.color, textAlign: 'center' }}>
-      <Card className="w-full h-full rounded-none">
-        <CardHeader>
-          <CardDescription>Number of Events</CardDescription>
-        </CardHeader>
-        <CardContent>
+      <Card className="w-full h-full rounded-none flex flex-col">
+        <WidgetFilterHeader title="Number of Events" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
+        <CardContent className="flex-1 flex items-center justify-center">
           <p className="text-2xl font-bold">{processedResult || 'Loading...'}</p>
         </CardContent>
       </Card>
@@ -808,8 +810,14 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
-  selectedFile
+  selectedFile,
+  dashboardId,
 }) => {
+  const [filterEnabled, setFilterEnabled] = useState(true);
+  const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
+    node, dashboardId, onUpdate,
+  );
+
   // Local state for form values
   const [automaticLoading, setAutomaticLoading] = useState(node.automatic_loading ?? false);
   const [leadingType, setLeadingType] = useState(node.leading_object_type ?? '');
@@ -999,50 +1007,55 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
   // VIEW MODE: Render VariantsExplorer with stored settings
   const areaColumns = { executionColumn: areaExecutionColumn, variantColumn: areaVariantColumn };
   return (
-    <Card className="w-full h-full rounded-none overflow-auto">
-      <CardContent className="p-0 h-full">
-        <VariantsExplorer
-          fileId={selectedFile?.id}
-          embedded={true}
-          automaticLoading={automaticLoading}
-          defaultLeadingType={leadingType || undefined}
-          defaultMode={variantsMode}
-          defaultProcessAreaColumns={areaColumns}
-          defaultProcessAreaAssetId={areaAssetId}
-          defaultExtraction={extraction}
-          defaultIso={iso}
-          defaultTimeoutS={timeoutS}
-          defaultBusinessObjectTypes={businessObjectTypes}
-          defaultBusinessActivities={businessActivities}
-          onAdvancedChange={(s) => {
-            // Mirror the explorer's choices into our local state so this
-            // wrapper stays in sync with what the user sees inside.
-            setExtraction(s.extraction);
-            setIso(s.iso);
-            setTimeoutS(s.timeout_s);
-            setLeadingType(s.leading_type);
-            setBusinessObjectTypes(s.business_object_types);
-            setBusinessActivities(s.business_activities);
-            setVariantsMode(s.mode);
-            setAreaExecutionColumn(s.area_execution_column);
-            setAreaVariantColumn(s.area_variant_column);
-            setAreaAssetId(s.process_area_asset);
-            onUpdate?.({
-              process_area_asset: s.process_area_asset,
-              variants_mode: s.mode,
-              area_execution_column: s.area_execution_column,
-              area_variant_column: s.area_variant_column,
-              extraction: s.extraction,
-              iso: s.iso,
-              timeout_s: s.timeout_s,
-              leading_object_type: s.leading_type,
-              business_object_types: s.business_object_types,
-              business_activities: s.business_activities,
-            });
-          }}
-        />
-      </CardContent>
-    </Card>
+    <div className="w-full h-full flex flex-col">
+      <WidgetFilterHeader title="Variants Explorer" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
+      <Card className="w-full flex-1 rounded-none overflow-auto">
+        <CardContent className="p-0 h-full">
+          <VariantsExplorer
+            fileId={selectedFile?.id}
+            embedded={true}
+            automaticLoading={automaticLoading}
+            defaultLeadingType={leadingType || undefined}
+            defaultMode={variantsMode}
+            defaultProcessAreaColumns={areaColumns}
+            defaultProcessAreaAssetId={areaAssetId}
+            defaultExtraction={extraction}
+            defaultIso={iso}
+            defaultTimeoutS={timeoutS}
+            defaultBusinessObjectTypes={businessObjectTypes}
+            defaultBusinessActivities={businessActivities}
+            filterEnabled={filterEnabled}
+            localFilterParams={Object.keys(localFilterParams).length > 0 ? localFilterParams : undefined}
+            onAdvancedChange={(s) => {
+              // Mirror the explorer's choices into our local state so this
+              // wrapper stays in sync with what the user sees inside.
+              setExtraction(s.extraction);
+              setIso(s.iso);
+              setTimeoutS(s.timeout_s);
+              setLeadingType(s.leading_type);
+              setBusinessObjectTypes(s.business_object_types);
+              setBusinessActivities(s.business_activities);
+              setVariantsMode(s.mode);
+              setAreaExecutionColumn(s.area_execution_column);
+              setAreaVariantColumn(s.area_variant_column);
+              setAreaAssetId(s.process_area_asset);
+              onUpdate?.({
+                process_area_asset: s.process_area_asset,
+                variants_mode: s.mode,
+                area_execution_column: s.area_execution_column,
+                area_variant_column: s.area_variant_column,
+                extraction: s.extraction,
+                iso: s.iso,
+                timeout_s: s.timeout_s,
+                leading_object_type: s.leading_type,
+                business_object_types: s.business_object_types,
+                business_activities: s.business_activities,
+              });
+            }}
+          />
+        </CardContent>
+      </Card>
+    </div>
   );
 };
 
@@ -1060,8 +1073,13 @@ export const ProcessAreaComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
-  selectedFile
+  selectedFile,
+  dashboardId,
 }) => {
+  const [, handleLocalFilterChange] = useDashboardLocalFilter(
+    node, dashboardId, onUpdate,
+  );
+
   // Local state, kept in step with the node. `onUpdate` mutates the gridstack
   // node without re-rendering this React root, so reading straight from `node`
   // would leave the edit-mode sliders frozen while dragging.
@@ -1165,6 +1183,8 @@ export const ProcessAreaComponent: React.FC<ComponentProps> = ({
       initialAlgorithm={algorithm}
       initialParams={params}
       onSettingsChange={handleSettingsChange}
+      initialLocalFilterParams={node.local_filter_params ?? undefined}
+      onLocalFilterChange={handleLocalFilterChange}
       initialCompositionAssetId={compositionAssetId}
       onCompositionAssetChange={handleCompositionAssetChange}
     />
@@ -1174,9 +1194,17 @@ export const ProcessAreaComponent: React.FC<ComponentProps> = ({
 
 // TotemMinerComponent: Wrapper for TOTeM Miner Visualizer
 export const TotemMinerComponent: React.FC<ComponentProps> = ({
+  node,
+  onUpdate,
   isEditMode = false,
-  selectedFile
+  selectedFile,
+  dashboardId,
 }) => {
+  const [filterEnabled, setFilterEnabled] = useState(true);
+  const [, handleLocalFilterChange] = useDashboardLocalFilter(
+    node, dashboardId, onUpdate,
+  );
+
   if (isEditMode) {
     // EDIT MODE: a draft of the model; the miner has no settings to open.
     return (
@@ -1195,6 +1223,10 @@ export const TotemMinerComponent: React.FC<ComponentProps> = ({
       fileId={selectedFile?.id}
       embedded={false}
       height="100%"
+      filterEnabled={filterEnabled}
+      onToggleFilter={() => setFilterEnabled(p => !p)}
+      initialLocalFilterParams={node.local_filter_params ?? undefined}
+      onLocalFilterChange={handleLocalFilterChange}
     />
   );
 };
@@ -1206,10 +1238,15 @@ export const LogStatisticsComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
-  selectedFile
+  selectedFile,
+  dashboardId,
 }) => {
   const [selection, setSelection] = useState<LogStatisticsSelection>(() => selectionFromNode(node));
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [filterEnabled, setFilterEnabled] = useState(true);
+  const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
+    node, dashboardId, onUpdate,
+  );
 
   // Sync with node when it changes
   useEffect(() => {
@@ -1245,17 +1282,22 @@ export const LogStatisticsComponent: React.FC<ComponentProps> = ({
 
   // VIEW MODE: Delegate to reusable LogStatistics component
   return (
-    <LogStatistics
-      fileId={selectedFile?.id}
-      showNumEvents={selection.show_num_events}
-      showNumActivities={selection.show_num_activities}
-      showNumObjects={selection.show_num_objects}
-      showNumObjectTypes={selection.show_num_object_types}
-      showEarliestTimestamp={selection.show_earliest_timestamp}
-      showNewestTimestamp={selection.show_newest_timestamp}
-      showDuration={selection.show_duration}
-      className="w-full h-full"
-    />
+    <div className="w-full h-full flex flex-col">
+      <WidgetFilterHeader title="Log Statistics" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
+      <LogStatistics
+        fileId={selectedFile?.id}
+        filterEnabled={filterEnabled}
+        localFilterParams={Object.keys(localFilterParams).length > 0 ? localFilterParams : undefined}
+        showNumEvents={selection.show_num_events}
+        showNumActivities={selection.show_num_activities}
+        showNumObjects={selection.show_num_objects}
+        showNumObjectTypes={selection.show_num_object_types}
+        showEarliestTimestamp={selection.show_earliest_timestamp}
+        showNewestTimestamp={selection.show_newest_timestamp}
+        showDuration={selection.show_duration}
+        className="w-full flex-1"
+      />
+    </div>
   );
 };
 
@@ -1280,9 +1322,13 @@ export const OCDottedChartComponent: React.FC<ComponentProps> = ({
   onUpdate,
   isEditMode = false,
   selectedFile,
+  dashboardId,
 }) => {
   const [filterEnabled, setFilterEnabled] = useState(true);
-  const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>({});
+  const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
+    node, dashboardId, onUpdate,
+  );
+
   const effectiveFileId = selectedFile?.id;
   const config = nodeToDottedChartConfig(node);
 
@@ -1349,7 +1395,7 @@ export const OCDottedChartComponent: React.FC<ComponentProps> = ({
 
   return (
     <div className="w-full h-full flex flex-col">
-      <WidgetFilterHeader title="OC Dotted Chart" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={effectiveFileId} onLocalFilterChange={setLocalFilterParams} />
+      <WidgetFilterHeader title="OC Dotted Chart" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={effectiveFileId} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
       <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
         <DottedChart
           fileId={effectiveFileId}
@@ -1459,7 +1505,10 @@ export const NewOCDFGComponent: React.FC<ComponentProps> = ({
   dashboardId,
 }) => {
   const [filterEnabled, setFilterEnabled] = useState(true);
-  const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>({});
+  const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
+    node, dashboardId, onUpdate,
+  );
+
   const [showControls, setShowControls] = useState(node.show_controls ?? true);
   const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
   const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>(node.layout_direction ?? 'TB');
@@ -1516,7 +1565,7 @@ export const NewOCDFGComponent: React.FC<ComponentProps> = ({
 
   return (
     <div className="w-full h-full flex flex-col">
-      <WidgetFilterHeader title="Object-Centric DFG (Arc Weight)" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={setLocalFilterParams} />
+      <WidgetFilterHeader title="Object-Centric DFG (Arc Weight)" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
       <div style={{ flex: 1, minHeight: 0, background: '#fff' }}>
         <NewOCDFGVisualizer
           height="100%"
@@ -1621,10 +1670,14 @@ export const OCCNComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
-  selectedFile
+  selectedFile,
+  dashboardId,
 }) => {
   const [filterEnabled, setFilterEnabled] = useState(true);
-  const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>({});
+  const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
+    node, dashboardId, onUpdate,
+  );
+
   const [threshold, setThreshold] = useState(node.relative_occurrence_threshold ?? 0);
   const [objectTypes, setObjectTypes] = useState(node.object_types ?? '');
   const [showControls, setShowControls] = useState(node.show_controls ?? true);
@@ -1713,7 +1766,7 @@ export const OCCNComponent: React.FC<ComponentProps> = ({
   // VIEW MODE: Render OCCNVisualizer
   return (
     <div className="w-full h-full flex flex-col">
-      <WidgetFilterHeader title="OC Causal Net" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={setLocalFilterParams} />
+      <WidgetFilterHeader title="OC Causal Net" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
       <div style={{ flex: 1, minHeight: 0 }}>
         <ReactFlowProvider>
           <OCCNVisualizer
@@ -1745,13 +1798,16 @@ export const OCPNComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
   isEditMode = false,
-  selectedFile
+  selectedFile,
+  dashboardId,
 }) => {
   const [automaticLoading, setAutomaticLoading] = useState(node.automatic_loading ?? false);
   const [timeoutS, setTimeoutS] = useState<number>(node.timeout_s ?? 30);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [filterEnabled, setFilterEnabled] = useState(true);
-  const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>({});
+  const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
+    node, dashboardId, onUpdate,
+  );
 
   // Sync with node when it changes (e.g. dashboard reloads with persisted values).
   useEffect(() => {
@@ -1801,7 +1857,7 @@ export const OCPNComponent: React.FC<ComponentProps> = ({
   // VIEW MODE: Render the OCPN visualizer with stored settings
   return (
     <div className="w-full h-full flex flex-col bg-white">
-      <WidgetFilterHeader title="OC Petri Net" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={setLocalFilterParams} />
+      <WidgetFilterHeader title="OC Petri Net" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
       <div style={{ flex: 1, minHeight: 0 }}>
         <OCPNVisualizer
           height="100%"
@@ -1953,7 +2009,13 @@ export const SqlQueryComponent: React.FC<ComponentProps> = ({
   onUpdate,
   isEditMode = false,
   selectedFile,
+  dashboardId,
 }) => {
+  const [filterEnabled, setFilterEnabled] = useState(true);
+  const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
+    node, dashboardId, onUpdate,
+  );
+
   const value: SqlQueryConfig = {
     name: node.name ?? "",
     query: node.query ?? SQL_QUERY_DEFAULT,
@@ -2055,6 +2117,10 @@ export const SqlQueryComponent: React.FC<ComponentProps> = ({
       projectId={selectedFile?.project}
       linkedQuery={linkedQuery}
       onLinkChange={handleLinkChange}
+      filterEnabled={filterEnabled}
+      onToggleFilter={() => setFilterEnabled(p => !p)}
+      localFilterParams={Object.keys(localFilterParams).length > 0 ? localFilterParams : undefined}
+      onLocalFilterChange={handleLocalFilterChange}
     />
   );
 };
