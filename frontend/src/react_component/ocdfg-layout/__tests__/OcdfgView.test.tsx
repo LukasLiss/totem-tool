@@ -46,6 +46,18 @@ describe('OcdfgView', () => {
     expect(fit().getAttribute('aria-pressed')).toBe('true');
   });
 
+  it('opens the hand again as soon as a drag ends', () => {
+    const { container } = view({ initialInteractionLocked: false });
+    const svg = container.querySelector('svg[aria-label="OC-DFG layout"]') as SVGSVGElement;
+    // happy-dom's SVG elements have no pointer capture (browsers do).
+    svg.setPointerCapture = vi.fn();
+    expect(svg.style.cursor).toBe('grab');
+    fireEvent.pointerDown(svg, { button: 0, pointerId: 1, isPrimary: true, clientX: 10, clientY: 10 });
+    expect(svg.style.cursor).toBe('grabbing');
+    fireEvent.pointerUp(svg, { pointerId: 1 });
+    expect(svg.style.cursor).toBe('grab');
+  });
+
   it('replaces the dim-terminal button by a layout button that opens the panel', () => {
     const { queryByTitle, queryByTestId, getByRole } = view();
     expect(queryByTitle('Dim edges touching start/end')).toBeNull();

@@ -6,6 +6,7 @@
 import { forwardRef, useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { backgroundForTypes, textColorForBackground } from '@/utils/objectColors';
 import { HoverTooltip, type TooltipRow } from '../MetricTooltip';
+import { useCanvasGestures } from '@/components/canvas/useCanvasGestures';
 import { bestFit, type FitRect } from './fitMargins';
 import { dist, pathD, pointAt, polylineLength, trimEnd } from './geometry';
 import type { LayoutOptions, LayoutResult, PlacedNode, Pt, RoutedArc } from './types';
@@ -170,28 +171,43 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
     svg: () => svgRef.current,
   }), [fitBox, zoomAt, setView, setUserMoved]);
 
-  // Wheel zoom must be a non-passive listener to prevent page scrolling.
-  useEffect(() => {
-    const el = svgRef.current;
-    if (!el || !panZoom) return;
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const pt = el.createSVGPoint();
-      pt.x = e.clientX;
-      pt.y = e.clientY;
-      const ctm = el.getScreenCTM();
-      const p = ctm ? pt.matrixTransform(ctm.inverse()) : { x: undefined, y: undefined };
-      zoomAt(e.deltaY > 0 ? 1.12 : 1 / 1.12, p.x, p.y);
-    };
-    el.addEventListener('wheel', onWheel, { passive: false });
-    return () => el.removeEventListener('wheel', onWheel);
-  }, [panZoom, zoomAt]);
-
+  // Trackpad, pinch, mouse wheel and two-finger touch (shared with the other
+  // canvases): two fingers move, a pinch or the mouse wheel zooms at the
+  // pointer. Either ends the fit mode, like the zoom buttons and dragging.
   const drag = useRef<{ x: number; y: number; vx: number; vy: number; panning: boolean } | null>(null);
+  // State, not just the ref: the cursor must open again as soon as the drag ends.
+  const [grabbing, setGrabbing] = useState(false);
+  useCanvasGestures(svgRef, panZoom, {
+    onPan: (dx, dy) => {
+      const s = scaleOf();
+      setView((v: ViewBox) => ({ ...v, x: v.x - dx * s, y: v.y - dy * s }));
+      setUserMoved(true);
+    },
+    onZoom: (scale, clientX, clientY) => {
+      const el = svgRef.current;
+      const ctm = el?.getScreenCTM();
+      let p: { x?: number; y?: number } = {};
+      if (el && ctm) {
+        const pt = el.createSVGPoint();
+        pt.x = clientX;
+        pt.y = clientY;
+        p = pt.matrixTransform(ctm.inverse());
+      }
+      zoomAt(1 / scale, p.x, p.y);
+    },
+    // Two fingers: they move and zoom; the one-finger drag stops.
+    onMultiTouchStart: () => {
+      drag.current = null;
+      setGrabbing(false);
+    },
+  });
+
   const onPointerDown = (e: React.PointerEvent) => {
-    if (!panZoom || e.button !== 0) return;
+    // Grab and move with the mouse or one finger; a second finger is a gesture.
+    if (!panZoom || e.button !== 0 || (e.pointerType === 'touch' && !e.isPrimary)) return;
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
     drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, panning: false };
+    setGrabbing(true);
   };
   const onPointerMove = (e: React.PointerEvent) => {
     if (!drag.current) return;
@@ -205,6 +221,7 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
   };
   const onPointerUp = () => {
     drag.current = null;
+    setGrabbing(false);
   };
 
   const [hover, setHover] = useState<Hover>(null);
@@ -255,10 +272,11 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
         height="100%"
         viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
         preserveAspectRatio="xMidYMid meet"
-        style={{ cursor: panZoom ? (drag.current ? 'grabbing' : 'grab') : 'default', fontFamily: FONT, background: '#ffffff', touchAction: panZoom ? 'none' : 'auto' }}
+        style={{ cursor: panZoom ? (grabbing ? 'grabbing' : 'grab') : 'default', fontFamily: FONT, background: '#ffffff', touchAction: panZoom ? 'none' : 'auto' }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
         onPointerLeave={onPointerUp}
         role="img"
         aria-label="OC-DFG layout"
