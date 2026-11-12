@@ -1563,21 +1563,21 @@ export const NewOCDFGComponent: React.FC<ComponentProps> = ({
     );
   }
 
+  // The title and the filter controls sit on the canvas (top left), no header bar.
   return (
-    <div className="w-full h-full flex flex-col">
-      <WidgetFilterHeader title="Object-Centric DFG (Arc Weight)" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
-      <div style={{ flex: 1, minHeight: 0, background: '#fff' }}>
-        <NewOCDFGVisualizer
-          height="100%"
-          fileId={selectedFile?.id}
-          showControls={showControls}
-          initialInteractionLocked={initialInteractionLocked}
-          layoutDirection={layoutDirection}
-          filterEnabled={filterEnabled}
-          localFilterParams={localFilterParams}
-          {...layout}
-        />
-      </div>
+    <div className="w-full h-full">
+      <NewOCDFGVisualizer
+        height="100%"
+        fileId={selectedFile?.id}
+        showControls={showControls}
+        initialInteractionLocked={initialInteractionLocked}
+        layoutDirection={layoutDirection}
+        filterEnabled={filterEnabled}
+        onToggleFilter={() => setFilterEnabled(p => !p)}
+        localFilterParams={localFilterParams}
+        onLocalFilterChange={handleLocalFilterChange}
+        {...layout}
+      />
     </div>
   );
 };
@@ -1591,6 +1591,9 @@ export const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
   dashboardId,
 }) => {
   const [filterEnabled, setFilterEnabled] = useState(true);
+  const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
+    node, dashboardId, onUpdate,
+  );
   const [showControls, setShowControls] = useState(node.show_controls ?? true);
   const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
   const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>(node.layout_direction ?? 'TB');
@@ -1655,6 +1658,8 @@ export const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
         layoutDirection={layoutDirection}
         filterEnabled={filterEnabled}
         onToggleFilter={() => setFilterEnabled(p => !p)}
+        localFilterParams={localFilterParams}
+        onLocalFilterChange={handleLocalFilterChange}
         {...layout}
       />
     </div>

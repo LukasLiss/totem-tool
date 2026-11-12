@@ -6,6 +6,7 @@ import { isCancelledError } from '@/store/computationStore';
 import ComputationStatus from '@/components/ComputationStatus';
 import { VisualizerEmptyState } from '@/components/ui/VisualizerEmptyState';
 import OcdfgView from './ocdfg-layout/OcdfgView';
+import OcdfgTitle from './ocdfg-layout/OcdfgTitle';
 import { fromBackendDfg } from './ocdfg-layout/graph';
 import { DEFAULT_OPTIONS } from './ocdfg-layout/options';
 import type { SaveLayout } from './ocdfg-layout/useLayoutOptions';
@@ -62,7 +63,11 @@ interface NewOCDFGVisualizerProps {
   showControls?: boolean;
   initialInteractionLocked?: boolean;
   filterEnabled?: boolean;
+  /** Given: the title shows the global filter switch. */
+  onToggleFilter?: () => void;
   localFilterParams?: Record<string, string>;
+  /** Given: the title shows the local filter. */
+  onLocalFilterChange?: (params: Record<string, string>) => void;
   /** Stored layout preferences (undefined while loading) and how to store them. */
   storedLayout?: unknown;
   onLayoutChange?: SaveLayout;
@@ -85,7 +90,9 @@ function NewOCDFGVisualizer({
   showControls = true,
   initialInteractionLocked = true,
   filterEnabled = true,
+  onToggleFilter,
   localFilterParams,
+  onLocalFilterChange,
   storedLayout,
   onLayoutChange,
   layoutScope,
@@ -145,7 +152,16 @@ function NewOCDFGVisualizer({
       height={height}
       sliderMode="weight"
       variant={detail ? 'detail' : 'full'}
-      title={<div style={{ fontWeight: 700, fontSize: 15, color: '#0F172A' }}>Object-Centric DFG (Arc Weight)</div>}
+      title={
+        <OcdfgTitle
+          label="Object-Centric DFG (Arc Weight)"
+          fileId={fileId}
+          filterEnabled={filterEnabled}
+          onToggleFilter={onToggleFilter}
+          localFilterParams={localFilterParams}
+          onLocalFilterChange={onLocalFilterChange}
+        />
+      }
       showControls={showControls}
       initialInteractionLocked={initialInteractionLocked}
       fileId={data == null ? fileId : undefined}

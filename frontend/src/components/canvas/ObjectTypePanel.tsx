@@ -152,8 +152,14 @@ export function ObjectTypePanel({
   return (
     // No height cap of its own: the container decides how far down it may grow
     // (e.g. to the view's bottom, or to just above the control pill), and
-    // minHeight 0 lets it shrink to that, its list then scrolling.
-    <div {...stop} data-testid={testId} style={{ ...PANEL_SHELL, minWidth: 240, maxWidth: 320, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+    // minHeight 0 lets it shrink to that, its list then scrolling. As wide as
+    // its content (alignSelf: a column container would stretch it to its
+    // widest item, e.g. a title above it).
+    <div
+      {...stop}
+      data-testid={testId}
+      style={{ ...PANEL_SHELL, minWidth: 220, maxWidth: 280, alignSelf: 'flex-start', display: 'flex', flexDirection: 'column', minHeight: 0 }}
+    >
       <div className={PANEL_HEADER_CLASS}>
         <span className={PANEL_TITLE_CLASS}>
           {title}

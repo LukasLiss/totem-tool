@@ -30,12 +30,16 @@ import { useLayoutOptions, type SaveLayout } from './useLayoutOptions';
 import AnimationPanel from './AnimationPanel';
 import { useOcdfgFlows } from './useOcdfgFlows';
 
-/** Screen space the legend column takes on the left of the canvas. */
-const LEGEND_ROOM = 360;
+/** How far the legend column reaches from the left edge: its 16 px offset plus the panel's widest 280 px. */
+const LEGEND_PANEL_REACH = 16 + 280;
+/** Screen space the legend column takes on the left of the canvas: its reach plus 24 px to the graph. */
+const LEGEND_ROOM = LEGEND_PANEL_REACH + 24;
 const LEGEND_AUTO_COLLAPSE_WIDTH = 480;
 const DETAIL_PADDING = 16;
-/** How far the legend column reaches from the left edge: its 16 px offset plus the panel's widest 320 px. */
-const LEGEND_PANEL_REACH = 16 + 320;
+/** Space between the title and the legend below it. */
+const TITLE_LEGEND_GAP = 8;
+/** Title (30 px) and collapsed legend chip (30 px) stacked in the top-left corner, from the view's top. */
+const STACKED_CHROME_HEIGHT = 16 + 30 + TITLE_LEGEND_GAP + 30;
 /** Free places for the control pill: the legend holds the top left, the animation panel the top right. */
 const OCDFG_PILL_SPOTS: readonly PillSpot[] = ['bottom-left', 'bottom-right', 'left', 'right'];
 
@@ -300,7 +304,7 @@ export default function OcdfgView({
   // legend sit stacked in the top-left corner; start the graph below them.
   // (The control pill is a movable ControlPill of its own, bottom left by default.)
   const stackedChromeRoom =
-    chrome && legendCollapsed && width > 0 && width < LEGEND_AUTO_COLLAPSE_WIDTH ? 136 : 24;
+    chrome && legendCollapsed && width > 0 && width < LEGEND_AUTO_COLLAPSE_WIDTH ? STACKED_CHROME_HEIGHT + 24 : 24;
   const fitPadding = detail
     ? { top: 4, right: 4, bottom: 4, left: 4 }
     : { top: stackedChromeRoom, bottom: 24, left: legendRoom, right: panelRoom };
@@ -387,20 +391,24 @@ export default function OcdfgView({
             left: 16,
             display: 'flex',
             flexDirection: 'column',
-            gap: 16,
+            // Close under the title, so title and legend read as one group.
+            gap: TITLE_LEGEND_GAP,
             maxHeight: `calc(100% - ${16 + legendRoomBelow}px)`,
             zIndex: 15,
           }}
         >
+          {/* No inset of its own: the title starts at the canvas's 16 px margin
+              like the panels, as tall as their collapsed chips (30 px) so it
+              lines up with the animation chip in the opposite corner. */}
           {title && (
             <div
+              data-testid="ocdfg-title"
               style={{
-                background: 'transparent',
-                border: '1px solid transparent',
-                borderRadius: 12,
-                padding: '10px 14px',
+                display: 'flex',
+                alignItems: 'center',
+                minHeight: 30,
                 fontFamily: 'var(--font-primary, Inter, sans-serif)',
-                minWidth: 240,
+                textAlign: 'left',
               }}
             >
               {title}

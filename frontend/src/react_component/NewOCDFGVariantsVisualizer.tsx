@@ -4,11 +4,10 @@ import { toast } from 'sonner';
 import { useFilterVersion, getEffectiveFilterConfig } from '@/store/filterStore';
 import { isCancelledError } from '@/store/computationStore';
 import ComputationStatus from '@/components/ComputationStatus';
-import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
-import { LocalFilterDropdown } from '@/components/ui/LocalFilterDropdown';
 import { VisualizerEmptyState } from '@/components/ui/VisualizerEmptyState';
 import type { OcdfgGraph } from './NewOCDFGVisualizer';
 import OcdfgView from './ocdfg-layout/OcdfgView';
+import OcdfgTitle from './ocdfg-layout/OcdfgTitle';
 import { fromBackendDfg } from './ocdfg-layout/graph';
 import { DEFAULT_OPTIONS } from './ocdfg-layout/options';
 import type { SaveLayout } from './ocdfg-layout/useLayoutOptions';
@@ -123,11 +122,14 @@ function NewOCDFGVariantsVisualizer({
   const noEventLog = data == null && !fileId;
 
   const title = showTitle ? (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-      <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--foreground)' }}>Object-Centric DFG (Variants)</div>
-      <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggleFilter} stopPropagation />
-      <LocalFilterDropdown fileId={fileId} onFilterChange={onLocalFilterChange ?? setInternalLocalParams} stopPropagation />
-    </div>
+    <OcdfgTitle
+      label="Object-Centric DFG (Variants)"
+      fileId={fileId}
+      filterEnabled={filterEnabled}
+      onToggleFilter={onToggleFilter}
+      localFilterParams={effectiveLocalParams}
+      onLocalFilterChange={onLocalFilterChange ?? setInternalLocalParams}
+    />
   ) : undefined;
 
   return (
