@@ -6,24 +6,23 @@
  * Same panel, chart and controls as the OC handover animation
  * (OCHandoverExplorer: the "Animation" FloatingPanel, ActivityChart,
  * AnimPanelResizeGrip), copied with the same styling so both can be unified
- * later. The playback state lives here, outside the collapsible panel body,
- * so collapsing the panel keeps the animation running.
+ * later. The panel is opened from a button of the control pill (PillToggle)
+ * and drawn in the shared CanvasPanel frame. The playback state lives here,
+ * outside that frame, so closing the panel keeps the animation running.
  */
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import { ChevronDown, Loader2, Pause, Play, Repeat, Settings2, Square } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { ChevronDown, Loader2, Pause, Play, Repeat, Square } from 'lucide-react';
 import { Slider } from '@/components/ui/slider';
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
-import { FloatingPanel } from '../orgamining/canvas';
+import { CanvasPanel } from '@/components/canvas/CanvasPanel';
+import { PANEL_ICON_BUTTON_CLASS } from '@/components/canvas/panelHeader';
 import { roomBelowForPill, type PillRegion } from '@/components/canvas/pillSpots';
 import {
   ACTIVITY_H,
@@ -40,40 +39,48 @@ import { arcPaths, tokensAt, type TokenPath, type Tokens } from './tokenAnimatio
 import type { LayoutResult } from './types';
 import type { FlowsState } from './useOcdfgFlows';
 
-const SPEED_OPTIONS = [1, 10, 100, 1000, 5000, 10000, 50000, 100000, 1000000, 10000000, 100000000];
+/** The playback speeds (multiples of real time): 1, 2, 5, 10, 20, 50, … up to 100,000,000. */
+const SPEED_STEPS: readonly number[] = Array.from({ length: 25 }, (_, i) => [1, 2, 5][i % 3] * 10 ** Math.floor(i / 3));
 /** The whole log plays in about this many seconds at the initial speed (as in the handover). */
 const DEFAULT_PLAY_SECONDS = 30;
 const DOT_RADIUS = 4;
+/** Opacity of the tokens of the other types while one type is highlighted (as their arcs). */
+const FADED_TOKEN_OPACITY = 0.15;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 /** Panel position: top right of the view. */
 const ANIM_PANEL_TOP = 16;
 const ANIM_PANEL_BOTTOM_CLEARANCE = 16;
 
-/** Borderless icon button of the playback row (same as the handover's). */
-const ANIM_ICON_BUTTON =
-  'flex items-center justify-center h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors';
+/** Buttons of the playback row: the canvas panels' header buttons. */
+const ANIM_ICON_BUTTON = PANEL_ICON_BUTTON_CLASS;
 
-function snapSpeed(target: number): number {
-  return SPEED_OPTIONS.reduce((best, s) =>
-    Math.abs(Math.log(s) - Math.log(target)) < Math.abs(Math.log(best) - Math.log(target)) ? s : best,
-  );
+/** The index of the speed step closest to `target`, on a log scale (the speed slider's value). */
+function speedIndex(target: number): number {
+  let best = 0;
+  SPEED_STEPS.forEach((s, i) => {
+    if (Math.abs(Math.log(s) - Math.log(target)) < Math.abs(Math.log(SPEED_STEPS[best]) - Math.log(target))) best = i;
+  });
+  return best;
 }
 
-const SUPERSCRIPTS = '⁰¹²³⁴⁵⁶⁷⁸⁹';
-/** Same notation as the handover animation: 1×, 10², 5·10³×, … */
-function fmtSpeed(s: number): string {
-  if (s === 1) return '1×';
-  const exp = Math.log10(s);
-  const sup = (n: number) => String(n).split('').map((d) => SUPERSCRIPTS[Number(d)]).join('');
-  if (Number.isInteger(exp)) return `10${sup(exp)}×`;
-  const e = Math.floor(exp);
-  return `${s / Math.pow(10, e)}·10${sup(e)}×`;
-}
+const COMPACT = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 0 });
+/** A speed as a multiplier: 5×, 200×, 5,000×, 20K×, 1M×. */
+const fmtSpeed = (s: number) => `${s < 10000 ? s.toLocaleString('en') : COMPACT.format(s)}×`;
+
+/**
+ * The thin slider of the canvas panels (as the object type panel's filters):
+ * thin slate track, the part up to the thumb darker, a small round thumb.
+ * (Class names written out in full, so Tailwind finds them.)
+ */
+const THIN_SLIDER =
+  '[&_[data-slot=slider-track]]:h-1 [&_[data-slot=slider-track]]:bg-slate-200 [&_[data-slot=slider-range]]:bg-slate-600 [&_[data-slot=slider-thumb]]:size-3 [&_[data-slot=slider-thumb]]:border-slate-600';
 
 // --- panel size (same as the handover's, stored under its own key) ----------
 type AnimPanelSize = { width: number; chartHeight: number };
-const ANIM_PANEL_MIN: AnimPanelSize = { width: 242, chartHeight: 56 };
+// The narrowest the panel gets: wide enough for the bottom row (play, loop,
+// stop, "Speed", its slider and the longest value, "100M×") on one line.
+const ANIM_PANEL_MIN: AnimPanelSize = { width: 260, chartHeight: 56 };
 const ANIM_PANEL_MAX: AnimPanelSize = { width: 720, chartHeight: 420 };
 const ANIM_PANEL_SIZE_KEY = 'ocdfg.animationPanelSize';
 
@@ -178,6 +185,8 @@ function ActivityChart({
   colors,
   onScrub,
   height = ACTIVITY_H,
+  timeLabel,
+  moverRef,
 }: {
   tokens: Tokens;
   shown: Uint8Array;
@@ -185,6 +194,13 @@ function ActivityChart({
   colors: Record<string, string>;
   onScrub: (time: number) => void;
   height?: number;
+  /** The current moment as text, shown above the playhead. */
+  timeLabel?: string;
+  /**
+   * Set to a function that moves the playhead (and its label) to a moment
+   * directly, without a render: playback calls it on every frame.
+   */
+  moverRef?: RefObject<((time: number) => void) | null>;
 }) {
   const [metric, setMetric] = useState<ActivityMetric>('objects');
   const metricInfo = ACTIVITY_METRICS.find((m) => m.value === metric)!;
@@ -253,16 +269,63 @@ function ActivityChart({
     const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
     onScrub(start + frac * span);
   };
-  const playheadPct = Math.min(100, Math.max(0, ((time - start) / span) * 100));
+
+  // The playhead and its label are moved directly (on every frame while
+  // playing), the line snapped to whole screen pixels so it does not shimmer
+  // between two; the label centred on it, kept inside the chart.
+  const plotRef = useRef<HTMLDivElement | null>(null);
+  const lineRef = useRef<HTMLDivElement | null>(null);
+  const labelRef = useRef<HTMLSpanElement | null>(null);
+  const shownTime = useRef(time);
+  const place = useCallback(
+    (t: number) => {
+      shownTime.current = t;
+      const plot = plotRef.current;
+      if (!plot) return;
+      const dpr = window.devicePixelRatio || 1;
+      const snap = (px: number) => Math.round(px * dpr) / dpr;
+      const width = plot.clientWidth;
+      const x = snap(Math.min(1, Math.max(0, (t - start) / span)) * width);
+      if (lineRef.current) lineRef.current.style.transform = `translateX(${x}px)`;
+      const label = labelRef.current;
+      if (label) {
+        const w = label.offsetWidth;
+        label.style.transform = `translateX(${snap(Math.min(Math.max(x - w / 2, 0), Math.max(0, width - w)))}px)`;
+      }
+    },
+    [start, span],
+  );
+  useLayoutEffect(() => {
+    place(time);
+    if (moverRef) moverRef.current = place;
+  }, [place, time, timeLabel, moverRef]);
+  useEffect(() => {
+    const plot = plotRef.current;
+    if (!plot || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => place(shownTime.current));
+    observer.observe(plot);
+    return () => observer.disconnect();
+  }, [place]);
+  /** Keyboard on the chart, as on a slider: arrows 1 %, page keys 10 %, Home/End. */
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = { ArrowRight: 0.01, ArrowUp: 0.01, ArrowLeft: -0.01, ArrowDown: -0.01, PageUp: 0.1, PageDown: -0.1 }[e.key];
+    let next: number | null = null;
+    if (step != null) next = time + step * span;
+    else if (e.key === 'Home') next = start;
+    else if (e.key === 'End') next = end;
+    if (next == null) return;
+    e.preventDefault();
+    onScrub(Math.min(end, Math.max(start, next)));
+  };
 
   return (
-    <div className="flex flex-col gap-1" data-testid="ocdfg-activity-chart">
-      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+    <div className="flex flex-col gap-2" data-testid="ocdfg-activity-chart">
+      <div className="flex items-center justify-between text-[11px] text-slate-500">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="flex items-center gap-0.5 hover:text-foreground transition-colors" title={metricInfo.hint}>
+            <button className="flex items-center gap-0.5 text-xs text-slate-700 transition-colors hover:text-slate-900" title={metricInfo.hint}>
               <span>{metricInfo.label}</span>
-              <ChevronDown className="h-3 w-3 shrink-0" />
+              <ChevronDown className="h-3 w-3 shrink-0 text-slate-400" />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start">
@@ -281,16 +344,34 @@ function ActivityChart({
             </DropdownMenuRadioGroup>
           </DropdownMenuContent>
         </DropdownMenu>
-        <span className="tabular-nums">
-          {series.kind === 'bars'
-            ? `peak ${fmtSigned(peak)} / ${fmtSigned(trough)}`
-            : `peak ${series.format(peak)}${series.unit ? ` ${series.unit}` : ''}`}
-        </span>
       </div>
+      {timeLabel != null && (
+        // Above the playhead; near the edges it keeps inside the chart.
+        <div className="relative mx-2 h-3.5">
+          <span
+            ref={labelRef}
+            data-testid="ocdfg-animation-time"
+            className="absolute left-0 top-0 whitespace-nowrap text-[11px] leading-3.5 font-medium tabular-nums text-slate-600 will-change-transform"
+          >
+            {timeLabel}
+          </span>
+        </div>
+      )}
       <div className="px-2">
+        {/* The timeline: click or drag to a moment, or use the keys like a slider. */}
         <div
-          className="relative cursor-pointer touch-none"
+          ref={plotRef}
+          className="relative cursor-pointer touch-none rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
           style={{ height }}
+          data-testid="ocdfg-activity-plot"
+          role="slider"
+          tabIndex={0}
+          aria-label="Animation time"
+          aria-valuemin={start}
+          aria-valuemax={end}
+          aria-valuenow={time}
+          aria-valuetext={timeLabel}
+          onKeyDown={onKeyDown}
           onPointerDown={(e) => {
             e.preventDefault();
             e.currentTarget.setPointerCapture(e.pointerId);
@@ -319,6 +400,30 @@ function ActivityChart({
                 />
               ),
             )}
+            {/* The highest value: a faint dashed line at its height (the chart's top), labelled below. */}
+            <line
+              x1={0}
+              x2={ACTIVITY_W}
+              y1={activityY(peak, peak, trough, height)}
+              y2={activityY(peak, peak, trough, height)}
+              stroke="#cbd5e1"
+              strokeDasharray="3 3"
+              vectorEffect="non-scaling-stroke"
+              data-testid="ocdfg-activity-peak-line"
+            />
+            {/* Step balance (bars) also goes below zero: the lowest value likewise, labelled above. */}
+            {series.kind === 'bars' && trough < 0 && (
+              <line
+                x1={0}
+                x2={ACTIVITY_W}
+                y1={activityY(trough, peak, trough, height)}
+                y2={activityY(trough, peak, trough, height)}
+                stroke="#cbd5e1"
+                strokeDasharray="3 3"
+                vectorEffect="non-scaling-stroke"
+                data-testid="ocdfg-activity-trough-line"
+              />
+            )}
             {/* Zero line, on top so it stays visible through bars */}
             <line
               x1={0}
@@ -330,11 +435,27 @@ function ActivityChart({
               vectorEffect="non-scaling-stroke"
             />
           </svg>
-          <div className="absolute top-0 bottom-0 w-px bg-foreground/40 pointer-events-none" style={{ left: `${playheadPct}%` }} />
+          <span
+            data-testid="ocdfg-activity-peak"
+            className="pointer-events-none absolute left-0.5 rounded-sm bg-white/75 px-0.5 text-[10px] leading-3 tabular-nums text-slate-400"
+            style={{ top: activityY(peak, peak, trough, height) + 2 }}
+          >
+            {series.kind === 'bars' ? fmtSigned(peak) : series.format(peak)}
+          </span>
+          {series.kind === 'bars' && trough < 0 && (
+            <span
+              data-testid="ocdfg-activity-trough"
+              className="pointer-events-none absolute left-0.5 rounded-sm bg-white/75 px-0.5 text-[10px] leading-3 tabular-nums text-slate-400"
+              style={{ top: activityY(trough, peak, trough, height) - 14 }}
+            >
+              {fmtSigned(trough)}
+            </span>
+          )}
+          <div ref={lineRef} className="absolute top-0 bottom-0 left-0 w-px bg-slate-500/60 pointer-events-none will-change-transform" />
         </div>
       </div>
-      <div className="flex items-start gap-2 text-[11px]">
-        {series.footnote && <span className="text-muted-foreground whitespace-nowrap">{series.footnote}</span>}
+      <div className="flex items-start gap-2 text-[11px] text-slate-600">
+        {series.footnote && <span className="text-slate-500 whitespace-nowrap">{series.footnote}</span>}
         <div className="ml-auto flex flex-wrap justify-end gap-x-3 gap-y-0.5">
           {series.lines.map((line) => (
             <button
@@ -356,11 +477,12 @@ function ActivityChart({
 
 // --- the panel -----------------------------------------------------------------
 export interface AnimationPanelProps {
-  /** Start collapsed to its chip; the DFG always does, like the handover's panel. */
-  narrow: boolean;
+  /** Whether the panel is shown (the pill button); the animation runs on while it is not. */
+  open: boolean;
+  onClose: () => void;
   /** Whether the animation is on (its steps are loaded while it is). */
   active: boolean;
-  onStart: () => void;
+  /** Stop: the animation ends and the panel closes. */
   onStop: () => void;
   state: FlowsState;
   /** The canvas' token layer (inside its SVG, in layout coordinates). */
@@ -371,13 +493,16 @@ export interface AnimationPanelProps {
   variantLimit?: Record<string, number>;
   /** Where the view's control pill sits: the panel ends above it when it is below the panel. */
   pillRegion?: PillRegion | null;
+  /** The object type highlighted in the legend (hover): the other types' tokens fade. */
+  highlightType?: string | null;
 }
 
 export default function AnimationPanel({
-  narrow,
+  open,
+  onClose,
   pillRegion = null,
+  highlightType = null,
   active,
-  onStart,
   onStop,
   state,
   layer,
@@ -423,21 +548,30 @@ export default function AnimationPanel({
     if (!g) return;
     while (g.firstChild) g.removeChild(g.firstChild);
     if (!tokens) return;
-    for (const dot of tokensAt(tokens, pathByArc, time, showObject)) {
-      const c = document.createElementNS(SVG_NS, 'circle');
-      c.setAttribute('cx', String(dot.x));
-      c.setAttribute('cy', String(dot.y));
-      c.setAttribute('r', String(DOT_RADIUS));
-      c.setAttribute('fill', colors[dot.type] ?? '#64748b');
-      c.setAttribute('stroke', '#ffffff');
-      c.setAttribute('stroke-width', '1.2');
-      g.appendChild(c);
+    // While a type is highlighted (legend hover), the others' tokens fade like
+    // their arcs; the highlighted ones are drawn last, so they lie on top.
+    const dots = tokensAt(tokens, pathByArc, time, showObject);
+    const faded = (type: string) => highlightType != null && type !== highlightType;
+    for (const pass of [true, false]) {
+      for (const dot of dots) {
+        if (faded(dot.type) !== pass) continue;
+        const c = document.createElementNS(SVG_NS, 'circle');
+        c.setAttribute('cx', String(dot.x));
+        c.setAttribute('cy', String(dot.y));
+        c.setAttribute('r', String(DOT_RADIUS));
+        c.setAttribute('fill', colors[dot.type] ?? '#64748b');
+        c.setAttribute('stroke', '#ffffff');
+        c.setAttribute('stroke-width', '1.2');
+        if (pass) c.setAttribute('opacity', String(FADED_TOKEN_OPACITY));
+        g.appendChild(c);
+      }
     }
   };
 
   // --- playback ---------------------------------------------------------------
   const [time, setTime] = useState(0);
   const [speed, setSpeed] = useState(100);
+  const speedStep = speedIndex(speed);
   const [loop, setLoop] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [panelSize, setPanelSize] = useState(loadAnimPanelSize);
@@ -447,6 +581,8 @@ export default function AnimationPanel({
   const loopRef = useRef(loop);
   loopRef.current = loop;
   const frame = useRef<number | null>(null);
+  /** Moves the chart's playhead without a render (set by ActivityChart). */
+  const playheadMover = useRef<((time: number) => void) | null>(null);
   const lastWall = useRef<number | null>(null);
   const frameCount = useRef(0);
 
@@ -462,13 +598,13 @@ export default function AnimationPanel({
     const t = tokens ? tokens.timeline.start : 0;
     timeRef.current = t;
     setTime(t);
-    if (tokens) setSpeed(snapSpeed(Math.max(1, (tokens.timeline.end - tokens.timeline.start) / DEFAULT_PLAY_SECONDS)));
+    if (tokens) setSpeed(SPEED_STEPS[speedIndex(Math.max(1, (tokens.timeline.end - tokens.timeline.start) / DEFAULT_PLAY_SECONDS))]);
   }, [tokens, pause]);
 
   // Redraw the current moment when anything but the time changes.
   useEffect(() => {
     if (!playing) drawRef.current(timeRef.current);
-  }, [tokens, pathByArc, showObject, colors, playing]);
+  }, [tokens, pathByArc, showObject, colors, highlightType, playing]);
 
   // Stop the frames and leave an empty layer behind.
   useEffect(
@@ -494,6 +630,7 @@ export default function AnimationPanel({
       if (next >= end && loopRef.current) next = start;
       timeRef.current = next;
       drawRef.current(next);
+      playheadMover.current?.(next);
       frameCount.current = (frameCount.current + 1) % 4;
       if (frameCount.current === 0 || next >= end) setTime(next);
       if (next < end) frame.current = requestAnimationFrame(tick);
@@ -516,20 +653,49 @@ export default function AnimationPanel({
     onStop();
   };
 
+  // The panel's reach from the right edge: its offset, content width and padding.
+  const bottomClearance = roomBelowForPill(pillRegion, false, {
+    fallback: ANIM_PANEL_BOTTOM_CLEARANCE,
+    reach: 16 + panelSize.width + 30,
+  });
+
+  // --- the chart gives way ------------------------------------------------------
+  // With less room (the pill below the panel, a small box) the chart is shown
+  // only as tall as fits, so the panel does not scroll; with room again it is
+  // back at the height chosen with the grip (panelSize, which stays as it is).
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [chartRoom, setChartRoom] = useState<number | null>(null);
+  const chartHeight = Math.max(ANIM_PANEL_MIN.chartHeight, Math.min(panelSize.chartHeight, chartRoom ?? Infinity));
+  const chartHeightRef = useRef(chartHeight);
+  chartHeightRef.current = chartHeight;
+  const hasChart = Boolean(tokens && tokens.count > 0);
+  useEffect(() => {
+    const panel = panelRef.current;
+    const view = panel?.offsetParent as HTMLElement | null;
+    if (!open || !hasChart || !panel || !view || typeof ResizeObserver === 'undefined') return;
+    const measure = () => {
+      // Room the view leaves the panel, less everything in it but the chart (borders included).
+      const room = view.clientHeight - ANIM_PANEL_TOP - bottomClearance;
+      const rest = panel.scrollHeight + (panel.offsetHeight - panel.clientHeight) - chartHeightRef.current;
+      const next = Math.floor(room - rest);
+      setChartRoom((prev) => (prev === next ? prev : next));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(view);
+    observer.observe(panel);
+    return () => observer.disconnect();
+  }, [open, hasChart, bottomClearance]);
+
   // --- panel body ---------------------------------------------------------------
   let body: React.ReactNode;
   if (!active || state.status === 'idle' || state.status === 'loading') {
-    const loading = active && state.status !== 'idle';
+    // Opening the panel starts the animation; until its steps are there.
     body = (
-      <Button type="button" size="sm" variant="outline" disabled={loading} onClick={onStart}>
-        {loading ? (
-          <Loader2 className="h-3.5 w-3.5 animate-spin" aria-label="Loading the objects' steps" />
-        ) : (
-          <>
-            <Play className="h-3.5 w-3.5" /> Animate
-          </>
-        )}
-      </Button>
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" aria-label="Loading the objects' steps" />
+        Loading the objects' steps…
+      </div>
     );
   } else if (state.status === 'error' || !tokens || tokens.count === 0) {
     body = (
@@ -543,7 +709,6 @@ export default function AnimationPanel({
       </div>
     );
   } else {
-    const { start, end } = tokens.timeline;
     body = (
       <>
         <ActivityChart
@@ -552,84 +717,55 @@ export default function AnimationPanel({
           time={time}
           colors={colors}
           onScrub={scrub}
-          height={panelSize.chartHeight}
+          height={chartHeight}
+          moverRef={playheadMover}
+          timeLabel={`${new Date(time * 1000).toLocaleDateString([], { month: 'short', day: '2-digit', year: '2-digit' })} ${new Date(time * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
         />
-        <Slider
-          min={start}
-          max={Math.max(end, start + 1)}
-          step={Math.max(1, (end - start) / 2000)}
-          value={[time]}
-          onValueChange={([v]) => scrub(v)}
-          aria-label="Animation time"
-        />
-        {/* Playback row below the slider, so the slider keeps the chart's full width.
-            Equal side columns keep the timestamp centred in the panel. */}
-        <div className="grid grid-cols-[1fr_auto_1fr] items-center -mx-1.5">
-          <div className="flex items-center gap-0.5">
-            <button type="button" className={ANIM_ICON_BUTTON} onClick={playing ? pause : play} title={playing ? 'Pause' : 'Play'}>
-              {playing ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
-            </button>
-            <button
-              type="button"
-              className={cn(ANIM_ICON_BUTTON, loop && 'text-blue-600 hover:text-blue-700')}
-              onClick={() => setLoop((l) => !l)}
-              title={loop ? 'Loop on' : 'Loop off'}
-              aria-pressed={loop}
-            >
-              <Repeat className="h-3.5 w-3.5" />
-            </button>
-          </div>
-          <span className="px-1 text-[11px] text-muted-foreground tabular-nums whitespace-nowrap">
-            {new Date(time * 1000).toLocaleDateString([], { month: 'short', day: '2-digit', year: '2-digit' })}{' '}
-            {new Date(time * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-          </span>
-          <div className="flex items-center justify-end gap-0.5">
-            <button type="button" className={ANIM_ICON_BUTTON} onClick={stop} title="Stop">
-              <Square className="h-3.5 w-3.5" />
-            </button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button type="button" className={ANIM_ICON_BUTTON} title={`Playback settings · ${fmtSpeed(speed)}`}>
-                  <Settings2 className="h-3.5 w-3.5" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuLabel className="text-xs">Playback options</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Speed</DropdownMenuLabel>
-                <DropdownMenuRadioGroup
-                  value={String(speed)}
-                  onValueChange={(v) => setSpeed(Number(v))}
-                  className="max-h-24 overflow-y-auto"
-                >
-                  {SPEED_OPTIONS.map((s) => (
-                    <DropdownMenuRadioItem key={s} value={String(s)}>
-                      {s}×
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
+        {/* Play, loop and stop on the left, a short speed slider with its value on the right
+            (the chart above is the timeline). */}
+        <div className="flex items-center gap-2 -ml-1">
+          <button type="button" className={ANIM_ICON_BUTTON} onClick={playing ? pause : play} title={playing ? 'Pause' : 'Play'}>
+            {playing ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+          </button>
+          <button
+            type="button"
+            className={cn(ANIM_ICON_BUTTON, loop && 'bg-slate-100 text-slate-900')}
+            onClick={() => setLoop((l) => !l)}
+            title={loop ? 'Loop on' : 'Loop off'}
+            aria-pressed={loop}
+          >
+            <Repeat className="h-3.5 w-3.5" />
+          </button>
+          <button type="button" className={ANIM_ICON_BUTTON} onClick={stop} title="Stop">
+            <Square className="h-3.5 w-3.5" />
+          </button>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            <span className="text-[11px] text-slate-500">Speed</span>
+            <Slider
+              min={0}
+              max={SPEED_STEPS.length - 1}
+              step={1}
+              value={[speedStep]}
+              onValueChange={([i]) => setSpeed(SPEED_STEPS[i])}
+              thumbAriaLabel="Playback speed"
+              className={cn('w-20', THIN_SLIDER)}
+            />
+            <span className="w-10 shrink-0 whitespace-nowrap text-right text-[11px] font-medium tabular-nums text-slate-700">
+              {fmtSpeed(speed)}
+            </span>
           </div>
         </div>
       </>
     );
   }
 
-  // The panel's reach from the right edge: its offset, content width and padding.
-  const bottomClearance = roomBelowForPill(pillRegion, false, {
-    fallback: ANIM_PANEL_BOTTOM_CLEARANCE,
-    reach: 16 + panelSize.width + 30,
-  });
+  if (!open) return null;
 
   return (
-    <FloatingPanel
+    <CanvasPanel
       title="Animation"
-      icon={<Play style={{ width: 13, height: 13, color: '#64748b' }} />}
-      narrow={narrow}
-      plainHeading
-      // Same header as the object type panel.
-      canvasHeader
+      onClose={onClose}
+      panelRef={panelRef}
       style={{
         position: 'absolute',
         top: ANIM_PANEL_TOP,
@@ -638,12 +774,13 @@ export default function AnimationPanel({
         maxHeight: `calc(100% - ${ANIM_PANEL_TOP + bottomClearance}px)`,
       }}
     >
-      <div className="flex flex-col gap-2" style={{ width: panelSize.width }} data-testid="ocdfg-animation-panel">
+      <div className="flex flex-col gap-3" style={{ width: panelSize.width }} data-testid="ocdfg-animation-panel">
         {body}
       </div>
       {tokens && tokens.count > 0 && (
-        <AnimPanelResizeGrip size={panelSize} onResize={setPanelSize} bottomClearance={bottomClearance} />
+        // Resizing starts from the chart as shown.
+        <AnimPanelResizeGrip size={{ ...panelSize, chartHeight }} onResize={setPanelSize} bottomClearance={bottomClearance} />
       )}
-    </FloatingPanel>
+    </CanvasPanel>
   );
 }

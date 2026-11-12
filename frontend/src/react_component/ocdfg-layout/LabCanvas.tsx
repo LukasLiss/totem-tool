@@ -28,8 +28,6 @@ interface LabCanvasProps {
   interactive?: boolean;
   /** Pan and zoom with mouse/wheel (hover highlighting works either way). */
   panZoom?: boolean;
-  /** Flowing dashes along the arcs. */
-  animate?: boolean;
   /** Layer above the graph for the token animation (drawn into by AnimationPanel). */
   tokenLayerRef?: React.Ref<SVGGElement>;
   /** Fade the arcs (token animation running), so the tokens stand out. */
@@ -72,7 +70,6 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
     colors,
     interactive = true,
     panZoom = interactive,
-    animate = false,
     tokenLayerRef,
     dimArcs = false,
     fitPadding,
@@ -258,7 +255,6 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
         height="100%"
         viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
         preserveAspectRatio="xMidYMid meet"
-        className={animate ? 'ocdfg-animate' : undefined}
         style={{ cursor: panZoom ? (drag.current ? 'grabbing' : 'grab') : 'default', fontFamily: FONT, background: '#ffffff', touchAction: panZoom ? 'none' : 'auto' }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -267,10 +263,6 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
         role="img"
         aria-label="OC-DFG layout"
       >
-        {animate && (
-          <style>{`@keyframes ocdfg-layout-flow { to { stroke-dashoffset: -20; } }
-.ocdfg-animate .ocdfg-arc-body { stroke-dasharray: 10 10; animation: ocdfg-layout-flow 0.9s linear infinite; }`}</style>
-        )}
         <defs>
           {o.nodeStyle === 'gradient' &&
             result.nodes
@@ -587,7 +579,6 @@ function ArcShape({
   } else {
     body = (
       <path
-        className={dash ? undefined : 'ocdfg-arc-body'}
         d={pathD(pts)}
         fill="none"
         stroke={color}

@@ -9,13 +9,14 @@
  * graph and reports its size so the surrounding box can follow it.
  */
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { LockIcon, MinusIcon, PlusIcon, ScanIcon, SlidersHorizontal, UnlockIcon, ZapIcon } from 'lucide-react';
+import { LockIcon, MinusIcon, Play, PlusIcon, ScanIcon, SlidersHorizontal, UnlockIcon } from 'lucide-react';
+import { PillToggle } from '@/components/canvas/PillToggle';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
 import { ControlPill, type PillRegion, type PillSpot } from '@/components/canvas/ControlPill';
 import { roomBelowForPill } from '@/components/canvas/pillSpots';
-import { CHIP_HEIGHT, FIT_GAP, pillRect, TITLE_LEGEND_GAP, type FitRect } from './fitMargins';
+import { FIT_GAP, pillRect, TITLE_LEGEND_GAP, type FitRect } from './fitMargins';
 import { ObjectTypePanel } from '@/components/canvas/ObjectTypePanel';
 import { mapTypesToColors } from '@/utils/objectColors';
 import OcdfgLayoutStatusCard from '../OcdfgLayoutStatusCard';
@@ -193,7 +194,8 @@ export default function OcdfgView({
 
   // --- toolbar state ----------------------------------------------------------
   const [locked, setLocked] = useState(initialInteractionLocked);
-  const [animate, setAnimate] = useState(false);
+  // The token animation's panel, opened from the pill; starts closed.
+  const [animationOpen, setAnimationOpen] = useState(false);
   // The fit mode: on until the user zooms or pans, on again with the fit button.
   const [fitted, setFitted] = useState(true);
   // Where the control pill sits, so the legend (left) and the animation panel
@@ -335,13 +337,12 @@ export default function OcdfgView({
     detail || !chrome
       ? []
       : [
-          // The header row: the title and the animation chip at its height.
+          // The header row: the title.
           ...(chromeRects.title ? [{ ...chromeRects.title, header: true }] : []),
           // The legend, chip or open panel, is cleared on its best side (the
           // graph may sit beside it); the open panel is large, so in narrow
           // boxes it lies over the graph.
           ...(chromeRects.legend ? [{ ...chromeRects.legend, optional: !legendCollapsed }] : []),
-          ...(canAnimateTokens && width > 0 ? [{ x: width - 16 - CHIP_HEIGHT, y: 16, w: CHIP_HEIGHT, h: CHIP_HEIGHT, header: true }] : []),
           ...(pillRegion ? [pillRect(pillRegion)] : []),
         ];
   const fitKey = `${options.direction}|${types.join(',')}`;
@@ -359,7 +360,6 @@ export default function OcdfgView({
           options={deferredOptions}
           colors={colors}
           panZoom={!detail && !locked}
-          animate={animate}
           tokenLayerRef={tokensOn && canAnimateTokens ? tokenLayer : undefined}
           dimArcs={tokensOn && canAnimateTokens && flows.status === 'ready' && flows.tokens.count > 0}
           fitPadding={fitPadding}
@@ -437,8 +437,7 @@ export default function OcdfgView({
           }}
         >
           {/* No inset of its own: the title starts at the canvas's 16 px margin
-              like the panels, as tall as their collapsed chips (30 px) so it
-              lines up with the animation chip in the opposite corner. */}
+              like the panels, as tall as their collapsed chips (30 px). */}
           {title && (
             <div
               data-testid="ocdfg-title"
@@ -509,22 +508,33 @@ export default function OcdfgView({
             >
               {locked ? <UnlockIcon className="h-4 w-4" /> : <LockIcon className="h-4 w-4" />}
             </Button>
-            <Button
-              type="button"
-              variant={animate ? 'secondary' : 'outline'}
-              size="icon"
-              onClick={() => setAnimate((prev) => !prev)}
-              className="rounded-full h-9 w-9"
-              title={animate ? 'Disable edge animation' : 'Enable edge animation'}
-            >
-              <ZapIcon className="h-4 w-4" />
-            </Button>
+            {canAnimateTokens && (
+              // The token animation's panel (top right); one of it and the layout panel at a time.
+              <PillToggle
+                label="Animation"
+                open={animationOpen}
+                onToggle={() => {
+                  // Opening starts the animation (no extra "Animate" click);
+                  // closing leaves it running.
+                  if (!animationOpen) setTokensOn(true);
+                  setAnimationOpen(!animationOpen);
+                  setPanelOpen(false);
+                }}
+                running={tokensOn}
+                runningHint="the animation is on"
+              >
+                <Play className="h-4 w-4" />
+              </PillToggle>
+            )}
             {editable && (
               <Button
                 type="button"
                 variant={panelOpen ? 'secondary' : 'outline'}
                 size="icon"
-                onClick={() => setPanelOpen((prev) => !prev)}
+                onClick={() => {
+                  setPanelOpen((prev) => !prev);
+                  setAnimationOpen(false);
+                }}
                 className="rounded-full h-9 w-9"
                 title={panelOpen ? 'Close the layout settings' : 'Change the layout'}
                 aria-label="Change the layout"
@@ -548,12 +558,15 @@ export default function OcdfgView({
 
       {canAnimateTokens && (
         <AnimationPanel
-          // Always starts collapsed to its chip, whatever the size (like the handover's).
-          narrow
+          open={animationOpen}
+          onClose={() => setAnimationOpen(false)}
           pillRegion={pillRegion}
+          highlightType={hoverType}
           active={tokensOn}
-          onStart={() => setTokensOn(true)}
-          onStop={() => setTokensOn(false)}
+          onStop={() => {
+            setTokensOn(false);
+            setAnimationOpen(false);
+          }}
           state={flows}
           layer={tokenLayer}
           result={result}

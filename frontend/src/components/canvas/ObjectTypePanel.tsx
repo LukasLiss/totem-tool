@@ -22,8 +22,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { GLASS_SURFACE } from '@/react_component/orgamining/canvasSurface';
 import {
+  CANVAS_PANEL_SHELL,
   PANEL_CHIP_CHEVRON_CLASS,
   PANEL_CHIP_CLASS,
   PANEL_HEADER_CLASS,
@@ -63,15 +63,7 @@ export interface ObjectTypePanelProps {
   testId?: string;
 }
 
-const PANEL_SHELL: React.CSSProperties = {
-  ...GLASS_SURFACE,
-  border: '1px solid #E5E7EB',
-  borderRadius: 12,
-  boxShadow: '0 6px 16px rgba(15, 23, 42, 0.05)',
-  fontFamily: 'var(--font-primary, Inter, sans-serif)',
-  // Dashboard widgets centre their text (.grid-stack-item-content); the panel is always left-aligned.
-  textAlign: 'left',
-};
+const PANEL_SHELL = CANVAS_PANEL_SHELL;
 
 const ICON_BUTTON = PANEL_ICON_BUTTON_CLASS;
 
