@@ -103,6 +103,53 @@ describe('OcdfgView', () => {
     expect(onSizeChange).toHaveBeenCalled();
   });
 
+  it('ends the legend above the control pill when the pill is on its side', () => {
+    // happy-dom has no layout: give elements their parent as offset parent and
+    // a 1000 px wide canvas; heights and the pill's size stay 0.
+    const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetParent');
+    const originalWidth = Object.getOwnPropertyDescriptor(Element.prototype, 'clientWidth');
+    Object.defineProperty(HTMLElement.prototype, 'offsetParent', {
+      configurable: true,
+      get() {
+        return (this as HTMLElement).parentElement;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => 1000 });
+    try {
+      const legendColumn = (utils: ReturnType<typeof view>) =>
+        utils.getByTestId('ocdfg-legend').parentElement as HTMLElement;
+      localStorage.setItem('controlPill:ocdfg:default', JSON.stringify({ spot: 'bottom-left', collapsed: false }));
+      let utils = view();
+      // Canvas 0 px tall, pill at its bottom (top −16): the column keeps 16 + 8 px more free below.
+      expect(legendColumn(utils).style.maxHeight).toBe('calc(100% - 40px)');
+      cleanup();
+      localStorage.setItem('controlPill:ocdfg:default', JSON.stringify({ spot: 'bottom-right', collapsed: false }));
+      utils = view();
+      expect(legendColumn(utils).style.maxHeight).toBe('calc(100% - 32px)');
+    } finally {
+      localStorage.removeItem('controlPill:ocdfg:default');
+      if (original) Object.defineProperty(HTMLElement.prototype, 'offsetParent', original);
+      delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
+      if (originalWidth) Object.defineProperty(Element.prototype, 'clientWidth', originalWidth);
+    }
+  });
+
+  it('folds the per-type sliders into the object type panel', () => {
+    const { getByRole, queryByRole } = view();
+    expect(queryByRole('slider', { name: 'Minimum arc weight of order' })).toBeNull();
+    fireEvent.click(getByRole('button', { name: 'Unfold order settings' }));
+    expect(getByRole('slider', { name: 'Minimum arc weight of order' })).not.toBeNull();
+  });
+
+  it('shows a variant filter on the folded line in the variants view', () => {
+    const { getByRole, getByText } = view({ sliderMode: 'variants' });
+    fireEvent.click(getByRole('button', { name: 'Unfold order settings' }));
+    const slider = getByRole('slider', { name: 'Variants of order' });
+    fireEvent.keyDown(slider, { key: 'ArrowLeft' });
+    fireEvent.click(getByRole('button', { name: 'Fold order settings' }));
+    expect(getByText('1/2')).not.toBeNull();
+  });
+
   it('hides the arcs of a switched-off object type', () => {
     const { container, getByLabelText } = view();
     expect(container.querySelector('[data-arc-id="pick→ship@item"]')).not.toBeNull();

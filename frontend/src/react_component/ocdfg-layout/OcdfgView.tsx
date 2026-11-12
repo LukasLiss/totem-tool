@@ -12,9 +12,10 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, ty
 import { LockIcon, MinusIcon, PlusIcon, ScanIcon, SlidersHorizontal, UnlockIcon, ZapIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
-import { Switch } from '@/components/ui/switch';
 import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
-import { ControlPill, type PillSpot } from '@/components/canvas/ControlPill';
+import { ControlPill, type PillRegion, type PillSpot } from '@/components/canvas/ControlPill';
+import { roomBelowForPill } from '@/components/canvas/pillSpots';
+import { ObjectTypePanel } from '@/components/canvas/ObjectTypePanel';
 import { mapTypesToColors } from '@/utils/objectColors';
 import OcdfgLayoutStatusCard from '../OcdfgLayoutStatusCard';
 import Gallery from './Gallery';
@@ -29,17 +30,12 @@ import { useLayoutOptions, type SaveLayout } from './useLayoutOptions';
 import AnimationPanel from './AnimationPanel';
 import { useOcdfgFlows } from './useOcdfgFlows';
 
-const LEGEND_HEADER_BUTTON_STYLE = {
-  border: 'none',
-  background: 'transparent',
-  color: '#64748B',
-  fontSize: 12,
-  cursor: 'pointer',
-} as const;
 /** Screen space the legend column takes on the left of the canvas. */
 const LEGEND_ROOM = 360;
 const LEGEND_AUTO_COLLAPSE_WIDTH = 480;
 const DETAIL_PADDING = 16;
+/** How far the legend column reaches from the left edge: its 16 px offset plus the panel's widest 320 px. */
+const LEGEND_PANEL_REACH = 16 + 320;
 /** Free places for the control pill: the legend holds the top left, the animation panel the top right. */
 const OCDFG_PILL_SPOTS: readonly PillSpot[] = ['bottom-left', 'bottom-right', 'left', 'right'];
 
@@ -199,6 +195,10 @@ export default function OcdfgView({
   // --- toolbar state ----------------------------------------------------------
   const [locked, setLocked] = useState(initialInteractionLocked);
   const [animate, setAnimate] = useState(false);
+  // Where the control pill sits, so the legend (left) and the animation panel
+  // (right) end above it instead of running underneath.
+  const [pillRegion, setPillRegion] = useState<PillRegion | null>(null);
+  const legendRoomBelow = roomBelowForPill(pillRegion, true, { reach: LEGEND_PANEL_REACH });
 
   // --- token animation: objects replaying the log on their arcs ---------------
   // Its steps are only loaded while it is switched on.
@@ -214,14 +214,54 @@ export default function OcdfgView({
   });
   // null = not chosen by the user yet; the default then follows the width.
   const [legendCollapsedChoice, setLegendCollapsed] = useState<boolean | null>(null);
-  const [legendPosition, setLegendPosition] = useState({ x: 0, y: 0 });
-  const dragStart = useRef<{ x: number; y: number; startX: number; startY: number } | null>(null);
   const [hoverType, setHoverType] = useState<string | null>(null);
 
-  const setAllTypesVisible = useCallback(
-    (visible: boolean) =>
-      setVisibility((prev) => Object.fromEntries(Object.keys(prev).map((t) => [t, visible && available.has(t)]))),
-    [available],
+  // --- per-type filter, folded into the object type panel ----------------------
+  /** The legend slider's value of a type; fully open (no filter) when untouched. */
+  const sliderOf = (type: string) => sliderValue[type] ?? (sliderMode === 'variants' ? sliderMax[type] : 0);
+  const renderTypeFilter = (type: string) => {
+    const max = sliderMax[type];
+    if (max === undefined || max <= 0) return null;
+    const value = sliderOf(type);
+    // Thin and in the type's colour; its value sits on the type's line (typeFilterSummary).
+    // The coloured part is what stays: above the minimum weight, or the variants up to the thumb.
+    // (Class names written out in full, so Tailwind finds them.)
+    const colouring =
+      sliderMode === 'weight'
+        ? '[&_[data-slot=slider-track]]:bg-(--type-color) [&_[data-slot=slider-range]]:bg-slate-200'
+        : '[&_[data-slot=slider-track]]:bg-slate-200 [&_[data-slot=slider-range]]:bg-(--type-color)';
+    return (
+      <Slider
+        min={0}
+        max={max}
+        step={1}
+        value={[value]}
+        onValueChange={(values) => setSliderValue((prev) => ({ ...prev, [type]: values?.[0] ?? 0 }))}
+        disabled={!available.has(type)}
+        inverted={sliderMode === 'weight'}
+        thumbAriaLabel={sliderMode === 'weight' ? `Minimum arc weight of ${type}` : `Variants of ${type}`}
+        className={`${colouring} [&_[data-slot=slider-track]]:h-1 [&_[data-slot=slider-thumb]]:size-3 [&_[data-slot=slider-thumb]]:border-(--type-color)`}
+        style={{ '--type-color': colors[type] ?? '#64748b' } as React.CSSProperties}
+      />
+    );
+  };
+  /** The type's filter value for its line; `active` when it filters something. */
+  const typeFilterSummary = (type: string) => {
+    const max = sliderMax[type];
+    if (max === undefined || max <= 0) return null;
+    const value = sliderOf(type);
+    return sliderMode === 'weight'
+      ? { text: `≥ ${value}`, active: value > 0 }
+      : { text: `${value}/${max}`, active: value < max };
+  };
+  const resetTypeFilters = useCallback(
+    () =>
+      setSliderValue(() => {
+        const next: Record<string, number> = {};
+        for (const [type, max] of Object.entries(sliderMax)) next[type] = sliderMode === 'variants' ? max : 0;
+        return next;
+      }),
+    [sliderMax, sliderMode],
   );
   const anyTypeVisible = Object.values(visibility).some(Boolean);
   const hasActivities = (visibleGraph?.nodes ?? []).some((n) => n.kind === 'activity');
@@ -343,12 +383,12 @@ export default function OcdfgView({
           onMouseDown={(e) => e.stopPropagation()}
           style={{
             position: 'absolute',
-            top: 16 + legendPosition.y,
-            left: 16 + legendPosition.x,
+            top: 16,
+            left: 16,
             display: 'flex',
             flexDirection: 'column',
             gap: 16,
-            maxHeight: 'calc(100% - 32px)',
+            maxHeight: `calc(100% - ${16 + legendRoomBelow}px)`,
             zIndex: 15,
           }}
         >
@@ -368,140 +408,18 @@ export default function OcdfgView({
           )}
 
           {types.length > 0 && (
-            <div
-              style={{
-                background: '#FFFFFF',
-                border: '1px solid #E5E7EB',
-                borderRadius: 12,
-                padding: '12px 16px',
-                boxShadow: '0 6px 16px rgba(15, 23, 42, 0.05)',
-                fontFamily: 'var(--font-primary, Inter, sans-serif)',
-                maxHeight: '50vh',
-                overflowY: 'auto',
-                minWidth: 240,
-              }}
-              data-testid="ocdfg-legend"
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 8,
-                  marginBottom: legendCollapsed ? 0 : 8,
-                  fontWeight: 600,
-                  fontSize: 14,
-                  color: '#0F172A',
-                }}
-              >
-                <span
-                  style={{ cursor: 'grab' }}
-                  onPointerDown={(e) => {
-                    e.stopPropagation();
-                    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-                    dragStart.current = { x: e.clientX, y: e.clientY, startX: legendPosition.x, startY: legendPosition.y };
-                  }}
-                  onPointerMove={(e) => {
-                    const d = dragStart.current;
-                    if (!d) return;
-                    setLegendPosition({ x: d.startX + e.clientX - d.x, y: d.startY + e.clientY - d.y });
-                  }}
-                  onPointerUp={() => (dragStart.current = null)}
-                  onPointerCancel={() => (dragStart.current = null)}
-                >
-                  Object Types
-                </span>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  {!legendCollapsed && (
-                    <>
-                      <button type="button" onClick={() => setAllTypesVisible(true)} style={LEGEND_HEADER_BUTTON_STYLE}>
-                        All
-                      </button>
-                      <button type="button" onClick={() => setAllTypesVisible(false)} style={LEGEND_HEADER_BUTTON_STYLE}>
-                        None
-                      </button>
-                    </>
-                  )}
-                  <button type="button" onClick={() => setLegendCollapsed(!legendCollapsed)} style={LEGEND_HEADER_BUTTON_STYLE}>
-                    {legendCollapsed ? 'Expand' : 'Collapse'}
-                  </button>
-                </div>
-              </div>
-              {!legendCollapsed && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {types.map((type) => {
-                    const color = colors[type];
-                    const isAvailable = available.has(type);
-                    const visible = visibility[type] !== false;
-                    const max = sliderMax[type];
-                    const value = sliderValue[type] ?? (sliderMode === 'variants' ? max : 0);
-                    return (
-                      <div
-                        key={type}
-                        style={{ display: 'flex', flexDirection: 'column', gap: 4, paddingBottom: 6, borderBottom: '1px solid #E2E8F0' }}
-                        onMouseEnter={() => visible && setHoverType(type)}
-                        onMouseLeave={() => setHoverType(null)}
-                      >
-                        <div
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 10,
-                            justifyContent: 'space-between',
-                            opacity: isAvailable ? 1 : 0.4,
-                          }}
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                            <span
-                              aria-hidden
-                              style={{
-                                display: 'inline-block',
-                                width: 18,
-                                height: 18,
-                                borderRadius: '50%',
-                                background: color,
-                                border: '1px solid rgba(15, 23, 42, 0.12)',
-                                boxShadow: '0 4px 8px rgba(15, 23, 42, 0.18)',
-                              }}
-                            />
-                            <span style={{ fontSize: 13, color: '#475569', letterSpacing: '-0.01em' }}>{type}</span>
-                          </div>
-                          <Switch
-                            checked={visible}
-                            disabled={!isAvailable}
-                            onCheckedChange={(checked) => setVisibility((prev) => ({ ...prev, [type]: checked }))}
-                            aria-label={`Show ${type}`}
-                          />
-                        </div>
-                        {max !== undefined && max > 0 && (
-                          <div
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 10,
-                              opacity: isAvailable ? (visible ? 1 : 0.7) : 0.5,
-                            }}
-                          >
-                            <Slider
-                              min={0}
-                              max={max}
-                              step={1}
-                              value={[value]}
-                              onValueChange={(values) => setSliderValue((prev) => ({ ...prev, [type]: values?.[0] ?? 0 }))}
-                              disabled={!isAvailable}
-                              inverted={sliderMode === 'weight'}
-                            />
-                            <span style={{ fontSize: 12, color: '#475569', minWidth: 80, textAlign: 'right' }}>
-                              {sliderMode === 'weight' ? `Min Weight: ${value}` : `${value}/${max} variants`}
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+            <ObjectTypePanel
+              testId="ocdfg-legend"
+              types={types.map((type) => ({ type, color: colors[type], available: available.has(type) }))}
+              visibility={visibility}
+              onVisibilityChange={setVisibility}
+              onHighlight={setHoverType}
+              renderDetail={renderTypeFilter}
+              detailSummary={typeFilterSummary}
+              menuItems={[{ label: sliderMode === 'weight' ? 'Reset min. weights' : 'Reset variant filters', onSelect: resetTypeFilters }]}
+              collapsed={legendCollapsed}
+              onCollapsedChange={setLegendCollapsed}
+            />
           )}
 
         </div>
@@ -509,7 +427,11 @@ export default function OcdfgView({
 
       {chrome && (
         // The legend holds the top-left corner and the animation panel the top right.
-        <ControlPill spots={OCDFG_PILL_SPOTS} storageKey={`ocdfg:${layoutScope ?? 'default'}`}>
+        <ControlPill
+          spots={OCDFG_PILL_SPOTS}
+          storageKey={`ocdfg:${layoutScope ?? 'default'}`}
+          onRegionChange={setPillRegion}
+        >
             <Button type="button" variant="outline" size="icon" onClick={() => canvasRef.current?.zoom(1 / 1.25)} className="rounded-full h-9 w-9" title="Zoom in">
               <PlusIcon className="h-4 w-4" />
             </Button>
@@ -568,7 +490,9 @@ export default function OcdfgView({
 
       {canAnimateTokens && (
         <AnimationPanel
-          narrow={width > 0 && width < 2.5 * LEGEND_ROOM}
+          // Always starts collapsed to its chip, whatever the size (like the handover's).
+          narrow
+          pillRegion={pillRegion}
           active={tokensOn}
           onStart={() => setTokensOn(true)}
           onStop={() => setTokensOn(false)}

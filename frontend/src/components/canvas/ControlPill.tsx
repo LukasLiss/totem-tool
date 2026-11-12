@@ -13,15 +13,23 @@
  *    that spot. Clicking the grip collapses the bar to just the grip. Spot and
  *    collapsed state are kept per viewer in the browser under `storageKey`.
  */
-import React, { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { GripHorizontal, GripVertical } from 'lucide-react';
 import { GLASS_SURFACE } from '@/react_component/orgamining/canvasSurface';
-import { gripAtEnd, isVerticalSpot, nearestSpot, type PillSpot } from './pillSpots';
+import {
+  PILL_MARGIN,
+  gripAtEnd,
+  isVerticalSpot,
+  nearestSpot,
+  pillRegion,
+  type PillRegion,
+  type PillSpot,
+} from './pillSpots';
 
-export type { PillSpot } from './pillSpots';
+export type { PillRegion, PillSpot } from './pillSpots';
 
 /** Distance of the pill from the canvas edges. */
-const MARGIN = 16;
+const MARGIN = PILL_MARGIN;
 /** Pointer travel (px) before a press on the grip counts as a drag instead of a click. */
 const DRAG_THRESHOLD = 4;
 const GLIDE = 'transform 180ms ease-out';
@@ -102,6 +110,12 @@ export interface ControlPillProps {
   zIndex?: number;
   /** Extra attributes for the pill's root, e.g. a canvas' `data-*` marker for its controls. */
   rootProps?: React.HTMLAttributes<HTMLDivElement> & Record<`data-${string}`, string | boolean | undefined>;
+  /**
+   * Movable pills: told where the pill sits whenever that changes (after a
+   * drop, collapsing, resizing; null once it is gone), so other panels can
+   * stay clear of it.
+   */
+  onRegionChange?: (region: PillRegion | null) => void;
 }
 
 export function ControlPill({ spots, ...props }: ControlPillProps) {
@@ -162,6 +176,7 @@ function MovablePill({
   insetTop = 0,
   zIndex = 16,
   rootProps,
+  onRegionChange,
 }: ControlPillProps & { spots: readonly PillSpot[] }) {
   const initialSpot = defaultSpot && spots.includes(defaultSpot) ? defaultSpot : spots[0];
   const [state, setState] = useState<PillState>(() =>
@@ -229,6 +244,51 @@ function MovablePill({
     if (drag.current?.moved) followCursor();
     else if (glideFrom.current) glide();
   }, [spot, dragSpot, followCursor, glide]);
+
+  // --- region reporting ---------------------------------------------------------
+  // From the spot and the sizes, not the measured box, so a running glide or
+  // drag transform does not count; nothing is reported while dragging.
+  const onRegionChangeRef = useRef(onRegionChange);
+  onRegionChangeRef.current = onRegionChange;
+  const lastRegion = useRef('');
+  const report = useCallback(() => {
+    const notify = onRegionChangeRef.current;
+    const bar = barRef.current;
+    const canvas = rootRef.current?.offsetParent as HTMLElement | null;
+    if (!notify || !bar || !canvas || drag.current?.moved) return;
+    const region = pillRegion(
+      spot,
+      { width: bar.offsetWidth, height: bar.offsetHeight },
+      { width: canvas.clientWidth, height: canvas.clientHeight },
+      insetTop,
+    );
+    const key = JSON.stringify(region);
+    if (key === lastRegion.current) return;
+    lastRegion.current = key;
+    notify(region);
+  }, [spot, insetTop]);
+
+  useLayoutEffect(() => {
+    report();
+  }, [report, collapsed, dragSpot]);
+
+  useEffect(() => {
+    const bar = barRef.current;
+    const canvas = rootRef.current?.offsetParent;
+    if (!bar || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => report());
+    observer.observe(bar);
+    if (canvas) observer.observe(canvas);
+    return () => observer.disconnect();
+  }, [report]);
+
+  useEffect(
+    () => () => {
+      lastRegion.current = '';
+      onRegionChangeRef.current?.(null);
+    },
+    [],
+  );
 
   /** The allowed spot nearest to the cursor, in the canvas' coordinates. */
   const spotUnderCursor = (d: Drag): PillSpot | null => {

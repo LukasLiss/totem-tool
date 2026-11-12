@@ -3,7 +3,7 @@
 import { cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ControlPill } from '../ControlPill';
-import { isVerticalSpot, nearestSpot, type PillSpot } from '../pillSpots';
+import { isVerticalSpot, nearestSpot, pillRegion, roomBelowForPill, type PillSpot } from '../pillSpots';
 
 const ALL: PillSpot[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right', 'left', 'right'];
 const box = { width: 1000, height: 600 };
@@ -23,6 +23,38 @@ describe('nearestSpot', () => {
 
   it('turns the pill vertical only at the side centres', () => {
     expect(ALL.filter(isVerticalSpot)).toEqual(['left', 'right']);
+  });
+});
+
+describe('pill region and the room panels keep free for it', () => {
+  const size = { width: 300, height: 48 };
+  const canvas = { width: 1000, height: 600 };
+
+  it('places the pill box from its spot', () => {
+    expect(pillRegion('bottom-left', size, canvas)).toMatchObject({ top: 536, left: 16 });
+    expect(pillRegion('bottom-right', size, canvas)).toMatchObject({ top: 536, left: 684 });
+    expect(pillRegion('top-right', size, canvas, 40)).toMatchObject({ top: 56, left: 684 });
+    expect(pillRegion('left', { width: 48, height: 300 }, canvas)).toMatchObject({ top: 150, left: 16 });
+  });
+
+  it('makes a panel on the pill side end above it', () => {
+    // 600 − 536 + 8: the panel stops 8 px above the pill.
+    expect(roomBelowForPill(pillRegion('bottom-left', size, canvas), true)).toBe(72);
+    expect(roomBelowForPill(pillRegion('left', { width: 48, height: 300 }, canvas), true)).toBe(458);
+    expect(roomBelowForPill(pillRegion('bottom-right', size, canvas), false)).toBe(72);
+  });
+
+  it('leaves a panel alone when the pill is elsewhere', () => {
+    expect(roomBelowForPill(null, true)).toBe(16);
+    expect(roomBelowForPill(pillRegion('bottom-right', size, canvas), true)).toBe(16);
+    expect(roomBelowForPill(pillRegion('top-right', size, canvas), false)).toBe(16);
+    expect(roomBelowForPill(pillRegion('bottom-left', size, canvas), false, { fallback: 20 })).toBe(20);
+  });
+
+  it('counts a wide bottom pill reaching under the panel', () => {
+    const wide = pillRegion('bottom-right', { width: 800, height: 48 }, canvas); // left = 184
+    expect(roomBelowForPill(wide, true, { reach: 336 })).toBe(72);
+    expect(roomBelowForPill(wide, true, { reach: 150 })).toBe(16);
   });
 });
 
@@ -152,6 +184,25 @@ describe('ControlPill', () => {
     cleanup();
     localStorage.setItem('controlPill:test', JSON.stringify({ spot: 'top-left', collapsed: false }));
     expect(movablePill().root.dataset.pillSpot).toBe('bottom-left');
+  });
+
+  it('reports where it sits after a drop, not while dragging', () => {
+    const onRegionChange = vi.fn();
+    const { root, grip, bar, at } = draggablePill({ onRegionChange });
+    const canvas = root.offsetParent as HTMLElement;
+    Object.defineProperty(canvas, 'clientWidth', { value: 1000, configurable: true });
+    Object.defineProperty(canvas, 'clientHeight', { value: 600, configurable: true });
+    Object.defineProperty(bar, 'offsetWidth', { value: 300, configurable: true });
+    Object.defineProperty(bar, 'offsetHeight', { value: 48, configurable: true });
+    onRegionChange.mockClear();
+
+    fireEvent.pointerDown(grip, { button: 0, ...at(30, 560) });
+    fireEvent.pointerMove(grip, at(950, 580));
+    expect(onRegionChange).not.toHaveBeenCalled();
+    fireEvent.pointerUp(grip, at(950, 580));
+    expect(onRegionChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ spot: 'bottom-right', top: 536, left: 684, canvasHeight: 600 }),
+    );
   });
 
   it('passes canvas markers to its root', () => {

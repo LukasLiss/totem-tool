@@ -35,7 +35,9 @@ function view(props: Partial<React.ComponentProps<typeof OcdfgView>> = {}) {
   return render(<OcdfgView graph={graph} height={600} sliderMode="weight" layoutDefaults={DEFAULT_OPTIONS} {...props} />);
 }
 
+/** Opens the (always collapsed) panel and clicks Animate. */
 async function startAnimation(utils: ReturnType<typeof view>) {
+  fireEvent.click(utils.getByRole('button', { name: 'Show Animation' }));
   await act(async () => {
     fireEvent.click(utils.getByRole('button', { name: 'Animate' }));
   });
@@ -52,10 +54,40 @@ afterEach(() => cleanup());
 
 describe('OcdfgView animation panel', () => {
   it('is offered only for a view of an event log', () => {
-    expect(view().queryByTestId('ocdfg-animation-panel')).toBeNull();
+    expect(view().queryByRole('button', { name: 'Show Animation' })).toBeNull();
     cleanup();
     const utils = view({ fileId: 7 });
-    expect(utils.queryByTestId('ocdfg-animation-panel')).not.toBeNull();
+    expect(utils.queryByRole('button', { name: 'Show Animation' })).not.toBeNull();
+  });
+
+  it('has the same header and close button as the object type panel', () => {
+    const utils = view({ fileId: 7 });
+    fireEvent.click(utils.getByRole('button', { name: 'Show Animation' }));
+    const animationClose = utils.getByRole('button', { name: 'Hide Animation' });
+    const typesClose = utils.getByRole('button', { name: 'Hide object types' });
+    expect(animationClose.className).toBe(typesClose.className);
+    expect(animationClose.parentElement!.className).toBe(typesClose.parentElement!.className);
+  });
+
+  it('collapses to a play button of the object type chip’s size, frame and corners', () => {
+    const utils = view({ fileId: 7 });
+    fireEvent.click(utils.getByRole('button', { name: 'Hide object types' }));
+    const animationChip = utils.getByRole('button', { name: 'Show Animation' });
+    const typesChip = utils.getByRole('button', { name: 'Show object types' });
+    // Just the play icon, no label.
+    expect(animationChip.textContent).toBe('');
+    expect(animationChip.querySelector('svg')).not.toBeNull();
+    for (const chip of [animationChip, typesChip]) expect(chip.className).toContain('h-[30px]');
+    expect(animationChip.className).toContain('w-[30px]');
+    for (const prop of ['borderRadius', 'border', 'boxShadow'] as const) {
+      expect(animationChip.style[prop]).toBe(typesChip.style[prop]);
+    }
+  });
+
+  it('always starts collapsed to its chip', () => {
+    const utils = view({ fileId: 7 });
+    expect(utils.queryByTestId('ocdfg-animation-panel')).toBeNull();
+    fireEvent.click(utils.getByRole('button', { name: 'Show Animation' }));
     expect(utils.queryByRole('button', { name: 'Animate' })).not.toBeNull();
   });
 

@@ -19,6 +19,14 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 import { GLASS_SURFACE } from "./canvasSurface";
+import {
+  PANEL_CHIP_CHEVRON_CLASS,
+  PANEL_CHIP_CLASS,
+  PANEL_CHIP_ICON_CLASS,
+  PANEL_HEADER_CLASS,
+  PANEL_ICON_BUTTON_CLASS,
+  PANEL_TITLE_CLASS,
+} from "@/components/canvas/panelHeader";
 import type { Size } from "./canvasGeometry";
 
 /**
@@ -82,6 +90,12 @@ const PANEL_SHELL: React.CSSProperties = {
  * `plainHeading` swaps the small-caps title for the plain header of the
  * toolbar popovers (centrality, download): sentence case, no icon, a divider
  * below. The icon still marks the collapsed chip.
+ *
+ * `canvasHeader` (with `plainHeading`) uses the header and the collapsed chip
+ * of the shared canvas panels instead (components/canvas/panelHeader: same
+ * height, padding, ✕ button and chip size as the object type panel; the chip
+ * is the icon alone, or icon, `collapsedLabel` and chevron). Opt-in, so the
+ * explorers' panels keep their look.
  */
 export function FloatingPanel({
   title,
@@ -91,6 +105,7 @@ export function FloatingPanel({
   style,
   collapsedLabel,
   plainHeading = false,
+  canvasHeader = false,
 }: {
   title: string;
   icon?: React.ReactNode;
@@ -100,6 +115,7 @@ export function FloatingPanel({
   /** Chip text while collapsed, e.g. "4 object types". Omit for an icon-only chip. */
   collapsedLabel?: string;
   plainHeading?: boolean;
+  canvasHeader?: boolean;
 }) {
   // Without either an icon or a label the chip would be an empty button.
   const chipLabel = collapsedLabel ?? (icon ? null : title);
@@ -118,6 +134,30 @@ export function FloatingPanel({
     onPointerDown: (e: React.PointerEvent) => e.stopPropagation(),
     onMouseDown: (e: React.MouseEvent) => e.stopPropagation(),
   };
+
+  if (!open && canvasHeader) {
+    // The chip of the shared canvas panels: the object type panel's size,
+    // frame and corners; just the icon unless a `collapsedLabel` is given.
+    return (
+      <button
+        type="button"
+        onClick={toggle}
+        title={`Show ${title}`}
+        aria-label={`Show ${title}`}
+        {...stop}
+        style={{ ...PANEL_SHELL, ...style }}
+        className={chipLabel != null ? PANEL_CHIP_CLASS : PANEL_CHIP_ICON_CLASS}
+      >
+        {icon}
+        {chipLabel != null && (
+          <>
+            <span style={{ fontVariantNumeric: "tabular-nums" }}>{chipLabel}</span>
+            <ChevronDown className={PANEL_CHIP_CHEVRON_CLASS} />
+          </>
+        )}
+      </button>
+    );
+  }
 
   if (!open) {
     return (
@@ -165,18 +205,33 @@ export function FloatingPanel({
           ...style,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px 8px", borderBottom: "1px solid #F1F5F9" }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: "#0F172A" }}>{title}</span>
-          <button
-            type="button"
-            onClick={toggle}
-            title={`Hide ${title}`}
-            aria-label={`Hide ${title}`}
-            style={{ background: "none", border: "none", cursor: "pointer", padding: 2, color: "#64748b", display: "flex", alignItems: "center" }}
-          >
-            <X style={{ width: 14, height: 14 }} />
-          </button>
-        </div>
+        {canvasHeader ? (
+          <div className={PANEL_HEADER_CLASS}>
+            <span className={PANEL_TITLE_CLASS}>{title}</span>
+            <button
+              type="button"
+              onClick={toggle}
+              title={`Hide ${title}`}
+              aria-label={`Hide ${title}`}
+              className={PANEL_ICON_BUTTON_CLASS}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ) : (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px 8px", borderBottom: "1px solid #F1F5F9" }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: "#0F172A" }}>{title}</span>
+            <button
+              type="button"
+              onClick={toggle}
+              title={`Hide ${title}`}
+              aria-label={`Hide ${title}`}
+              style={{ background: "none", border: "none", cursor: "pointer", padding: 2, color: "#64748b", display: "flex", alignItems: "center" }}
+            >
+              <X style={{ width: 14, height: 14 }} />
+            </button>
+          </div>
+        )}
         <div style={{ padding: "10px 14px" }}>{children}</div>
       </div>
     );

@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import { FloatingPanel } from '../orgamining/canvas';
+import { roomBelowForPill, type PillRegion } from '@/components/canvas/pillSpots';
 import {
   ACTIVITY_H,
   ACTIVITY_METRICS,
@@ -102,7 +103,16 @@ function loadAnimPanelSize(): AnimPanelSize {
  * so dragging left widens it and dragging down makes the chart taller, until
  * the panel reaches the bottom of the view. The size is stored when the drag ends.
  */
-function AnimPanelResizeGrip({ size, onResize }: { size: AnimPanelSize; onResize: (size: AnimPanelSize) => void }) {
+function AnimPanelResizeGrip({
+  size,
+  onResize,
+  bottomClearance,
+}: {
+  size: AnimPanelSize;
+  onResize: (size: AnimPanelSize) => void;
+  /** Room kept free below the panel (the view's edge, or the control pill). */
+  bottomClearance: number;
+}) {
   const drag = useRef<{ x: number; y: number; start: AnimPanelSize; last: AnimPanelSize; maxChart: number } | null>(null);
   const endDrag = () => {
     const d = drag.current;
@@ -128,7 +138,7 @@ function AnimPanelResizeGrip({ size, onResize }: { size: AnimPanelSize; onResize
         const panel = e.currentTarget.offsetParent as HTMLElement | null;
         const view = panel?.offsetParent as HTMLElement | null;
         const room =
-          panel && view ? view.clientHeight - ANIM_PANEL_TOP - ANIM_PANEL_BOTTOM_CLEARANCE - panel.scrollHeight : Infinity;
+          panel && view ? view.clientHeight - ANIM_PANEL_TOP - bottomClearance - panel.scrollHeight : Infinity;
         drag.current = { x: e.clientX, y: e.clientY, start: size, last: size, maxChart: size.chartHeight + Math.max(0, room) };
       }}
       onPointerMove={(e) => {
@@ -346,7 +356,7 @@ function ActivityChart({
 
 // --- the panel -----------------------------------------------------------------
 export interface AnimationPanelProps {
-  /** Start collapsed to a chip (small views), like the handover's panel. */
+  /** Start collapsed to its chip; the DFG always does, like the handover's panel. */
   narrow: boolean;
   /** Whether the animation is on (its steps are loaded while it is). */
   active: boolean;
@@ -359,10 +369,13 @@ export interface AnimationPanelProps {
   colors: Record<string, string>;
   /** Variants view: the legend's number of variants per type; objects of later variants are not animated. */
   variantLimit?: Record<string, number>;
+  /** Where the view's control pill sits: the panel ends above it when it is below the panel. */
+  pillRegion?: PillRegion | null;
 }
 
 export default function AnimationPanel({
   narrow,
+  pillRegion = null,
   active,
   onStart,
   onStop,
@@ -603,24 +616,34 @@ export default function AnimationPanel({
     );
   }
 
+  // The panel's reach from the right edge: its offset, content width and padding.
+  const bottomClearance = roomBelowForPill(pillRegion, false, {
+    fallback: ANIM_PANEL_BOTTOM_CLEARANCE,
+    reach: 16 + panelSize.width + 30,
+  });
+
   return (
     <FloatingPanel
       title="Animation"
       icon={<Play style={{ width: 13, height: 13, color: '#64748b' }} />}
       narrow={narrow}
       plainHeading
+      // Same header as the object type panel.
+      canvasHeader
       style={{
         position: 'absolute',
         top: ANIM_PANEL_TOP,
         right: 16,
         zIndex: 13,
-        maxHeight: `calc(100% - ${ANIM_PANEL_TOP + ANIM_PANEL_BOTTOM_CLEARANCE}px)`,
+        maxHeight: `calc(100% - ${ANIM_PANEL_TOP + bottomClearance}px)`,
       }}
     >
       <div className="flex flex-col gap-2" style={{ width: panelSize.width }} data-testid="ocdfg-animation-panel">
         {body}
       </div>
-      {tokens && tokens.count > 0 && <AnimPanelResizeGrip size={panelSize} onResize={setPanelSize} />}
+      {tokens && tokens.count > 0 && (
+        <AnimPanelResizeGrip size={panelSize} onResize={setPanelSize} bottomClearance={bottomClearance} />
+      )}
     </FloatingPanel>
   );
 }

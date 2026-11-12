@@ -5,6 +5,60 @@
 
 export type PillSpot = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'left' | 'right';
 
+/** Distance of a movable pill from the canvas edges. */
+export const PILL_MARGIN = 16;
+
+/** Where a movable pill sits in its canvas (px, relative to the canvas' top left). */
+export interface PillRegion {
+  spot: PillSpot;
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+  /** The canvas' size, so panels can tell how much room the pill leaves them. */
+  canvasWidth: number;
+  canvasHeight: number;
+}
+
+/** The pill's box at `spot` from its size and the canvas' size (transforms such as a glide left out). */
+export function pillRegion(
+  spot: PillSpot,
+  size: { width: number; height: number },
+  canvas: { width: number; height: number },
+  insetTop = 0,
+): PillRegion {
+  const top =
+    spot === 'top-left' || spot === 'top-right'
+      ? PILL_MARGIN + insetTop
+      : spot === 'bottom-left' || spot === 'bottom-right'
+        ? canvas.height - PILL_MARGIN - size.height
+        : (canvas.height - size.height) / 2;
+  const left = spot === 'top-left' || spot === 'bottom-left' || spot === 'left' ? PILL_MARGIN : canvas.width - PILL_MARGIN - size.width;
+  return { spot, top, left, width: size.width, height: size.height, canvasWidth: canvas.width, canvasHeight: canvas.height };
+}
+
+/**
+ * Room (px) a panel anchored at the top of the canvas must keep free at the
+ * bottom so it ends `gap` above the pill — or `fallback` when the pill is not
+ * below it. `onLeft` says which side the panel is on; a pill on that side
+ * (corner or edge middle) is below it, and so is one reaching under the
+ * panel's `reach` (its farthest edge from that side, in px).
+ */
+export function roomBelowForPill(
+  region: PillRegion | null,
+  onLeft: boolean,
+  { gap = 8, fallback = PILL_MARGIN, reach = 0 }: { gap?: number; fallback?: number; reach?: number } = {},
+): number {
+  if (!region) return fallback;
+  const sameSide = onLeft
+    ? region.spot === 'bottom-left' || region.spot === 'left'
+    : region.spot === 'bottom-right' || region.spot === 'right';
+  const reachesUnder = reach > 0 && (onLeft ? region.left < reach : region.left + region.width > region.canvasWidth - reach);
+  const below = sameSide || ((region.spot === 'bottom-left' || region.spot === 'bottom-right') && reachesUnder);
+  if (!below) return fallback;
+  return Math.max(fallback, region.canvasHeight - region.top + gap);
+}
+
 /** The middle of the left or right edge holds the pill vertically; the corners horizontally. */
 export const isVerticalSpot = (spot: PillSpot) => spot === 'left' || spot === 'right';
 
