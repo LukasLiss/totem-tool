@@ -16,8 +16,12 @@ export const ActivityDelayEditor: React.FC<Props> = ({ delays, onUpdate }) => {
       <CardContent className="pt-4">
         <p className="text-xs text-muted-foreground mb-4">
           Empirical distribution of the time between an event becoming possible
-          (all its direct predecessors have occurred) and its occurrence. The
-          simulation draws each delay directly from these observed values. Drag
+          (all its direct predecessors have occurred) and its occurrence. For
+          activities performed by resources with a calendar, the delay is
+          working time: hours in which those resources never work (nights,
+          weekends) are left out and added back by the simulation wherever a
+          drawn delay falls. The simulation draws each delay directly from these
+          observed values. Drag
           the handles (or use the presets) to restrict the range the simulation
           draws from; values outside it are excluded. Activities that only start
           an execution have no delay and are not listed.

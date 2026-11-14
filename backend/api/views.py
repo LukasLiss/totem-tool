@@ -37,7 +37,7 @@ from .simulation_cooldowns import (
     serialize_cooldowns,
 )
 from totem_lib.simulation.utils.process_area import ProcessArea
-from totem_lib.simulation.utils.basic_simulation_statistics import variant_arrival_distribution as compute_variant_arrival_distribution, resource_distribution_of_variants, activity_delay_distribution
+from totem_lib.simulation.utils.basic_simulation_statistics import variant_arrival_distribution as compute_variant_arrival_distribution, resource_distribution_of_variants
 from totem_lib.simulation.utils.resource_constraints import generate_resource_constraints
 from totem_lib.simulation.utils.resource_calendar import (
     discover_shift_patterns,
@@ -3214,11 +3214,6 @@ def get_simulation_details(request):
         # Compute resource distribution
         res_dist = resource_distribution_of_variants(filtered_ocel, variants, ocel.obj_type_map)
 
-        # Inter-activity delays of the duration model (same for both modes)
-        serialized_delays = serialize_activity_delays(
-            activity_delay_distribution(filtered_ocel)
-        )
-
         # Compute constraints
         _report_progress(progress_id, _SIM_DETAILS_STEPS, 3)
         per_variant_constraints, fallback_constraints = generate_resource_constraints(
@@ -3296,6 +3291,13 @@ def get_simulation_details(request):
             )
         )
         serialized_cooldowns = serialize_cooldowns(cooldown_dist)
+
+        # Inter-activity delays of the duration model (same for both modes), in
+        # the working time bounded by the calendars mined above
+        activity_delays, _ = OCProcessAreaSimulationModel.discover_activity_delays(
+            filtered_ocel, ocel.obj_type_map, serialized_type_calendars
+        )
+        serialized_delays = serialize_activity_delays(activity_delays)
 
         # Share of each resource type's capacity left for the process area; the
         # rest is reserved for its work outside the area (unfiltered log).

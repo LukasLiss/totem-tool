@@ -137,7 +137,8 @@ class ObjectStructureVariant:
     ``generate_resource_constraints`` consume it unchanged.
 
     Attributes:
-        id: The ``structure_key`` (isomorphism-invariant hash) of the structure.
+        id: The ``structure_key`` (Weisfeiler-Lehman hash) of the structure,
+            suffixed with ``#<n>`` when non-isomorphic structures share a hash.
         support: Number of connected components observed with this structure.
         executions: ``[[event_id, ...], ...]`` — one linearized event-id list per
             component, as the per-variant statistics expect.
@@ -184,6 +185,11 @@ class ObjectStructureVariant:
         return graph
 
 
+def _same_type(n1, n2):
+    """Node matcher for typed object graphs."""
+    return n1.get("type") == n2.get("type")
+
+
 def _mean_activity_occurrences(executions):
     """Mean number of occurrences per activity over the given executions."""
     totals = Counter()
@@ -196,8 +202,10 @@ def find_object_structure_variants(ocel):
     """Discover the object-structure variants of ``ocel`` (advanced-sim arrival units).
 
     Groups the connected components (via :func:`extract_state_space_executions`)
-    by their isomorphism-invariant ``structure_key`` and wraps each cluster in an
-    :class:`ObjectStructureVariant`. This is the advanced-mode counterpart of
+    by isomorphism of their typed object graphs and wraps each class in an
+    :class:`ObjectStructureVariant`. The Weisfeiler-Lehman ``structure_key`` only
+    pre-buckets the components; within a bucket, an exact ``nx.is_isomorphic``
+    test separates non-isomorphic structures that share a hash. This is the advanced-mode counterpart of
     ``find_object_variants_connected_component`` — computed once, up front, and
     then fed to the same per-variant model-building statistics.
 
@@ -207,20 +215,31 @@ def find_object_structure_variants(ocel):
     Returns:
         A list of ``ObjectStructureVariant``, sorted by descending support.
     """
-    grouped = defaultdict(list)
+    buckets = defaultdict(list)
     for execution in extract_state_space_executions(ocel):
-        grouped[execution.structure_key].append(execution)
+        classes = buckets[execution.structure_key]
+        for group in classes:
+            if nx.is_isomorphic(
+                execution.object_graph,
+                group[0].object_graph,
+                node_match=_same_type,
+            ):
+                group.append(execution)
+                break
+        else:
+            classes.append([execution])
 
     variants = [
         ObjectStructureVariant(
-            id=key,
+            id=key if index == 0 else f"{key}#{index}",
             support=len(group),
             executions=[execution.event_ids for execution in group],
             object_graph=group[0].object_graph,
             signature=group[0].signature,
             activity_occurrences=_mean_activity_occurrences(group),
         )
-        for key, group in grouped.items()
+        for key, classes in buckets.items()
+        for index, group in enumerate(classes)
     ]
     variants.sort(key=lambda v: v.support, reverse=True)
     return variants

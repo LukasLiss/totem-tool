@@ -159,6 +159,40 @@ def test_structure_variants_cluster_by_isomorphism():
     assert set(nx.get_node_attributes(skeleton, "type").values()) == {"Order", "Item"}
 
 
+def test_structure_variants_split_wl_hash_collisions():
+    """Non-isomorphic structures with the same WL hash are separate variants.
+
+    K_{3,3} and the triangular prism are both connected 3-regular graphs on six
+    nodes, so 1-WL cannot distinguish them; only the exact isomorphism test can.
+    """
+    k33 = [(a, b) for a in "abc" for b in "def"]
+    prism = [
+        ("a", "b"),
+        ("b", "c"),
+        ("c", "a"),
+        ("d", "e"),
+        ("e", "f"),
+        ("f", "d"),
+        ("a", "d"),
+        ("b", "e"),
+        ("c", "f"),
+    ]
+    events, objects, t = [], [], 0
+    for prefix, edges in (("x", k33), ("y", prism), ("z", prism)):
+        objects += [_object(f"{prefix}{n}", "Order") for n in "abcdef"]
+        for u, v in edges:
+            t += 1
+            events.append(_event(f"e{t}", "Link", t, [f"{prefix}{u}", f"{prefix}{v}"]))
+    ocel = make_ocel(events, objects)
+    executions = extract_state_space_executions(ocel)
+    assert len({execution.structure_key for execution in executions}) == 1
+
+    variants = find_object_structure_variants(ocel)
+
+    assert sorted(v.support for v in variants) == [1, 2]
+    assert len({v.id for v in variants}) == 2
+
+
 def test_structure_variant_activity_occurrences_are_observed_means():
     """Activity occurrences of a structure are averaged over its observed
     executions."""
