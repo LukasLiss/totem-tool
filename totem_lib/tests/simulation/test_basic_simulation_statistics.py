@@ -22,8 +22,10 @@ from tests.assets.ocel_helpers import obj as _object
 from totem_lib.simulation.utils.basic_simulation_statistics import (
     activity_delay_distribution,
     resource_distribution_of_variants,
+    usual_resource_types,
     variant_arrival_distribution,
 )
+from totem_lib.simulation.utils.resource_calendar import WEEKDAYS
 from totem_lib.variants.ocvariants import Variant, Variants
 
 UTC = dt.timezone.utc
@@ -203,3 +205,62 @@ def test_samples_are_pooled_per_activity_across_instances():
 
     assert sorted(delays["B"]) == [100, 500]
     assert "A" not in delays
+
+
+# --- activity_delay_distribution in working time ---
+
+
+def _day_shift(start=8, end=17):
+    """Mon-Fri ``[start, end)`` binary window."""
+    window = {day: [0.0] * 24 for day in WEEKDAYS}
+    for day in WEEKDAYS[:5]:
+        for h in range(start, end):
+            window[day][h] = 1.0
+    return window
+
+
+def test_delay_in_working_window_leaves_out_the_night():
+    """Enabled Monday 16:30, done Tuesday 08:30 under an 08-17 window: half an
+    hour before closing plus half an hour after opening, not 16 hours."""
+    events = [
+        _event("e1", "A", _ts(2024, 1, 1, 16, 30), ["o1"]),
+        _event("e2", "B", _ts(2024, 1, 2, 8, 30), ["o1"]),
+    ]
+    ocel = make_ocel(events, [_object("o1", "Order")])
+
+    delays = activity_delay_distribution(ocel, {"B": _day_shift()})
+
+    assert delays == {"B": [3600]}
+
+
+def test_delay_without_window_stays_wall_clock():
+    """Only activities with a window are measured in working time."""
+    events = [
+        _event("e1", "A", _ts(2024, 1, 1, 16, 30), ["o1"]),
+        _event("e2", "B", _ts(2024, 1, 2, 8, 30), ["o1"]),
+    ]
+    ocel = make_ocel(events, [_object("o1", "Order")])
+
+    delays = activity_delay_distribution(ocel, {"A": _day_shift()})
+
+    assert delays == {"B": [16 * 3600]}
+
+
+# --- usual_resource_types ---
+
+
+def test_usual_resource_types_take_the_most_frequent_type_set():
+    """Send uses both types twice and one type once; Note never uses a
+    resource and gets no entry."""
+    events = [
+        _event("e1", "Send", 0, ["o1"], ["s1", "w1"]),
+        _event("e2", "Send", 10, ["o2"], ["s1", "w2"]),
+        _event("e3", "Send", 20, ["o3"], ["s1"]),
+        _event("e4", "Note", 30, ["o1"], []),
+    ]
+    objects = [_object(o, "Order") for o in ("o1", "o2", "o3")]
+    type_map = {"s1": "Shipment", "w1": "Warehouse", "w2": "Warehouse"}
+
+    usual = usual_resource_types(make_ocel(events, objects), type_map)
+
+    assert usual == {"Send": ["Shipment", "Warehouse"]}

@@ -20,6 +20,9 @@ import networkx as nx
 import numpy as np
 import pytest
 
+from tests.assets.ocel_helpers import event as _ev
+from tests.assets.ocel_helpers import make_ocel as _mk
+from tests.assets.ocel_helpers import obj as _ob
 from totem_lib.simulation.simulation import (
     MIN_EVENT_SPACING_S,
     OCProcessAreaSimulationConfiguration,
@@ -27,6 +30,7 @@ from totem_lib.simulation.simulation import (
     VariantPlayoutStrategy,
     _available_queues,
     _CalendarGate,
+    _DelayClock,
     _ExternalLoadGate,
     _next_assignable_hour,
     _next_resource_free,
@@ -112,6 +116,7 @@ def _build_model(
     resource_calendars=None,
     shift_patterns=None,
     pa_capacity_shares=None,
+    activity_resource_types=None,
 ):
     return OCProcessAreaSimulationModel(
         playout_strategy=VariantPlayoutStrategy(
@@ -128,6 +133,7 @@ def _build_model(
         resource_calendars=resource_calendars,
         shift_patterns=shift_patterns,
         pa_capacity_shares=pa_capacity_shares,
+        activity_resource_types=activity_resource_types,
     )
 
 
@@ -628,6 +634,30 @@ def test_no_arrivals_produces_empty_log():
     assert spawned == 0 and finished == 0 and ocel.events.height == 0
 
 
+def test_arrival_duration_stops_arrivals_but_not_the_playout():
+    """Instances arrive only in the first two hours; the chain still plays out
+    over the full run."""
+    variant = _chain("A", "B")
+    model = _build_model(
+        variant,
+        needed=_needs({"A": {}, "B": {}}),
+        arrivals=_flat_arrivals(variant, 3.0),
+        delays={"B": [3 * HOUR]},
+    )
+    random.seed(7)
+    np.random.seed(7)
+    ocel, finished, spawned = model.run(
+        sim_duration_s=8 * HOUR,
+        resource_pool={},
+        start_datetime=START,
+        arrival_duration_s=2 * HOUR,
+    )
+    starts = [r["ts"] for r in _records(ocel) if r["activity"] == "A"]
+    assert spawned > 0 and finished == spawned
+    assert max(starts) < int(START.timestamp()) + 2 * HOUR
+    assert ocel.events["_timestampUnix"].max() >= int(START.timestamp()) + 3 * HOUR
+
+
 def test_higher_arrival_rate_spawns_more_instances():
     """A tenfold arrival rate spawns markedly more instances over the same span.
 
@@ -746,6 +776,70 @@ def test_causal_successor_never_shares_its_predecessors_timestamp():
     ]
     assert gaps
     assert all(gap == MIN_EVENT_SPACING_S for gap in gaps)
+
+
+def _day_shift(start=8, end=17):
+    """Mon-Fri ``[start, end)`` binary calendar."""
+    cal = {day: [0.0] * 24 for day in WEEKDAYS}
+    for day in WEEKDAYS[:5]:
+        for h in range(start, end):
+            cal[day][h] = 1.0
+    return cal
+
+
+def test_delay_clock_adds_the_closed_hours_a_delay_spans():
+    """One working hour from Monday 16:30 under an 08-17 window ends Tuesday
+    08:30: the 15 closed hours of the night come on top."""
+    base = int(START.timestamp())  # Monday 10:00
+    clock = _DelayClock({"B": _day_shift()}, base)
+    enabling = int(6.5 * HOUR)  # Monday 16:30
+
+    assert clock.wall_clock("B", enabling, HOUR) == 16 * HOUR
+    assert clock.wall_clock("B", 0, HOUR) == HOUR  # inside the window
+    assert clock.wall_clock("C", enabling, HOUR) == HOUR  # no window
+
+
+def test_working_time_delay_is_replayed_across_the_night():
+    """B is done by a Worker on an 08-17 shift and carries one working hour of
+    delay. Every case arrives Monday 16:xx, so B lands Tuesday morning exactly
+    16 h after A, not one hour plus the gate's wait until 08:00."""
+    needed = _needs({"A": {}, "B": {"Worker": 1}})
+    variant = _chain("A", "B")
+    model = _build_model(
+        variant,
+        needed=needed,
+        arrivals=_slot_arrivals(variant, rate=2.0, hour=16),
+        delays={"B": [HOUR]},
+        type_calendars={"Worker": _day_shift()},
+        activity_resource_types={"B": ["Worker"]},
+    )
+    ocel, _, _ = _run(model, pool={"Worker": 10}, duration_s=30 * HOUR)
+    gaps = [
+        acts["B"]["ts"] - acts["A"]["ts"]
+        for acts in _by_instance(ocel).values()
+        if "A" in acts and "B" in acts
+    ]
+
+    assert gaps
+    assert all(gap == 16 * HOUR for gap in gaps)
+
+
+def test_discovered_delays_are_working_time():
+    """Discovery measures a delay over the night in the working time of the
+    resource type that performs the activity."""
+    monday = int(START.timestamp()) - 10 * HOUR  # Monday 00:00
+    events = [
+        _ev("e1", "A", monday + int(16.5 * HOUR), ["o1"], []),
+        _ev("e2", "B", monday + int(32.5 * HOUR), ["o1"], ["w1"]),
+    ]
+    ocel = _mk([*events], [_ob("o1", "Order")])
+
+    delays, types = OCProcessAreaSimulationModel.discover_activity_delays(
+        ocel, {"w1": "Worker"}, {"Worker": _day_shift()}
+    )
+
+    assert types == {"B": ["Worker"]}
+    assert delays == {"B": [HOUR]}
 
 
 # --- calendar gate: one realized schedule per (resource, hour) ---

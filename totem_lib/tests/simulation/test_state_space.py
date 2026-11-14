@@ -159,6 +159,21 @@ def test_structure_variants_cluster_by_isomorphism():
     assert set(nx.get_node_attributes(skeleton, "type").values()) == {"Order", "Item"}
 
 
+def test_structure_variant_activity_occurrences_are_observed_means():
+    """Activity occurrences of a structure are averaged over its observed
+    executions."""
+    events = [
+        _event("e1", "Create", 1, ["o1"]),
+        _event("e2", "Check", 2, ["o1"]),
+        _event("e3", "Check", 3, ["o1"]),
+        _event("e4", "Create", 4, ["o2"]),
+    ]
+    objects = [_object("o1", "Order"), _object("o2", "Order")]
+    (variant,) = find_object_structure_variants(make_ocel(events, objects))
+
+    assert variant.activity_occurrences == {"Create": 1.0, "Check": 1.0}
+
+
 # --- control-flow VMM (flat suffix backoff, the M0 baseline) ---
 
 

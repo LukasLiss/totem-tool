@@ -10,6 +10,7 @@ from totem_lib.ocel.ocel import EVENTS_SCHEMA, OBJECTS_SCHEMA, ObjectCentricEven
 from totem_lib.simulation.utils.basic_simulation_statistics import (
     activity_delay_distribution,
     resource_distribution_of_variants,
+    usual_resource_types,
 )
 from totem_lib.simulation.utils.basic_simulation_statistics import (
     variant_arrival_distribution as compute_variant_arrival_distribution,
@@ -19,10 +20,12 @@ from totem_lib.simulation.utils.resource_allocation_strategy import (
 )
 from totem_lib.simulation.utils.resource_calendar import (
     WEEKDAYS,
+    activity_working_windows,
     assign_shift_calendars,
     availability_probability,
     discover_shift_patterns,
     type_calendar_from_patterns,
+    wall_clock_end_for_available,
 )
 from totem_lib.simulation.utils.resource_constraints import (
     generate_resource_constraints,
@@ -141,8 +144,9 @@ def _estimate_constraint_slots(
 
     Args:
         expected_activity_occurrences: {activity: E[#occurrences per instance]} —
-            the node label counts of the variant graph for the variant playout, a
-            Monte-Carlo estimate over the state space for the state-space playout.
+            the node label counts of the variant graph for the variant playout, the
+            mean over the observed executions of the structure variant for the
+            state-space playout.
         constrained_activities: Set/collection of activities that carry at least
             one discovered resource constraint (the indicator above).
         expected_resource_demand: {activity: {res_type: {"count_distribution":
@@ -164,25 +168,6 @@ def _estimate_constraint_slots(
                 mean = _distribution_mean(stats.get("count_distribution", {}))
                 total += expected_visits * max(0.0, mean)
     return total
-
-
-def _estimate_structure_activity_occurrences(structure_variant, model, rng, n_samples):
-    """Monte-Carlo estimate of expected activity occurrences for one structure. - Needed for the advanced playout,
-    as the events of the variant, are not already given be the input variant
-
-    Generates ``n_samples`` executions over a fresh clone of the structure's
-    skeleton and averages the activity counts. Feeds the per-structure violation
-    budget (the state-space analogue of the variant playout's expected-slot count,
-    where the DAG makes the occurrences exact).
-    """
-    totals = Counter()
-    for i in range(n_samples):
-        graph, _ = model.new_generator(
-            structure_variant.instantiate(-(i + 1)), rng
-        ).run()
-        for _, data in graph.nodes(data=True):
-            totals[data["label"]] += 1
-    return {activity: n / n_samples for activity, n in totals.items()}
 
 
 def _make_violation_budget(total_slots, simulation_config):
@@ -239,12 +224,53 @@ def _sample_activity_delay(activity, activity_delays):
     return random.choice(samples)
 
 
-def _sample_ready_time(enabling_time, activity, activity_delays):
+class _DelayClock:
+    """Converts sampled working-time delays back to wall-clock time.
+
+    Delays of an activity with a working window were measured without the
+    window's closed hours (``activity_delay_distribution``); the clock adds
+    the closed hours that fall into the delay at its actual position in the
+    week. Activities without a window keep their wall-clock delays.
+
+    Args:
+        windows: ``{activity: window matrix}`` from ``activity_working_windows``.
+        base_ts: Unix second of playout time 0.
+    """
+
+    def __init__(self, windows, base_ts):
+        self.windows = windows or {}
+        self.base_ts = base_ts
+
+    @classmethod
+    def for_run(cls, simulation_model, base_ts):
+        """The clock of a run, from the model's (possibly overridden) calendars."""
+        return cls(
+            activity_working_windows(
+                simulation_model.type_calendars,
+                simulation_model.activity_resource_types,
+            ),
+            base_ts,
+        )
+
+    def wall_clock(self, activity, enabling_time, delay):
+        """Wall-clock length of a working-time ``delay`` starting at the playout
+        time ``enabling_time``."""
+        window = self.windows.get(activity)
+        if not window or delay <= 0:
+            return delay
+        start = self.base_ts + enabling_time
+        return wall_clock_end_for_available(window, start, delay) - start
+
+
+def _sample_ready_time(enabling_time, activity, activity_delays, delay_clock=None):
     """Ready time of an event enabled at ``enabling_time``: the enabling time plus
-    a sampled delay, but at least ``MIN_EVENT_SPACING_S`` after it."""
-    return enabling_time + max(
-        _sample_activity_delay(activity, activity_delays), MIN_EVENT_SPACING_S
-    )
+    a sampled delay, but at least ``MIN_EVENT_SPACING_S`` after it. With a
+    ``delay_clock``, the sampled delay is working time and is converted back to
+    wall-clock time first."""
+    delay = _sample_activity_delay(activity, activity_delays)
+    if delay_clock is not None:
+        delay = delay_clock.wall_clock(activity, enabling_time, delay)
+    return enabling_time + max(delay, MIN_EVENT_SPACING_S)
 
 
 def _get_node_objects(graph, node):
@@ -292,7 +318,7 @@ def _next_resource_free(blocked_resources, now, res_types, resource_id_type_map)
     return max(min(ends), now + MIN_EVENT_SPACING_S)
 
 
-def _earliest_future_ready(inst, now, activity_delays):
+def _earliest_future_ready(inst, now, activity_delays, delay_clock=None):
     """
     Earliest future ``ready_at`` among the instance's currently enabled nodes
     (duration model), or None if every enabled node is already due.
@@ -312,7 +338,10 @@ def _earliest_future_ready(inst, now, activity_delays):
         ra = ready_at.get(n)
         if ra is None:
             ra = _sample_ready_time(
-                max(finish_time[p] for p in preds), node_labels[n], activity_delays
+                max(finish_time[p] for p in preds),
+                node_labels[n],
+                activity_delays,
+                delay_clock,
             )
             ready_at[n] = ra
         if ra > now and (earliest is None or ra < earliest):
@@ -824,6 +853,7 @@ class OCProcessAreaSimulationModel:
         fallback_constraints=None,
         filtered_ocel=None,
         pa_capacity_shares=None,
+        activity_resource_types=None,
     ):
         self.playout_strategy = playout_strategy
         self.resource_constraints = resource_constraints
@@ -841,6 +871,9 @@ class OCProcessAreaSimulationModel:
         self.filtered_ocel = filtered_ocel
         # {resource_type: s}; a missing type has no external load (s = 1).
         self.pa_capacity_shares = pa_capacity_shares or {}
+        # {activity: [resource_type, ...]}: whose calendars bound the working
+        # window in which the activity's delays are measured and replayed.
+        self.activity_resource_types = activity_resource_types or {}
 
     def run(
         self,
@@ -848,6 +881,7 @@ class OCProcessAreaSimulationModel:
         resource_pool: dict,
         start_datetime: dt.datetime = None,
         progress_callback=None,
+        arrival_duration_s: int | None = None,
     ):
         validate_resource_pool(resource_pool)
         return self.playout_strategy.run(
@@ -856,6 +890,7 @@ class OCProcessAreaSimulationModel:
             resource_pool,
             start_datetime,
             progress_callback=progress_callback,
+            arrival_duration_s=arrival_duration_s,
         )
 
     @staticmethod
@@ -898,6 +933,32 @@ class OCProcessAreaSimulationModel:
             ocel, resource_types, activities, calendars=calendars
         )
         return type_calendars, shift_patterns, calendars, cooldown_dist
+
+    @staticmethod
+    def discover_activity_delays(filtered_ocel, obj_type_map, type_calendars):
+        """Mines the delay pools of the duration model in working time.
+
+        Delays are wall-clock spans in the log, so they already contain the
+        nights and weekends of the resources that work on an activity. They are
+        therefore measured without the closed hours of the activity's working
+        window, and the playout adds the closed hours back where a sampled
+        delay actually falls; otherwise the calendar gate would add them twice.
+
+        Args:
+            filtered_ocel: Process-area-filtered log.
+            obj_type_map: Object-ID -> object-type map of the unfiltered log.
+            type_calendars: ``{resource_type: calendar matrix}``.
+
+        Returns:
+            ``(activity_delays, activity_resource_types)``: the delay pools and
+            the resource types whose calendars bound each activity's window.
+        """
+        activity_resource_types = usual_resource_types(filtered_ocel, obj_type_map)
+        windows = activity_working_windows(type_calendars, activity_resource_types)
+        return (
+            activity_delay_distribution(filtered_ocel, windows),
+            activity_resource_types,
+        )
 
     @classmethod
     def for_simple_simulation(cls, ocel, process_area):
@@ -954,8 +1015,10 @@ class OCProcessAreaSimulationModel:
             filtered_ocel.events.select("_timestampUnix").to_series().min()
         )
 
-        # Inter-activity delays (for the duration model)
-        activity_delays = activity_delay_distribution(filtered_ocel)
+        # Inter-activity delays (for the duration model), in working time
+        activity_delays, activity_resource_types = cls.discover_activity_delays(
+            filtered_ocel, ocel.obj_type_map, type_calendars
+        )
 
         return cls(
             playout_strategy,
@@ -971,6 +1034,7 @@ class OCProcessAreaSimulationModel:
             fallback_constraints=fallback_constraints,
             filtered_ocel=filtered_ocel,
             pa_capacity_shares=pa_capacity_shares,
+            activity_resource_types=activity_resource_types,
         )
 
     @classmethod
@@ -1042,8 +1106,10 @@ class OCProcessAreaSimulationModel:
             filtered_ocel.events.select("_timestampUnix").to_series().min()
         )
 
-        # Inter-activity delays (for the duration model)
-        activity_delays = activity_delay_distribution(filtered_ocel)
+        # Inter-activity delays (for the duration model), in working time
+        activity_delays, activity_resource_types = cls.discover_activity_delays(
+            filtered_ocel, ocel.obj_type_map, type_calendars
+        )
 
         return cls(
             playout_strategy,
@@ -1059,6 +1125,7 @@ class OCProcessAreaSimulationModel:
             fallback_constraints=fallback_constraints,
             filtered_ocel=filtered_ocel,
             pa_capacity_shares=pa_capacity_shares,
+            activity_resource_types=activity_resource_types,
         )
 
 
@@ -1127,6 +1194,13 @@ def generate_arrival_schedule(
 
     schedule.sort(key=lambda x: x[0])
     return schedule
+
+
+def _arrival_horizon(sim_duration_s, arrival_duration_s):
+    """Seconds in which instances arrive: the whole run unless limited."""
+    if arrival_duration_s is None:
+        return sim_duration_s
+    return min(sim_duration_s, arrival_duration_s)
 
 
 def _hour_aligned_start(start_datetime, simulation_model):
@@ -1528,6 +1602,7 @@ class VariantPlayoutStrategy:
         resource_pool: dict,
         start_datetime: dt.datetime = None,
         progress_callback=None,
+        arrival_duration_s: int | None = None,
     ) -> tuple:
         """
         Runs the variant-based simulation.
@@ -1541,6 +1616,9 @@ class VariantPlayoutStrategy:
             progress_callback: Optional callable invoked with the fraction of the
                 simulated time span elapsed (0.0-1.0) as the clock advances, so a
                 caller can report simulation progress.
+            arrival_duration_s: Seconds after the start in which new instances
+                arrive; afterwards the running ones play out until
+                ``sim_duration_s``. Defaults to ``sim_duration_s``.
 
         Returns:
             (ObjectCentricEventLog, finished_count, spawned_count)
@@ -1561,12 +1639,13 @@ class VariantPlayoutStrategy:
         base_ts = int(start_datetime.timestamp())
 
         activity_delays = simulation_model.activity_delays or {}
+        delay_clock = _DelayClock.for_run(simulation_model, base_ts)
 
         schedule = generate_arrival_schedule(
             self.variants,
             self.variant_arrival_distribution,
             start_datetime,
-            sim_duration_s,
+            _arrival_horizon(sim_duration_s, arrival_duration_s),
         )
 
         resource_pool_expanded, resource_id_type_map, resource_queues = (
@@ -1663,6 +1742,7 @@ class VariantPlayoutStrategy:
                                 max(finish_time[p] for p in preds),
                                 activity,
                                 activity_delays,
+                                delay_clock,
                             )
                         if now < ready_at[node]:
                             continue  # not due yet
@@ -1773,7 +1853,9 @@ class VariantPlayoutStrategy:
                     if fired_any:
                         inst["next_wake"] = now + MIN_EVENT_SPACING_S
                     else:
-                        wake = _earliest_future_ready(inst, now, activity_delays)
+                        wake = _earliest_future_ready(
+                            inst, now, activity_delays, delay_clock
+                        )
                         if resource_blocked:
                             blocked_wake = _resource_blocked_wake(
                                 now,
@@ -1889,6 +1971,7 @@ class StateSpacePlayoutStrategy:
         resource_pool: dict,
         start_datetime: dt.datetime = None,
         progress_callback=None,
+        arrival_duration_s: int | None = None,
     ) -> tuple:
         start_datetime = _hour_aligned_start(start_datetime, simulation_model)
         allocation_strategy = simulation_model.resource_allocation_strategy
@@ -1901,12 +1984,13 @@ class StateSpacePlayoutStrategy:
         simulation_config = simulation_model.simulation_config
         base_ts = int(start_datetime.timestamp())
         activity_delays = simulation_model.activity_delays or {}
+        delay_clock = _DelayClock.for_run(simulation_model, base_ts)
 
         schedule = generate_arrival_schedule(
             self.structure_variants,
             self.arrival_distribution,
             start_datetime,
-            sim_duration_s,
+            _arrival_horizon(sim_duration_s, arrival_duration_s),
         )
 
         resource_pool_expanded, resource_id_type_map, resource_queues = (
@@ -1915,8 +1999,8 @@ class StateSpacePlayoutStrategy:
         calendar_gate = _build_calendar_gate(simulation_model, resource_pool_expanded)
         external_load_gate = _ExternalLoadGate(simulation_model.pa_capacity_shares)
 
-        # Per-structure violation budget: a structure's expected activity
-        # occurrences (Monte-Carlo) × its resource demand. Mirrors the variant
+        # Per-structure violation budget: a structure's observed mean activity
+        # occurrences × its resource demand. Mirrors the variant
         # playout's per-variant budget; only worth it when soft violations are
         # enabled and the structure carries constraints.
         expected_slots_by_variant = {}
@@ -1927,12 +2011,9 @@ class StateSpacePlayoutStrategy:
                 )
                 if not variant_constraints:
                     continue
-                expected_occurrences = _estimate_structure_activity_occurrences(
-                    structure_variant, self.state_space_model, random, n_samples=200
-                )
                 expected_slots_by_variant[structure_variant] = (
                     _estimate_constraint_slots(
-                        expected_occurrences,
+                        structure_variant.activity_occurrences,
                         variant_constraints,
                         resource_distribution.get(structure_variant, {}),
                         resource_pool_expanded,
@@ -2014,7 +2095,10 @@ class StateSpacePlayoutStrategy:
                     # fire immediately and only successor nodes carry a sampled delay.
                     inst["ready_at"] = (
                         _sample_ready_time(
-                            inst["last_finish"], event[0], activity_delays
+                            inst["last_finish"],
+                            event[0],
+                            activity_delays,
+                            delay_clock,
                         )
                         if inst["event_index"] > 0
                         else inst["last_finish"]

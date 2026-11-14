@@ -2,7 +2,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 
 from .event_resources import event_resource_ids
-from .resource_calendar import WEEKDAYS
+from .resource_calendar import WEEKDAYS, available_seconds_between
 
 
 def variant_arrival_distribution(ocel, variants):
@@ -169,18 +169,65 @@ def resource_distribution_of_variants(ocel, variants, obj_type_map=None):
     return result
 
 
-def activity_delay_distribution(ocel):
+def usual_resource_types(ocel, obj_type_map=None) -> dict[str, list[str]]:
+    """The resource types that usually execute each activity.
+
+    For every activity, the most frequent set of resource types among its
+    events; ties go to the lexicographically smallest set. Activities that
+    usually run without resources get no entry.
+
+    Args:
+        ocel: ObjectCentricEventLog, typically process-area-filtered (resources
+            are read from the ``process_area_resources`` attribute).
+        obj_type_map: Mapping from object ID to object type. Must be passed
+            for a process-area-filtered log, which no longer contains the
+            resource objects.
+
+    Returns:
+        dict: ``{activity: [resource_type, ...]}`` with the types sorted.
+    """
+    obj_type_map = obj_type_map if obj_type_map is not None else ocel.obj_type_map
+    resource_lookup = event_resource_ids(ocel)
+    type_sets: dict[str, Counter] = defaultdict(Counter)
+    for event_id, activity in ocel.events.select(["_eventId", "_activity"]).iter_rows():
+        types = tuple(
+            sorted(
+                {
+                    obj_type_map[rid]
+                    for rid in resource_lookup.get(event_id) or []
+                    if rid in obj_type_map
+                }
+            )
+        )
+        type_sets[activity][types] += 1
+    usual = {}
+    for activity, counter in type_sets.items():
+        types = min(counter, key=lambda t: (-counter[t], t))
+        if types:
+            usual[activity] = list(types)
+    return usual
+
+
+def activity_delay_distribution(ocel, working_windows=None):
     """
     Per activity, the empirical pool of *delays* (in seconds) between an event
     becoming enabled and actually occurring.
 
+    With ``working_windows``, a delay is measured in the activity's working
+    time: the hours its window marks closed (nights, weekends) do not count,
+    because the playout adds them again when it converts the sampled delay back
+    to wall-clock time. Without a window, a delay is wall-clock time.
+
     Args:
         ocel: ObjectCentricEventLog (typically the process-area-filtered log, so
             the EOG structure matches what the simulation reproduces).
+        working_windows: Optional ``{activity: window matrix}`` as returned by
+            ``activity_working_windows``.
 
     Returns:
         dict: {activity: [delay_s, ...]} — one bootstrap sample pool per activity.
     """
+    working_windows = working_windows or {}
     eog = ocel.eog
     delays: dict[str, list[int]] = defaultdict(list)
     for node, data in eog.nodes(data=True):
@@ -188,5 +235,12 @@ def activity_delay_distribution(ocel):
         if not preds:
             continue
         enabling_ts = max(eog.nodes[p]["timestamp"] for p in preds)
-        delays[data["label"]].append(max(0, data["timestamp"] - enabling_ts))
+        end_ts = max(enabling_ts, data["timestamp"])
+        window = working_windows.get(data["label"])
+        delay = (
+            int(available_seconds_between(window, enabling_ts, end_ts))
+            if window
+            else end_ts - enabling_ts
+        )
+        delays[data["label"]].append(delay)
     return dict(delays)

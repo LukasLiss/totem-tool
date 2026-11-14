@@ -16,6 +16,7 @@ from tests.assets.ocel_helpers import (
 from totem_lib.simulation.utils.resource_calendar import (
     WEEKDAYS,
     ShiftPattern,
+    activity_working_windows,
     assign_shift_calendars,
     available_seconds_between,
     calendar_distance,
@@ -849,3 +850,57 @@ def test_assign_shift_calendars_largest_remainder_small_pool():
     )
     assert sum(c["Monday"][9] for c in assigned.values()) == 2
     assert sum(c["Monday"][13] for c in assigned.values()) == 1
+
+
+# --- activity_working_windows: where an activity's delays count ---
+
+
+def test_working_window_is_binary_and_open_where_the_type_may_work():
+    """Partial presence still opens a slot; only p = 0 closes it."""
+    cal = _shift_calendar(8, 17)
+    cal["Monday"][9] = 0.3
+
+    windows = activity_working_windows({"Clerk": cal}, {"Check": ["Clerk"]})
+
+    assert windows["Check"]["Monday"][9] == 1.0
+    assert windows["Check"]["Monday"][7] == 0.0
+    assert windows["Check"]["Saturday"] == [0.0] * 24
+
+
+def test_working_window_of_several_types_is_their_overlap():
+    """An activity needing two types can only run where both may be present."""
+    windows = activity_working_windows(
+        {"Warehouse": _shift_calendar(6, 14), "Shipment": _shift_calendar(10, 18)},
+        {"Send": ["Shipment", "Warehouse"]},
+    )
+
+    open_hours = [h for h, v in enumerate(windows["Send"]["Monday"]) if v]
+    assert open_hours == [10, 11, 12, 13]
+
+
+def test_working_window_ignores_types_without_calendar():
+    """A type without calendar counts as always present; an activity none of
+    whose types has a calendar gets no window (its delays stay wall-clock)."""
+    windows = activity_working_windows(
+        {"Clerk": _shift_calendar(8, 17)},
+        {"Check": ["Clerk", "System"], "Log": ["System"]},
+    )
+
+    assert (
+        windows["Check"]
+        == activity_working_windows(
+            {"Clerk": _shift_calendar(8, 17)}, {"Check": ["Clerk"]}
+        )["Check"]
+    )
+    assert "Log" not in windows
+
+
+def test_working_window_that_never_opens_is_dropped():
+    """Disjoint shifts leave no common slot; no window instead of a never-open
+    one, which would push every delay to the conversion's safety cap."""
+    windows = activity_working_windows(
+        {"Early": _shift_calendar(6, 10), "Late": _shift_calendar(14, 18)},
+        {"Handover": ["Early", "Late"]},
+    )
+
+    assert windows == {}

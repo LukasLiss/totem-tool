@@ -156,6 +156,51 @@ def wall_clock_end_for_available(
     return int(round(cur + remaining))
 
 
+def activity_working_windows(
+    type_calendars: dict[str, dict[str, list[float]]],
+    activity_resource_types: dict[str, list[str]],
+) -> dict[str, dict[str, list[float]]]:
+    """Binary working window of every activity, used to measure its delays.
+
+    A (weekday, hour) slot is open (``1.0``) when every resource type the
+    activity usually needs may be present there (calendar probability above
+    0), and closed (``0.0``) otherwise, e.g. at night or on weekends. A delay
+    measured against the window leaves out the closed hours and counts the open
+    ones in full; partial presence inside the window stays the business of the
+    calendar gate during the playout.
+
+    Args:
+        type_calendars: ``{resource_type: calendar matrix}``. A type without a
+            calendar counts as always present.
+        activity_resource_types: ``{activity: [resource_type, ...]}``, the
+            types that usually execute each activity.
+
+    Returns:
+        ``{activity: window matrix}``. An activity none of whose types has a
+        calendar, or whose window would never open, gets no entry; its delays
+        stay wall-clock time.
+    """
+    windows = {}
+    for activity, rtypes in activity_resource_types.items():
+        calendars = [type_calendars[t] for t in rtypes if type_calendars.get(t)]
+        if not calendars:
+            continue
+        window = {
+            day: [
+                (
+                    1.0
+                    if all(not cal.get(day) or cal[day][h] > 0 for cal in calendars)
+                    else 0.0
+                )
+                for h in range(HOURS_PER_DAY)
+            ]
+            for day in WEEKDAYS
+        }
+        if any(any(hours) for hours in window.values()):
+            windows[activity] = window
+    return windows
+
+
 SECONDS_PER_DAY = 86400
 # 1970-01-01 is a Thursday, i.e. weekday index 3; shifting by three days aligns
 # day-of-epoch arithmetic to Monday-based weekdays and Monday-starting weeks.

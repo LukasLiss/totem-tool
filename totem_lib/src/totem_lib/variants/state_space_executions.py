@@ -144,14 +144,19 @@ class ObjectStructureVariant:
         object_graph: A representative typed object skeleton (nodes carry ``type``,
             edges carry the object relations) cloned on instantiation.
         signature: The object-type multiset ``((type, count), ...)`` (for display).
+        activity_occurrences: ``{activity: mean #occurrences per execution}`` over
+            the observed components of this structure.
     """
 
-    def __init__(self, id, support, executions, object_graph, signature):
+    def __init__(
+        self, id, support, executions, object_graph, signature, activity_occurrences
+    ):
         self.id = id
         self.support = support
         self.executions = executions
         self.object_graph = object_graph
         self.signature = signature
+        self.activity_occurrences = activity_occurrences
 
     def __iter__(self):
         return iter(self.executions)
@@ -177,6 +182,14 @@ class ObjectStructureVariant:
         for u, v in template.edges():
             graph.add_edge(mapping[u], mapping[v])
         return graph
+
+
+def _mean_activity_occurrences(executions):
+    """Mean number of occurrences per activity over the given executions."""
+    totals = Counter()
+    for execution in executions:
+        totals.update(execution.activity_sequence)
+    return {activity: n / len(executions) for activity, n in totals.items()}
 
 
 def find_object_structure_variants(ocel):
@@ -205,6 +218,7 @@ def find_object_structure_variants(ocel):
             executions=[execution.event_ids for execution in group],
             object_graph=group[0].object_graph,
             signature=group[0].signature,
+            activity_occurrences=_mean_activity_occurrences(group),
         )
         for key, group in grouped.items()
     ]
