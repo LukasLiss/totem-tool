@@ -100,8 +100,7 @@ import SqlQueryEditor, {
   type SqlQueryConfig,
 } from '@/react_component/SqlQueryEditor';
 import { useFilterVersion } from '@/store/filterStore';
-import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
-import { LocalFilterDropdown } from '@/components/ui/LocalFilterDropdown';
+import { WidgetHeader } from '@/components/ui/WidgetTitle';
 import { useDashboardLocalFilter } from '@/hooks/useDashboardLocalFilter';
 import TextBoxEditor from '@/components/text-box/TextBoxEditor';
 import RichTextRenderer from '@/components/text-box/RichTextRenderer';
@@ -132,25 +131,6 @@ import {
   type TextFontWeight,
   type TextVerticalAlign,
 } from '@/components/text-box/textBoxFormat';
-
-function WidgetFilterHeader({ title, filterEnabled, onToggle, fileId, onLocalFilterChange, localFilterParams }: {
-  title: string;
-  filterEnabled: boolean;
-  onToggle: () => void;
-  fileId?: number | null;
-  onLocalFilterChange?: (params: Record<string, string>) => void;
-  localFilterParams?: Record<string, string>;
-}) {
-  return (
-    <div className="flex items-center gap-2 px-4 py-2 border-b bg-card flex-shrink-0 text-left">
-      <span className="text-sm font-semibold text-card-foreground shrink min-w-0 truncate">{title}</span>
-      <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggle} />
-      {onLocalFilterChange && (
-        <LocalFilterDropdown fileId={fileId} onFilterChange={onLocalFilterChange} value={localFilterParams} />
-      )}
-    </div>
-  );
-}
 
 
 // Define props interface for components (extend as needed)
@@ -494,8 +474,8 @@ export const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile
 
   return (
     <div style={{width: '100%', height: '100%', color: node.color, textAlign: 'center' }}>
-      <Card className="w-full h-full rounded-none flex flex-col">
-        <WidgetFilterHeader title="Number of Events" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
+      <Card className="w-full h-full rounded-none flex flex-col gap-0 pt-0">
+        <WidgetHeader label="Number of Events" filterEnabled={filterEnabled} onToggleFilter={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
         <CardContent className="flex-1 flex items-center justify-center">
           <p className="text-2xl font-bold">{processedResult || 'Loading...'}</p>
         </CardContent>
@@ -1008,7 +988,7 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
   const areaColumns = { executionColumn: areaExecutionColumn, variantColumn: areaVariantColumn };
   return (
     <div className="w-full h-full flex flex-col">
-      <WidgetFilterHeader title="Variants Explorer" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
+      <WidgetHeader label="Variants Explorer" filterEnabled={filterEnabled} onToggleFilter={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
       <Card className="w-full flex-1 rounded-none overflow-auto">
         <CardContent className="p-0 h-full">
           <VariantsExplorer
@@ -1283,7 +1263,7 @@ export const LogStatisticsComponent: React.FC<ComponentProps> = ({
   // VIEW MODE: Delegate to reusable LogStatistics component
   return (
     <div className="w-full h-full flex flex-col">
-      <WidgetFilterHeader title="Log Statistics" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
+      <WidgetHeader label="Log Statistics" filterEnabled={filterEnabled} onToggleFilter={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
       <LogStatistics
         fileId={selectedFile?.id}
         filterEnabled={filterEnabled}
@@ -1395,7 +1375,7 @@ export const OCDottedChartComponent: React.FC<ComponentProps> = ({
 
   return (
     <div className="w-full h-full flex flex-col">
-      <WidgetFilterHeader title="OC Dotted Chart" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={effectiveFileId} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
+      <WidgetHeader label="OC Dotted Chart" filterEnabled={filterEnabled} onToggleFilter={() => setFilterEnabled(p => !p)} fileId={effectiveFileId} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
       <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
         <DottedChart
           fileId={effectiveFileId}
@@ -1768,18 +1748,18 @@ export const OCCNComponent: React.FC<ComponentProps> = ({
     );
   }
 
-  // VIEW MODE: Render OCCNVisualizer
+  // VIEW MODE: the title and the filter controls sit on the canvas (top left), no header bar.
   return (
     <div className="w-full h-full flex flex-col">
-      <WidgetFilterHeader title="OC Causal Net" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
       <div style={{ flex: 1, minHeight: 0 }}>
         <ReactFlowProvider>
           <OCCNVisualizer
             height="100%"
             fileId={selectedFile?.id}
             localFilterParams={localFilterParams}
+            onLocalFilterChange={handleLocalFilterChange}
+            onToggleFilter={() => setFilterEnabled(p => !p)}
             showControls={showControls}
-            showTitle={false}
             initialInteractionLocked={initialInteractionLocked}
             initialLayoutDirection={layoutDirection}
             initialThreshold={threshold}
@@ -1862,7 +1842,7 @@ export const OCPNComponent: React.FC<ComponentProps> = ({
   // VIEW MODE: Render the OCPN visualizer with stored settings
   return (
     <div className="w-full h-full flex flex-col bg-white">
-      <WidgetFilterHeader title="OC Petri Net" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
+      <WidgetHeader label="OC Petri Net" filterEnabled={filterEnabled} onToggleFilter={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
       <div style={{ flex: 1, minHeight: 0 }}>
         <OCPNVisualizer
           height="100%"
@@ -1986,7 +1966,7 @@ export const OCPNFlattenedReplayComponent: React.FC<ComponentProps> = ({
 
   return (
     <div className="w-full h-full flex flex-col bg-white">
-      <WidgetFilterHeader title="OCPN Flattened Replay" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={setLocalFilterParams} />
+      <WidgetHeader label="OCPN Flattened Replay" filterEnabled={filterEnabled} onToggleFilter={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={setLocalFilterParams} />
       <div style={{ flex: 1, minHeight: 0 }}>
         <OcpnFlattenedReplay
           height="100%"

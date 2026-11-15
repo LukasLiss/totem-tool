@@ -117,6 +117,12 @@ describe('OcdfgView', () => {
     expect((getByLabelText('Arc routing') as HTMLSelectElement).value).toBe('spline');
   });
 
+  it('keeps the title (with the filters) when the controls are switched off', () => {
+    const { queryByTestId, getByText } = view({ showControls: false, title: <span>DFG title</span> });
+    expect(getByText('DFG title')).not.toBeNull();
+    expect(queryByTestId('ocdfg-legend')).toBeNull();
+  });
+
   it('has no layout button in the process-area drill-down', () => {
     const onSizeChange = vi.fn();
     const { queryByRole, queryByTestId } = view({ variant: 'detail', layoutEditable: false, onSizeChange });

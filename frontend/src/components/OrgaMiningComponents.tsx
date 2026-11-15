@@ -24,8 +24,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { GlobalFilterToggle } from "@/components/ui/GlobalFilterToggle";
-import { LocalFilterDropdown } from "@/components/ui/LocalFilterDropdown";
+import { WidgetHeader } from "@/components/ui/WidgetTitle";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
@@ -142,36 +141,6 @@ function DashboardSwitches({ id, automaticLoading, onAutomaticLoading }: {
     >
       <Switch id={`${id}-auto`} checked={automaticLoading} onCheckedChange={onAutomaticLoading} />
     </SettingRow>
-  );
-}
-
-/**
- * Title and filter toggle, floating over the explorer's canvas.
- *
- * It used to be a header bar above the explorer, which cost a row of height
- * in every tile; OCCN puts the same pair in the canvas's top-left corner.
- *
- * It sits at the bottom of the canvas's stacking order (the explorer's own
- * panels are 12–14, its popovers 20, its tooltips 40). The title is a label
- * and everything above it is something the user is operating, so an expanded
- * panel covers the title rather than opening underneath it.
- */
-function WidgetTitle({ title, filterEnabled, onToggle, fileId, onLocalFilterChange, localFilterParams }: {
-  title: string;
-  filterEnabled: boolean;
-  onToggle: () => void;
-  fileId?: number;
-  onLocalFilterChange?: (params: Record<string, string>) => void;
-  localFilterParams?: Record<string, string>;
-}) {
-  return (
-    <div className="flex items-center gap-2 px-4 py-2 border-b bg-card flex-shrink-0 text-left">
-      <span className="text-sm font-semibold text-card-foreground shrink min-w-0 truncate">{title}</span>
-      <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggle} stopPropagation />
-      {onLocalFilterChange && (
-        <LocalFilterDropdown fileId={fileId} onFilterChange={onLocalFilterChange} value={localFilterParams} />
-      )}
-    </div>
   );
 }
 
@@ -449,10 +418,10 @@ export const OCHandoverComponent: React.FC<ComponentProps> = ({
   // VIEW MODE: header bar on top, explorer fills the rest.
   return (
     <div className="w-full h-full flex flex-col overflow-hidden bg-background text-left">
-      <WidgetTitle
-        title="Handover of Work"
+      <WidgetHeader
+        label="Handover of Work"
         filterEnabled={filterEnabled}
-        onToggle={() => setFilterEnabled((p) => !p)}
+        onToggleFilter={() => setFilterEnabled((p) => !p)}
         fileId={selectedFile?.id}
         onLocalFilterChange={handleLocalFilterChange}
         localFilterParams={localFilterParams}
@@ -789,10 +758,10 @@ export const ResourceProfilingComponent: React.FC<ComponentProps> = ({
 
   return (
     <div className="w-full h-full flex flex-col overflow-hidden bg-background text-left">
-      <WidgetTitle
-        title="Resource Profiling"
+      <WidgetHeader
+        label="Resource Profiling"
         filterEnabled={filterEnabled}
-        onToggle={() => setFilterEnabled((p) => !p)}
+        onToggleFilter={() => setFilterEnabled((p) => !p)}
         fileId={selectedFile?.id}
         onLocalFilterChange={handleLocalFilterChange}
         localFilterParams={localFilterParams}

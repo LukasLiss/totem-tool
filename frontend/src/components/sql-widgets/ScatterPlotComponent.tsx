@@ -18,7 +18,8 @@ import {
 import type { LinkedQuery } from "@/react_component/sql/linkedQuery";
 import { CHART_SKETCH_HINT, SCATTER_DEFAULT_QUERY } from "./constants";
 import { useSqlQueryData } from "@/react_component/sql/useSqlQueryData";
-import { ChartTitle, WidgetMessage } from "./shared";
+import { WidgetMessage } from "./shared";
+import { WidgetHeader } from "@/components/ui/WidgetTitle";
 import { linkedQueryOf, type SqlWidgetNodeFields, type SqlWidgetProps } from "./sqlWidgetUtils";
 import { categoryFills, previewColors, type ChartColors } from "./chartColors";
 import { ChartValueLegend } from "./chartLegend";
@@ -194,9 +195,9 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
 
   // The header (with the filters) stays while there is nothing to draw.
   return (
-    <Card className="flex h-full w-full flex-col overflow-hidden rounded-none">
-      <ChartTitle
-        title={title}
+    <Card className="flex h-full w-full flex-col gap-0 overflow-hidden rounded-none pt-0">
+      <WidgetHeader
+        label={title}
         fileId={fileId}
         filterEnabled={filterEnabled}
         onToggleFilter={() => setFilterEnabled((p) => !p)}

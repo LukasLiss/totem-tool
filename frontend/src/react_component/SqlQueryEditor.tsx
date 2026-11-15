@@ -14,8 +14,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFilterVersion } from "@/store/filterStore";
-import { GlobalFilterToggle } from "@/components/ui/GlobalFilterToggle";
-import { LocalFilterDropdown } from "@/components/ui/LocalFilterDropdown";
+import { WidgetHeader } from "@/components/ui/WidgetTitle";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -611,17 +610,15 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
 
   if (!isEditMode) {
     return (
-      <Card className={cn("flex h-full w-full flex-col overflow-hidden text-left", className)}>
-        <CardHeader className="flex flex-row items-center gap-2 space-y-0 border-b px-4 py-2 text-left">
-          <CardTitle className="shrink min-w-0 truncate text-sm">
-            {name || linkedQuery?.name || "SQL query"}
-          </CardTitle>
-          {onToggleFilter && (
-            <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggleFilter} stopPropagation />
-          )}
-          {onLocalFilterChange && (
-            <LocalFilterDropdown fileId={fileId} onFilterChange={onLocalFilterChange} value={localFilterParams} />
-          )}
+      <Card className={cn("flex h-full w-full flex-col gap-0 overflow-hidden pt-0 text-left", className)}>
+        <WidgetHeader
+          label={name || linkedQuery?.name || "SQL query"}
+          fileId={fileId}
+          filterEnabled={filterEnabled}
+          onToggleFilter={onToggleFilter}
+          localFilterParams={localFilterParams}
+          onLocalFilterChange={onLocalFilterChange}
+        >
           {linked && (
             <Badge variant="secondary" className="shrink-0 gap-1 text-[10px]" title={`linked to stored query "${linkedQuery?.name}"`}>
               <Link2 className="size-3" /> linked
@@ -633,7 +630,7 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
           >
             {statusCaption}
           </Badge>
-        </CardHeader>
+        </WidgetHeader>
         <CardContent
           ref={scrollRef}
           className="flex-1 overflow-auto p-0 pr-3 pl-3"

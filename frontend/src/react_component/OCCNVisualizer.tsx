@@ -26,7 +26,7 @@ import {
   ArrowRightIcon,
   LocateFixedIcon,
 } from 'lucide-react';
-import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
+import { WidgetTitle } from '@/components/ui/WidgetTitle';
 import { VisualizerEmptyState } from '@/components/ui/VisualizerEmptyState';
 import { mapTypesToColors } from '../utils/objectColors';
 import {
@@ -79,6 +79,8 @@ interface OCCNVisualizerProps {
   filterEnabled?: boolean;
   onToggleFilter?: () => void;
   localFilterParams?: Record<string, string>;
+  /** Given: the title shows the local filter. */
+  onLocalFilterChange?: (params: Record<string, string>) => void;
   /** Activity ids to emphasize as OCCN replay stopping points. */
   conformanceHighlights?: Record<string, 'non_fitting' | 'inconclusive'>;
   /** Log activities shown only to explain why replay stopped. */
@@ -113,6 +115,7 @@ function OCCNVisualizer({
   filterEnabled = true,
   onToggleFilter = () => {},
   localFilterParams,
+  onLocalFilterChange,
   conformanceHighlights = EMPTY_CONFORMANCE_HIGHLIGHTS,
   missingConformanceActivities = EMPTY_MISSING_CONFORMANCE_ACTIVITIES,
   unvisitedActivities = EMPTY_UNVISITED_ACTIVITIES,
@@ -561,41 +564,37 @@ function OCCNVisualizer({
         </div>
       )}
 
-      {showControls && (
-        <>
+      {(showControls || showTitle) && (
         <div
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
           style={{
             position: 'absolute',
             top: 16,
             left: 16,
             display: 'flex',
             flexDirection: 'column',
-            gap: 16,
+            // As the DFG: the legend close under the title.
+            gap: 8,
             maxHeight: 'calc(100% - 32px)',
+            zIndex: 15,
           }}
         >
+          {/* The title stays when the controls are switched off: it holds the filters. */}
           {showTitle && (
-            <div
-              style={{
-                background: 'transparent',
-                border: '1px solid transparent',
-                borderRadius: 12,
-                padding: '10px 14px',
-                boxShadow: 'none',
-                fontFamily: 'var(--font-primary, Inter, sans-serif)',
-                minWidth: 240,
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <div style={{ fontWeight: 700, fontSize: 15, color: '#0F172A' }}>
-                  Object-Centric Causal Net (OCCN)
-                </div>
-                <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggleFilter} stopPropagation />
-              </div>
+            <div style={{ alignSelf: 'flex-start' }}>
+              <WidgetTitle
+                label="Object-Centric Causal Net (OCCN)"
+                fileId={fileId}
+                filterEnabled={filterEnabled}
+                onToggleFilter={onToggleFilter}
+                localFilterParams={localFilterParams}
+                onLocalFilterChange={onLocalFilterChange}
+              />
             </div>
           )}
 
-          {Object.keys(typeColors).length > 0 && (
+          {showControls && Object.keys(typeColors).length > 0 && (
             <div
               onPointerDown={(e) => e.stopPropagation()}
               onMouseDown={(e) => e.stopPropagation()}
@@ -633,7 +632,10 @@ function OCCNVisualizer({
             </div>
           )}
         </div>
+      )}
 
+      {showControls && (
+        <>
           {/* The legend holds the top-left corner; the threshold slider keeps the pill horizontal. */}
           <ControlPill spots={OCCN_PILL_SPOTS} storageKey="occn">
             <div

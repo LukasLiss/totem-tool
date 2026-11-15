@@ -10,7 +10,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { GridStackNode } from "gridstack";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { GlobalFilterToggle } from "@/components/ui/GlobalFilterToggle";
+import { WidgetHeader } from "@/components/ui/WidgetTitle";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 
@@ -143,11 +143,13 @@ export const OCAlignmentComponent: React.FC<ComponentProps> = ({
 
   const showControls = node.show_controls ?? true;
   return (
-    <div className="flex h-full w-full flex-col overflow-auto bg-background p-3 text-left">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <span className="text-sm font-semibold text-slate-900">Object-Centric Alignment</span>
-        <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={() => setFilterEnabled((v) => !v)} stopPropagation />
-      </div>
+    <div className="flex h-full w-full flex-col overflow-auto bg-background text-left">
+      <WidgetHeader
+        label="Object-Centric Alignment"
+        filterEnabled={filterEnabled}
+        onToggleFilter={() => setFilterEnabled((v) => !v)}
+      />
+      <div className="flex min-h-0 flex-1 flex-col px-3 pb-3">
       <OCAlignmentExplorer
         key={`${persisted}|${fileId}|${filterEnabled}`}
         fileId={fileId}
@@ -160,6 +162,7 @@ export const OCAlignmentComponent: React.FC<ComponentProps> = ({
         compact
         graphHeight={showControls ? 380 : "fill"}
       />
+      </div>
     </div>
   );
 };

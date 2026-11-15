@@ -7,8 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { RefreshCcw } from 'lucide-react';
 import TotemMinerVisualizer from './TotemMinerVisualizer';
-import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
-import { LocalFilterDropdown } from '@/components/ui/LocalFilterDropdown';
+import { WidgetHeader } from '@/components/ui/WidgetTitle';
 import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
 
 export type TotemMinerProps = {
@@ -78,22 +77,19 @@ export default function TotemMiner({
 
   return (
     <Card
-      className={`@container/card w-full flex flex-col ${fillContainer ? 'h-full rounded-none' : ''}`}
+      className={`@container/card w-full flex flex-col gap-0 py-0 overflow-hidden ${fillContainer ? 'h-full rounded-none' : ''}`}
     >
-      {/* Custom inline header matching thesis layout */}
-      <div className="flex flex-row flex-wrap items-center justify-between gap-x-4 gap-y-2 relative z-10 flex-shrink-0 w-full px-4 py-2 border-b bg-card text-left">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold text-card-foreground">
-            TOTeM Model
-          </span>
-          {onToggleFilter && (
-            <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggleFilter} />
-          )}
-          <LocalFilterDropdown fileId={fileId} value={localFilterParams} onFilterChange={(params) => {
-            setLocalFilterParams(params);
-            onLocalFilterChange?.(params);
-          }} />
-        </div>
+      <WidgetHeader
+        label="TOTeM Model"
+        fileId={fileId}
+        filterEnabled={filterEnabled}
+        onToggleFilter={onToggleFilter}
+        localFilterParams={localFilterParams}
+        onLocalFilterChange={(params) => {
+          setLocalFilterParams(params);
+          onLocalFilterChange?.(params);
+        }}
+      >
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
           {/* τ slider */}
           <div className="flex items-center gap-3">
@@ -132,7 +128,7 @@ export default function TotemMiner({
             disabled={!fileId}
           />
         </div>
-      </div>
+      </WidgetHeader>
       <CardContent
         className={`p-0 ${fillContainer ? 'flex-1 min-h-0' : ''}`}
         style={fillContainer ? undefined : { height: heightStyle }}

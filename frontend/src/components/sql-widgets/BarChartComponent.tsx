@@ -27,7 +27,8 @@ import {
 import type { LinkedQuery } from "@/react_component/sql/linkedQuery";
 import { BAR_CHART_DEFAULT_QUERY, CHART_SKETCH_HINT } from "./constants";
 import { useSqlQueryData } from "@/react_component/sql/useSqlQueryData";
-import { ChartTitle, WidgetMessage } from "./shared";
+import { WidgetMessage } from "./shared";
+import { WidgetHeader } from "@/components/ui/WidgetTitle";
 import WidgetDraftTile from "@/components/WidgetDraftTile";
 import {
   firstNumericColumn,
@@ -195,9 +196,9 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
   }
 
   return (
-    <Card className="flex h-full w-full flex-col overflow-hidden rounded-none">
-      <ChartTitle
-        title={title}
+    <Card className="flex h-full w-full flex-col gap-0 overflow-hidden rounded-none pt-0">
+      <WidgetHeader
+        label={title}
         fileId={fileId}
         filterEnabled={filterEnabled}
         onToggleFilter={() => setFilterEnabled((p) => !p)}

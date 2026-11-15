@@ -7,7 +7,7 @@ import ComputationStatus from '@/components/ComputationStatus';
 import { VisualizerEmptyState } from '@/components/ui/VisualizerEmptyState';
 import type { OcdfgGraph } from './NewOCDFGVisualizer';
 import OcdfgView from './ocdfg-layout/OcdfgView';
-import OcdfgTitle from './ocdfg-layout/OcdfgTitle';
+import { WidgetTitle } from '@/components/ui/WidgetTitle';
 import { fromBackendDfg } from './ocdfg-layout/graph';
 import { DEFAULT_OPTIONS } from './ocdfg-layout/options';
 import type { SaveLayout } from './ocdfg-layout/useLayoutOptions';
@@ -122,7 +122,7 @@ function NewOCDFGVariantsVisualizer({
   const noEventLog = data == null && !fileId;
 
   const title = showTitle ? (
-    <OcdfgTitle
+    <WidgetTitle
       label="Object-Centric DFG (Variants)"
       fileId={fileId}
       filterEnabled={filterEnabled}

@@ -306,6 +306,8 @@ export default function OcdfgView({
   const chromeColumnRef = useRef<HTMLDivElement | null>(null);
   const [chromeRects, setChromeRects] = useState<{ title: FitRect | null; legend: FitRect | null }>({ title: null, legend: null });
   const hasTitle = Boolean(title);
+  // The title (with the filters) stays when the controls are switched off.
+  const titleShown = !detail && hasTitle;
   useEffect(() => {
     const column = chromeColumnRef.current;
     if (!column || typeof ResizeObserver === 'undefined') return;
@@ -326,7 +328,7 @@ export default function OcdfgView({
     for (const child of Array.from(column.children)) observer.observe(child);
     return () => observer.disconnect();
     // The legend swaps between its chip and its panel when it collapses.
-  }, [chrome, hasTitle, legendCollapsed, types.length]);
+  }, [chrome, titleShown, legendCollapsed, types.length]);
 
   // The fit mode (the fit button pressed): the graph is placed clear of the
   // canvas controls (see bestFit: only the view, never the layout), centred
@@ -334,16 +336,16 @@ export default function OcdfgView({
   // cover it. Zooming or panning ends the mode.
   const fitPadding = detail ? { top: 4, right: 4, bottom: 4, left: 4 } : { top: FIT_GAP, bottom: FIT_GAP, left: FIT_GAP, right: panelRoom };
   const fitAvoid: FitRect[] =
-    detail || !chrome
+    detail
       ? []
       : [
           // The header row: the title.
-          ...(chromeRects.title ? [{ ...chromeRects.title, header: true }] : []),
+          ...(titleShown && chromeRects.title ? [{ ...chromeRects.title, header: true }] : []),
           // The legend, chip or open panel, is cleared on its best side (the
           // graph may sit beside it); the open panel is large, so in narrow
           // boxes it lies over the graph.
-          ...(chromeRects.legend ? [{ ...chromeRects.legend, optional: !legendCollapsed }] : []),
-          ...(pillRegion ? [pillRect(pillRegion)] : []),
+          ...(chrome && chromeRects.legend ? [{ ...chromeRects.legend, optional: !legendCollapsed }] : []),
+          ...(chrome && pillRegion ? [pillRect(pillRegion)] : []),
         ];
   const fitKey = `${options.direction}|${types.join(',')}`;
 
@@ -419,7 +421,7 @@ export default function OcdfgView({
         />
       )}
 
-      {chrome && (
+      {(chrome || titleShown) && (
         <div
           ref={chromeColumnRef}
           onPointerDown={(e) => e.stopPropagation()}
@@ -438,7 +440,7 @@ export default function OcdfgView({
         >
           {/* No inset of its own: the title starts at the canvas's 16 px margin
               like the panels, as tall as their collapsed chips (30 px). */}
-          {title && (
+          {titleShown && (
             <div
               data-testid="ocdfg-title"
               style={{
@@ -455,7 +457,7 @@ export default function OcdfgView({
             </div>
           )}
 
-          {types.length > 0 && (
+          {chrome && types.length > 0 && (
             <ObjectTypePanel
               testId="ocdfg-legend"
               types={types.map((type) => ({ type, color: colors[type], available: available.has(type) }))}

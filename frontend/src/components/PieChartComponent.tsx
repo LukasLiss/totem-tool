@@ -8,7 +8,8 @@ import { GridStackNode } from 'gridstack';
 import type { LinkedQuery } from "@/react_component/sql/linkedQuery";
 import { useSqlQueryData } from "@/react_component/sql/useSqlQueryData";
 import { linkedQueryOf } from "@/components/sql-widgets/sqlWidgetUtils";
-import { ChartTitle, WidgetMessage } from "@/components/sql-widgets/shared";
+import { WidgetMessage } from "@/components/sql-widgets/shared";
+import { WidgetHeader } from "@/components/ui/WidgetTitle";
 import { ChartValueLegend, PieCallout } from "@/components/sql-widgets/chartLegend";
 import { limitCategories, rowsToCategories } from "@/components/sql-widgets/chartData";
 import { CHART_SKETCH_HINT } from "@/components/sql-widgets/constants";
@@ -350,16 +351,16 @@ const PieChartComponent: React.FC<ComponentProps> = ({
 
   // VIEW MODE
   return (
-    <Card className="w-full h-full rounded-none flex flex-col overflow-hidden">
-      <ChartTitle
-        title={title}
+    <Card className="w-full h-full rounded-none flex flex-col gap-0 overflow-hidden pt-0">
+      <WidgetHeader
+        label={title}
         fileId={fileId}
         filterEnabled={filterEnabled}
         onToggleFilter={() => setFilterEnabled((p) => !p)}
         localFilterParams={localFilterParams}
         onLocalFilterChange={handleLocalFilterChange}
       />
-      <CardContent className="flex-1 flex flex-col items-center gap-3 pb-0 min-h-0">
+      <CardContent className="flex-1 flex flex-col items-center gap-3 pt-2 pb-0 min-h-0">
         {!selectedFile ? (
           <WidgetMessage>Select an event log to display the pie chart.</WidgetMessage>
         ) : error ? (

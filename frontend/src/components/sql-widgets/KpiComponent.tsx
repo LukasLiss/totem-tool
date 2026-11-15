@@ -6,7 +6,7 @@
  */
 
 import React, { useEffect, useMemo, useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import type { LinkedQuery } from "@/react_component/sql/linkedQuery";
 import { KPI_DEFAULT_QUERY } from "./constants";
 import { useSqlQueryData } from "@/react_component/sql/useSqlQueryData";
@@ -16,8 +16,7 @@ import { formatKpiValue, pickKpiValue } from "./kpiUtils";
 import WidgetDraftTile from "@/components/WidgetDraftTile";
 import KpiSketch from "./KpiSketch";
 import KpiSettingsDialog, { type KpiSettings } from "./KpiSettingsDialog";
-import { GlobalFilterToggle } from "@/components/ui/GlobalFilterToggle";
-import { LocalFilterDropdown } from "@/components/ui/LocalFilterDropdown";
+import { WidgetHeader } from "@/components/ui/WidgetTitle";
 import { useDashboardLocalFilter } from "@/hooks/useDashboardLocalFilter";
 
 export interface KpiNodeFields extends SqlWidgetNodeFields {
@@ -139,12 +138,15 @@ const KpiComponent: React.FC<SqlWidgetProps<KpiNodeFields>> = ({
   const formatted = value ? formatKpiValue(value.raw, decimals) : null;
 
   return (
-    <Card className="flex h-full w-full flex-col overflow-hidden rounded-none">
-      <CardHeader className="flex flex-row items-center gap-2 space-y-0 px-4 py-2 border-b text-left">
-        <CardTitle className="shrink min-w-0 truncate text-sm font-medium text-muted-foreground">{title}</CardTitle>
-        <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} />
-        <LocalFilterDropdown fileId={fileId} onFilterChange={handleLocalFilterChange} value={localFilterParams} />
-      </CardHeader>
+    <Card className="flex h-full w-full flex-col gap-0 overflow-hidden rounded-none pt-0">
+      <WidgetHeader
+        label={title}
+        fileId={fileId}
+        filterEnabled={filterEnabled}
+        onToggleFilter={() => setFilterEnabled(p => !p)}
+        localFilterParams={localFilterParams}
+        onLocalFilterChange={handleLocalFilterChange}
+      />
       <CardContent className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 p-4">
         {!fileId ? (
           <WidgetMessage>Select an event log to compute this KPI.</WidgetMessage>
