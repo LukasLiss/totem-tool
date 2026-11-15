@@ -1276,6 +1276,7 @@ export const LogStatisticsComponent: React.FC<ComponentProps> = ({
         showNewestTimestamp={selection.show_newest_timestamp}
         showDuration={selection.show_duration}
         className="w-full flex-1"
+        fitHeight
       />
     </div>
   );
