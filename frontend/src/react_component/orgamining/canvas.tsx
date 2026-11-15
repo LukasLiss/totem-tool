@@ -8,7 +8,7 @@
  * the tile's full height no matter how the user resizes it.
  */
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, X } from "lucide-react";
+import { ChevronDown, Search, X } from "lucide-react";
 
 import {
   DropdownMenu,
@@ -18,7 +18,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-import { GLASS_SURFACE } from "./canvasSurface";
+import {
+  CANVAS_PANEL_SHELL,
+  PANEL_CHIP_CHEVRON_CLASS,
+  PANEL_CHIP_CLASS,
+  PANEL_CHIP_ICON_CLASS,
+} from "@/components/canvas/panelHeader";
 import type { Size } from "./canvasGeometry";
 
 /**
@@ -30,9 +35,16 @@ import type { Size } from "./canvasGeometry";
  */
 export function CanvasShell({
   className = "",
+  title,
   children,
 }: {
   className?: string;
+  /**
+   * The card's title (with its filters), top left like on the DFG canvas.
+   * Shown in every state (also before computing), so the filters stay reachable.
+   * It sits below the explorer's panels (12–14), which cover it when opened.
+   */
+  title?: React.ReactNode;
   children: (size: Size) => React.ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -54,19 +66,26 @@ export function CanvasShell({
   }, []);
 
   return (
-    <div ref={ref} className={`relative w-full h-full min-h-0 overflow-hidden bg-background ${className}`}>
+    // data-canvas-shell: the box in which a graph's fit looks for the controls (data-fit-avoid).
+    <div ref={ref} data-canvas-shell className={`relative w-full h-full min-h-0 overflow-hidden bg-background ${className}`}>
       {children(size)}
+      {title && (
+        <div
+          data-testid="canvas-title"
+          data-fit-avoid="header"
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          style={{ position: "absolute", top: 16, left: 16, zIndex: 11, maxWidth: "calc(100% - 32px)" }}
+        >
+          {title}
+        </div>
+      )}
     </div>
   );
 }
 
-const PANEL_SHELL: React.CSSProperties = {
-  ...GLASS_SURFACE,
-  border: "1px solid #E5E7EB",
-  borderRadius: 12,
-  boxShadow: "0 6px 16px rgba(15, 23, 42, 0.05)",
-  fontFamily: "var(--font-primary, Inter, sans-serif)",
-};
+/** The frame of the canvas panels and chips, shared with the DFG's (components/canvas/panelHeader). */
+const PANEL_SHELL: React.CSSProperties = CANVAS_PANEL_SHELL;
 
 /**
  * A card floating over the canvas that collapses to a chip.
@@ -127,26 +146,15 @@ export function FloatingPanel({
         title={`Show ${title}`}
         aria-label={`Show ${title}`}
         {...stop}
-        style={{
-          ...PANEL_SHELL,
-          ...style,
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          padding: "6px 9px",
-          cursor: "pointer",
-          fontSize: 11,
-          fontWeight: 600,
-          color: "#334155",
-          lineHeight: 1,
-          whiteSpace: "nowrap",
-        }}
+        // The size of the DFG's collapsed legend chip: 30 px tall, square with only an icon.
+        style={{ ...PANEL_SHELL, ...style, cursor: "pointer" }}
+        className={chipLabel != null ? PANEL_CHIP_CLASS : PANEL_CHIP_ICON_CLASS}
       >
         {icon}
         {chipLabel != null && (
           <>
-            <span style={{ fontVariantNumeric: "tabular-nums" }}>{chipLabel}</span>
-            <ChevronDown style={{ width: 12, height: 12, color: "#94a3b8", flexShrink: 0 }} />
+            <span className="tabular-nums">{chipLabel}</span>
+            <ChevronDown className={PANEL_CHIP_CHEVRON_CLASS} />
           </>
         )}
       </button>
@@ -218,6 +226,61 @@ export function FloatingPanel({
 }
 
 /**
+ * A search as a chip: collapsed a square search icon, the size of the other
+ * chips; opened it widens into a search field of the same height, with a ✕
+ * to close it. In a right-anchored row it grows to the left. The field is
+ * the caller's (`children`, given a `close`); its matches can drop below the
+ * chip, which is their positioning box.
+ */
+export function CanvasSearchChip({
+  label,
+  width = 240,
+  children,
+}: {
+  /** What is searched, e.g. "Find resource": the chip's name and title. */
+  label: string;
+  width?: number;
+  children: (close: () => void) => React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const close = () => setOpen(false);
+  const stop = {
+    onPointerDown: (e: React.PointerEvent) => e.stopPropagation(),
+    onMouseDown: (e: React.MouseEvent) => e.stopPropagation(),
+  };
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        title={label}
+        aria-label={label}
+        {...stop}
+        style={{ ...PANEL_SHELL, cursor: "pointer" }}
+        className={PANEL_CHIP_ICON_CLASS}
+      >
+        <Search className="h-3.5 w-3.5 text-slate-500" />
+      </button>
+    );
+  }
+  return (
+    <div {...stop} style={{ ...PANEL_SHELL, width }} className={`${PANEL_CHIP_CLASS} relative pr-1`}>
+      <Search className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+      <div className="min-w-0 flex-1">{children(close)}</div>
+      <button
+        type="button"
+        onClick={close}
+        title={`Close ${label.toLowerCase()}`}
+        aria-label={`Close ${label.toLowerCase()}`}
+        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+      >
+        <X className="h-3 w-3" />
+      </button>
+    </div>
+  );
+}
+
+/**
  * A chip that opens a dropdown, styled like a collapsed FloatingPanel: the
  * current choice plus the same chevron, so a panel that expands and a chip
  * that opens a menu read as the same kind of control.
@@ -246,23 +309,11 @@ export function CanvasSelect<T extends string>({
           title={label}
           onPointerDown={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}
-          style={{
-            ...PANEL_SHELL,
-            ...style,
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            padding: "6px 9px",
-            cursor: "pointer",
-            fontSize: 11,
-            fontWeight: 600,
-            color: "#334155",
-            lineHeight: 1,
-            whiteSpace: "nowrap",
-          }}
+          style={{ ...PANEL_SHELL, ...style, cursor: "pointer" }}
+          className={PANEL_CHIP_CLASS}
         >
           <span>{current?.label ?? value}</span>
-          <ChevronDown style={{ width: 12, height: 12, color: "#94a3b8", flexShrink: 0 }} />
+          <ChevronDown className={PANEL_CHIP_CHEVRON_CLASS} />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
@@ -382,23 +433,14 @@ export function MetricChips({
     <div
       onPointerDown={(e) => e.stopPropagation()}
       onMouseDown={(e) => e.stopPropagation()}
-      style={{
-        ...PANEL_SHELL,
-        ...style,
-        display: "flex",
-        alignItems: "center",
-        gap: 10,
-        padding: "6px 10px",
-        fontSize: 11,
-        // Matches the collapsed panel chip and the select, so chips sharing a
-        // row are all exactly the same height.
-        lineHeight: 1,
-        color: "#334155",
-      }}
+      // The chip size of the collapsed panels and the select, so chips sharing
+      // a row are all exactly the same height.
+      style={{ ...PANEL_SHELL, ...style }}
+      className={PANEL_CHIP_CLASS}
     >
       {visible.map((metric) => (
         <span key={metric.label} title={metric.title} style={{ whiteSpace: "nowrap", cursor: metric.title ? "help" : "default" }}>
-          <span style={{ color: "#94a3b8" }}>{metric.label} </span>
+          <span style={{ color: "#94a3b8", fontWeight: 400 }}>{metric.label} </span>
           <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>{metric.value}</span>
         </span>
       ))}

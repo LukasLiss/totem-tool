@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import { useCluster, type ClusterInfo } from "@/contexts/ClusterContext";
 import { filterRequestConfig, useFilterVersion } from "@/store/filterStore";
@@ -12,7 +12,7 @@ import {
 } from "@/react_component/orgamining/settings";
 import TooltipBox from "@/react_component/ResourceTooltip";
 import { toast } from "sonner";
-import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Download, Info, Loader2, MinusIcon, Network, Pause, Play, PlusIcon, Repeat, ScanIcon, Search, Settings2, SlidersHorizontal, Square, Timer, Users, Waypoints, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, Download, Info, Loader2, LockIcon, MinusIcon, Network, Pause, Play, PlusIcon, ScanIcon, Search, SlidersHorizontal, Square, Timer, UnlockIcon, Users, Waypoints, X } from "lucide-react";
 import {
   forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, forceRadial,
   type SimulationNodeDatum, type SimulationLinkDatum,
@@ -25,29 +25,30 @@ import { Label } from "@/components/ui/label";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
-import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   CanvasMessage,
+  CanvasSearchChip,
   CanvasSelect,
   CanvasShell,
   ControlPill,
-  FloatingPanel,
 } from "@/react_component/orgamining/canvas";
 import { GLASS_SURFACE } from "@/react_component/orgamining/canvasSurface";
-import {
-  fitBoxToAspect,
-  pointsBounds,
-  type Size,
-} from "@/react_component/orgamining/canvasGeometry";
+import { ObjectTypePanel } from "@/components/canvas/ObjectTypePanel";
+import { ActivityChart as PlaybackChart } from "@/components/canvas/ActivityChart";
+import { PillToggle } from "@/components/canvas/PillToggle";
+import { PlaybackPanel, type PlaybackStatus } from "@/components/canvas/PlaybackPanel";
+import { defaultSpeed, fmtPlaybackTime } from "@/components/canvas/playback";
+import { panelAtPill, roomBelowForPill, type PillRegion, type PillSpot } from "@/components/canvas/pillSpots";
+import { FIT_GAP, bestFit, pillRect, type FitRect } from "@/components/canvas/canvasFit";
+import { useCanvasGestures } from "@/components/canvas/useCanvasGestures";
+import { type Size } from "@/react_component/orgamining/canvasGeometry";
 
 
 /* ── Types ─────────────────────────────────────────────────── */
@@ -108,6 +109,8 @@ type OCHandoverExplorerProps = {
   filterEnabled?: boolean;
   /** Per-widget local filter params to append to every request. */
   localFilterParams?: Record<string, string>;
+  /** Embedded only: the card's title (with its filters), drawn in the canvas's top-left corner. */
+  title?: React.ReactNode;
 };
 
 type ViewMode = HandoverViewMode;
@@ -147,12 +150,19 @@ const TIME_COLS: SortCol[] = ["avg_time", "min_time", "max_time"];
  * popover) and one that floats over the page.
  */
 function NodeSearch({
-  nodes, typeColorMap, onSelect, inline = false, className, width,
+  nodes, typeColorMap, onSelect, inline = false, chip = false, onEscape, className, width,
 }: {
   nodes: HandoverNode[];
   typeColorMap: Record<string, string>;
   onSelect: (id: string) => void;
   inline?: boolean;
+  /**
+   * Inside a CanvasSearchChip: a bare field filling the chip, focused at
+   * once; the matches drop below the chip, as wide as it.
+   */
+  chip?: boolean;
+  /** Escape on an empty field (chip): e.g. close the chip. */
+  onEscape?: () => void;
   className?: string;
   width?: number;
 }) {
@@ -199,7 +209,11 @@ function NodeSearch({
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Escape") { setOpen(false); return; }
+    if (e.key === "Escape") {
+      if (chip && !query) onEscape?.();
+      setOpen(false);
+      return;
+    }
     if (matches.length === 0) return;
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
@@ -212,9 +226,49 @@ function NodeSearch({
   };
 
   const showList = open && query.trim() !== "";
-  const listClass = inline
-    ? "mt-1.5 rounded-md border overflow-y-auto"
-    : "absolute z-50 top-full mt-1 left-0 w-full rounded-md border bg-popover shadow-md overflow-y-auto";
+  const listClass = chip
+    ? "absolute z-50 top-full mt-1.5 left-0 w-full rounded-xl border bg-popover p-1 shadow-md overflow-y-auto"
+    : inline
+      ? "mt-1.5 rounded-md border overflow-y-auto"
+      : "absolute z-50 top-full mt-1 left-0 w-full rounded-md border bg-popover shadow-md overflow-y-auto";
+
+  if (chip) {
+    // The chip is the positioning box of the matches (CanvasSearchChip).
+    return (
+      <div ref={rootRef} className={className}>
+        <input
+          autoFocus
+          aria-label="Find resource"
+          className="h-6 w-full min-w-0 bg-transparent text-[11px] font-normal text-slate-700 outline-none placeholder:text-slate-400"
+          placeholder="Find resource…"
+          value={query}
+          onChange={e => { setQuery(e.target.value); setOpen(true); }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={onKeyDown}
+        />
+        {showList && matches.length === 0 && (
+          <p className={`${listClass} px-2 py-1.5 text-xs font-normal text-muted-foreground`}>No matching resource.</p>
+        )}
+        {showList && matches.length > 0 && (
+          <div ref={listRef} className={listClass} style={{ maxHeight: 260 }}>
+            {matches.map((n, i) => (
+              <button
+                key={n.id}
+                className={`w-full text-left px-2 py-1.5 text-xs font-normal flex items-center gap-2 truncate rounded-md ${
+                  i === active ? "bg-accent" : "hover:bg-muted"
+                }`}
+                onMouseDown={e => { e.preventDefault(); choose(n.id); }}
+              >
+                <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: typeColorMap[n.object_type] ?? "#aaa" }} />
+                <span className="truncate">{n.id}</span>
+                <span className="ml-auto text-muted-foreground flex-shrink-0">{n.object_type}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div ref={rootRef} className={inline ? className : `relative ${className ?? ""}`} style={width ? { width } : undefined}>
@@ -301,23 +355,11 @@ const NODE_R = 26;
  * makes the layout stable and turns a resize into a viewBox re-fit.
  */
 const HANDOVER_CANVAS = { width: 1100, height: 760 };
-/** Padding around the node cloud when fitting the view, in canvas units. */
-const HANDOVER_VIEW_PAD = NODE_R + 20;
 /** One press of the pill's zoom buttons. */
 const ZOOM_STEP = 1.25;
 
-/* ── View box maths, shared by the pill's controls and the opening view ──
-   The graph opens on exactly what the fit button followed by one zoom-out
-   gives, so these are the single definition of both. */
+/* ── View box maths of the pill's controls and the fit ── */
 
-/** What the fit button shows: the node cloud framed at the canvas's ratio. */
-function fittedToNodes(positions: Record<string, { x: number; y: number }>, ratio: number) {
-  const bounds = pointsBounds(Object.values(positions)) ?? {
-    minX: 0, minY: 0, maxX: HANDOVER_CANVAS.width, maxY: HANDOVER_CANVAS.height,
-  };
-  // The minimum keeps self-loops (which arch ~NODE_R*2.4 above the node) visible.
-  return fitBoxToAspect(bounds, ratio, HANDOVER_VIEW_PAD, NODE_R * 10);
-}
 
 /** One press of the zoom-out button: a wider box shows the graph smaller. */
 function zoomedOut(vb: { x: number; y: number; w: number; h: number }) {
@@ -329,6 +371,52 @@ function zoomedOut(vb: { x: number; y: number; w: number; h: number }) {
 function zoomedIn(vb: { x: number; y: number; w: number; h: number }) {
   const w = vb.w / ZOOM_STEP, h = vb.h / ZOOM_STEP;
   return { x: vb.x + (vb.w - w) / 2, y: vb.y + (vb.h - h) / 2, w, h };
+}
+
+/** Largest zoom of the fit (px per canvas unit), so a small graph is not blown up. */
+const FIT_MAX_SCALE = 1.4;
+/** Room for arrowheads, stroke widths and the slight bow of the arcs, in canvas units. */
+const FIT_EDGE_MARGIN = 8;
+
+/**
+ * What the graph covers, in canvas units: the node circles and the self-loops
+ * above them (`loops`: number of self-loops per node). A loop is a cubic arc
+ * whose control points lie `loopH` above the node (see the edge paths), so it
+ * peaks about ¾ of the way up to them.
+ */
+function graphExtent(positions: Record<string, { x: number; y: number }>, loops: Map<string, number>) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const [id, p] of Object.entries(positions)) {
+    const n = loops.get(id) ?? 0;
+    const loopH = NODE_R * 2.4 + (n - 1) * NODE_R * 0.9;
+    const loopW = NODE_R * 1.6 + (n - 1) * NODE_R * 0.9;
+    const up = n > 0 ? Math.max(NODE_R, 0.19 * NODE_R + 0.75 * loopH) : NODE_R;
+    const side = n > 0 ? Math.max(NODE_R, 0.75 * loopW) : NODE_R;
+    minX = Math.min(minX, p.x - side);
+    maxX = Math.max(maxX, p.x + side);
+    minY = Math.min(minY, p.y - up);
+    maxY = Math.max(maxY, p.y + NODE_R);
+  }
+  if (!Number.isFinite(minX)) return { minX: 0, minY: 0, maxX: HANDOVER_CANVAS.width, maxY: HANDOVER_CANVAS.height };
+  return { minX: minX - FIT_EDGE_MARGIN, minY: minY - FIT_EDGE_MARGIN, maxX: maxX + FIT_EDGE_MARGIN, maxY: maxY + FIT_EDGE_MARGIN };
+}
+
+/**
+ * The fitted view, as on the DFG canvas (bestFit): the whole graph, as large
+ * as fits clear of the canvas controls (`avoid`: title, chips, legend, pill)
+ * and centred while it has room to spare. As a viewBox of the element's ratio.
+ */
+function fittedView(
+  positions: Record<string, { x: number; y: number }>,
+  loops: Map<string, number>,
+  size: { width: number; height: number },
+  avoid: FitRect[],
+) {
+  const ext = graphExtent(positions, loops);
+  const graph = { w: Math.max(1, ext.maxX - ext.minX), h: Math.max(1, ext.maxY - ext.minY) };
+  const box = { w: size.width, h: size.height };
+  const fit = bestFit(box, graph, { top: FIT_GAP, right: FIT_GAP, bottom: FIT_GAP, left: FIT_GAP }, avoid, FIT_MAX_SCALE);
+  return { x: ext.minX - fit.x / fit.scale, y: ext.minY - fit.y / fit.scale, w: box.w / fit.scale, h: box.h / fit.scale };
 }
 
 // Interpolate between grey (#CBD5E1) and a hex color; t=0 → grey, t=1 → color
@@ -346,90 +434,14 @@ const BASE_CURVE = 38;
 
 const _SUPS = "⁰¹²³⁴⁵⁶⁷⁸⁹";
 /**
- * Animation panel size: content width and chart height. The defaults are the
- * minimum; 242 + panel padding and border = 272, the centrality panel's width.
+ * The embedded canvas's chrome, as on the DFG canvas: 16 px from the edges,
+ * the title row (30 px) top left with the legend 8 px under it.
  */
-type AnimPanelSize = { width: number; chartHeight: number };
-const ANIM_PANEL_MIN: AnimPanelSize = { width: 242, chartHeight: 56 };
-const ANIM_PANEL_MAX: AnimPanelSize = { width: 720, chartHeight: 420 };
-const ANIM_PANEL_SIZE_KEY = "ochandover.animationPanelSize";
-const ANIM_PANEL_TOP = 54;
-/** Space kept free below the panel: the control pill, like the toolbar popovers (bottom: 68). */
-const ANIM_PANEL_PILL_CLEARANCE = 68;
+const CHROME_INSET = 16;
+/** Where the control pill may go: the top corners hold the title, the legend and the Find/View chips. */
+const HANDOVER_PILL_SPOTS: readonly PillSpot[] = ["bottom-right", "bottom-left", "left", "right"];
+const UNDER_TITLE = CHROME_INSET + 30 + 8;
 
-const clampAnimPanelSize = (size: AnimPanelSize): AnimPanelSize => ({
-  width: Math.min(ANIM_PANEL_MAX.width, Math.max(ANIM_PANEL_MIN.width, size.width)),
-  chartHeight: Math.min(ANIM_PANEL_MAX.chartHeight, Math.max(ANIM_PANEL_MIN.chartHeight, size.chartHeight)),
-});
-
-/** The size this viewer left the panel at; storage may be unavailable. */
-function loadAnimPanelSize(): AnimPanelSize {
-  try {
-    const raw = localStorage.getItem(ANIM_PANEL_SIZE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (typeof parsed?.width === "number" && typeof parsed?.chartHeight === "number") {
-        return clampAnimPanelSize(parsed);
-      }
-    }
-  } catch { /* fall back to the default */ }
-  return ANIM_PANEL_MIN;
-}
-
-/**
- * Drag grip in the animation panel's bottom-left corner. The panel is pinned
- * top right, so dragging left widens it and dragging down makes the chart
- * taller, until the panel reaches the control pill. The size is stored when
- * the drag ends.
- */
-function AnimPanelResizeGrip({ size, onResize }: { size: AnimPanelSize; onResize: (size: AnimPanelSize) => void }) {
-  const drag = useRef<{ x: number; y: number; start: AnimPanelSize; last: AnimPanelSize; maxChart: number } | null>(null);
-  const endDrag = () => {
-    const d = drag.current;
-    drag.current = null;
-    if (!d) return;
-    try { localStorage.setItem(ANIM_PANEL_SIZE_KEY, JSON.stringify(d.last)); } catch { /* not persisted */ }
-  };
-  return (
-    <div
-      role="separator"
-      aria-label="Resize animation panel"
-      title="Drag to resize"
-      className="absolute left-0 bottom-0 h-3.5 w-3.5 cursor-nesw-resize touch-none text-muted-foreground/60 hover:text-muted-foreground"
-      onPointerDown={e => {
-        e.preventDefault(); // no text selection while dragging
-        e.currentTarget.setPointerCapture(e.pointerId);
-        // The grip sits in the panel, the panel in the canvas: the chart may
-        // grow by whatever room is left between the panel and the pill.
-        const panel = e.currentTarget.offsetParent as HTMLElement | null;
-        const canvas = panel?.offsetParent as HTMLElement | null;
-        const room = panel && canvas
-          ? canvas.clientHeight - ANIM_PANEL_TOP - ANIM_PANEL_PILL_CLEARANCE - panel.scrollHeight
-          : Infinity;
-        drag.current = { x: e.clientX, y: e.clientY, start: size, last: size, maxChart: size.chartHeight + Math.max(0, room) };
-      }}
-      onPointerMove={e => {
-        const d = drag.current;
-        if (!d) return;
-        d.last = clampAnimPanelSize({
-          width: d.start.width + (d.x - e.clientX),
-          chartHeight: Math.min(d.maxChart, d.start.chartHeight + (e.clientY - d.y)),
-        });
-        onResize(d.last);
-      }}
-      onPointerUp={endDrag}
-      onPointerCancel={endDrag}
-    >
-      <svg viewBox="0 0 14 14" className="h-full w-full" aria-hidden>
-        <path d="M3 4 L10 11 M3 8 L6 11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-      </svg>
-    </div>
-  );
-}
-
-/** Borderless icon button of the animation panel's playback row. */
-const ANIM_ICON_BUTTON =
-  "flex items-center justify-center h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors";
 
 function fmtSpeed(s: number): string {
   if (s === 1) return "1×";
@@ -456,7 +468,10 @@ export default function OCHandoverExplorer({
   autoStart = false,
   filterEnabled = true,
   localFilterParams,
+  title,
 }: OCHandoverExplorerProps) {
+  // Where the graph's control pill sits: the animation panel (top right) ends above it.
+  const [pillRegion, setPillRegion] = useState<PillRegion | null>(null);
   // Settings are read once; a host that changes them re-mounts the explorer.
   const [initial] = useState<HandoverSettings>(() => ({ ...DEFAULT_HANDOVER_SETTINGS, ...initialSettings }));
   const [objectTypes, setObjectTypes] = useState<string[]>([]);
@@ -511,7 +526,9 @@ export default function OCHandoverExplorer({
   const [animSliderTime, setAnimSliderTime] = useState(0);
   const [animPlaySpeed, setAnimPlaySpeed] = useState(100);
   const [animLoop, setAnimLoop] = useState(false);
-  const [animPanelSize, setAnimPanelSize] = useState(loadAnimPanelSize);
+  // The dashboard's animation panel (opened from the pill) and its chart's playhead mover.
+  const [animationOpen, setAnimationOpen] = useState(false);
+  const playheadMover = useRef<((time: number) => void) | null>(null);
   const [connectorMode, setConnectorMode] = useState<"fade" | "persist" | "none">("persist");
   const animPlayRef = useRef<(() => void) | null>(null);
   const animPauseRef = useRef<(() => void) | null>(null);
@@ -520,13 +537,14 @@ export default function OCHandoverExplorer({
     setAnimIsPlaying(false);
     if (flowsData) {
       const duration = flowsData.timeline.end - flowsData.timeline.start;
-      setAnimPlaySpeed(snapSpeed(Math.max(1, duration / 30)));
+      // The dashboard's panel has the shared speed slider; the analysis page its list.
+      setAnimPlaySpeed(embedded ? defaultSpeed(duration) : snapSpeed(Math.max(1, duration / 30)));
       setAnimSliderTime(flowsData.timeline.start);
     } else {
       setAnimPlaySpeed(100);
       setAnimSliderTime(0);
     }
-  }, [flowsData]);
+  }, [flowsData, embedded]);
   useEffect(() => {
     if (selectedNode) animPauseRef.current?.();
   }, [selectedNode]);
@@ -1041,9 +1059,35 @@ export default function OCHandoverExplorer({
   // Dashboard widget: one full-bleed canvas, every control floating over it.
   // Compute settings are not reachable here — they are preselected in the
   // dashboard's edit mode, the same contract the OCCN widget follows.
+  // --- the animation (dashboard): play button in the pill, shared panel ---
+  const seriesFor = useCallback(
+    (metric: ActivityMetric) => {
+      // Only drawn once there are flows (the panel's status is ready then).
+      if (!flowsData) return { kind: "step" as const, lines: [], valueAt: () => ({}), format: String };
+      if (metric === "rate") return computeBalanceSeries(flowsData.flows, flowsData.timeline);
+      if (metric === "age") return computeAgeSeries(flowsData.flows, flowsData.timeline);
+      return computeObjectSeries(flowsData.flows, flowsData.timeline, typeColorMap);
+    },
+    [flowsData, typeColorMap],
+  );
+  const stopAnimation = () => {
+    animPauseRef.current?.();
+    setFlowsData(null);
+    setFlowsStatus("idle");
+    setAnimationOpen(false);
+  };
+  const playbackStatus: PlaybackStatus =
+    flowsStatus === "error"
+      ? { kind: "message", text: "The handovers could not be loaded.", error: true }
+      : flowsStatus === "ready" && flowsData && flowsData.flows.length === 0
+        ? { kind: "message", text: "No handovers to animate here." }
+        : flowsStatus === "ready" && flowsData
+          ? { kind: "ready" }
+          : { kind: "loading", text: "Loading the handovers…" };
+
   if (embedded) {
     return (
-      <CanvasShell>
+      <CanvasShell title={title}>
         {(size) => {
           // The tile has not been laid out yet; drawing against a zero box
           // would flash a collapsed graph before the first real measurement.
@@ -1093,7 +1137,7 @@ export default function OCHandoverExplorer({
           if (viewMode !== "graph") {
             return (
               <>
-                <div className="absolute inset-0 flex flex-col p-3" style={{ paddingTop: 52 }}>
+                <div className="absolute inset-0 flex flex-col p-4" style={{ paddingTop: UNDER_TITLE }}>
                   {viewMode === "table" ? (
                     <div className="overflow-auto rounded-md border flex-1 min-h-0">{edgeTableEl}</div>
                   ) : (
@@ -1107,7 +1151,7 @@ export default function OCHandoverExplorer({
                     />
                   )}
                 </div>
-                <div style={{ position: "absolute", top: 12, right: 12, zIndex: 14 }}>{viewSelect}</div>
+                <div style={{ position: "absolute", top: CHROME_INSET, right: CHROME_INSET, zIndex: 14 }}>{viewSelect}</div>
               </>
             );
           }
@@ -1116,7 +1160,7 @@ export default function OCHandoverExplorer({
             // Same insets as the table and log views, so switching between
             // them does not shift the content around inside the tile.
             return (
-              <div className="absolute inset-0 flex flex-col p-3" style={{ paddingTop: 52 }}>
+              <div className="absolute inset-0 flex flex-col p-4" style={{ paddingTop: UNDER_TITLE }}>
                 <NodeDetailView
                   embedded
                   selectedNode={selectedNode}
@@ -1157,8 +1201,25 @@ export default function OCHandoverExplorer({
                 bindingsData={bindingsData}
                 embedded
                 renderedSize={size}
+                legendTop={title ? UNDER_TITLE : CHROME_INSET}
+                onPillRegionChange={setPillRegion}
+                frameRef={playheadMover}
                 pillLeading={
                   <>
+                    {/* The animation's panel (top right), as on the DFG: opening it
+                        starts the animation, closing it leaves it running. */}
+                    <PillToggle
+                      label="Animation"
+                      open={animationOpen}
+                      onToggle={() => {
+                        if (!animationOpen && !flowsData && flowsStatus !== "loading") fetchFlows();
+                        setAnimationOpen(o => !o);
+                      }}
+                      running={Boolean(flowsData)}
+                      runningHint="the animation is on"
+                    >
+                      <Play className="h-4 w-4" />
+                    </PillToggle>
                     {(
                       <Button
                         type="button"
@@ -1213,152 +1274,81 @@ export default function OCHandoverExplorer({
               {/* Top-right cluster: the view dropdown sits to the right of the
                   search chip, and the row is right-anchored so expanding the
                   search panel grows it leftwards instead of off the tile. */}
-              <div style={{
-                position: "absolute", top: 12, right: 12, zIndex: 14,
+              <div data-fit-avoid="header" style={{
+                position: "absolute", top: CHROME_INSET, right: CHROME_INSET, zIndex: 14,
                 display: "flex", alignItems: "flex-start", gap: 8,
               }}>
-                <FloatingPanel
-                  title="Find"
-                  icon={<Search style={{ width: 13, height: 13, color: "#64748b" }} />}
-                  narrow
-                >
-                {/* The matches sit in the panel's own flow rather than in an
-                    absolutely positioned popover: the panel scrolls its
-                    overflow, so a popover would be clipped by it. */}
-                <NodeSearch
-                  inline
-                  width={220}
-                  nodes={visibleGraphNodes}
-                  typeColorMap={typeColorMap}
-                  onSelect={setSelectedNode}
-                />
-                </FloatingPanel>
+                {/* Widens to the left into the search field (the row is right-anchored). */}
+                <CanvasSearchChip label="Find resource">
+                  {(close) => (
+                    <NodeSearch
+                      chip
+                      onEscape={close}
+                      nodes={visibleGraphNodes}
+                      typeColorMap={typeColorMap}
+                      onSelect={(id) => { setSelectedNode(id); close(); }}
+                    />
+                  )}
+                </CanvasSearchChip>
                 {viewSelect}
               </div>
-              {(
-                <FloatingPanel
-                  title="Animation"
-                  icon={<Play style={{ width: 13, height: 13, color: "#64748b" }} />}
-                  narrow
-                  plainHeading
-                  style={{
-                    position: "absolute", top: ANIM_PANEL_TOP, right: 12, zIndex: 13,
-                    maxHeight: `calc(100% - ${ANIM_PANEL_TOP + ANIM_PANEL_PILL_CLEARANCE}px)`,
-                  }}
-                >
-                  <div className="flex flex-col gap-2" style={{ width: animPanelSize.width }}>
-                    {!flowsData && (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        disabled={flowsStatus === "loading"}
-                        onClick={fetchFlows}
-                      >
-                        {flowsStatus === "loading"
-                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          : <><Play className="h-3.5 w-3.5" /> Animate</>}
-                      </Button>
-                    )}
-                    {flowsData && (
-                      <>
-                        <ActivityChart
-                          flowsData={flowsData}
-                          time={animSliderTime}
-                          typeColorMap={typeColorMap}
-                          onScrub={t => animScrubRef.current?.(t)}
-                          height={animPanelSize.chartHeight}
-                        />
-                        <Slider
-                          min={flowsData.timeline.start}
-                          max={flowsData.timeline.end}
-                          step={Math.max(1, (flowsData.timeline.end - flowsData.timeline.start) / 2000)}
-                          value={[animSliderTime]}
-                          onValueChange={([v]) => animScrubRef.current?.(v)}
-                        />
-                        {/* Playback row below the slider, so the slider keeps the chart's full width.
-                            Equal side columns keep the timestamp centred in the panel. */}
-                        <div className="grid grid-cols-[1fr_auto_1fr] items-center -mx-1.5">
-                          <div className="flex items-center gap-0.5">
-                            <button
-                              type="button"
-                              className={ANIM_ICON_BUTTON}
-                              onClick={animIsPlaying ? () => animPauseRef.current?.() : () => animPlayRef.current?.()}
-                              title={animIsPlaying ? "Pause" : "Play"}
-                            >
-                              {animIsPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
-                            </button>
-                            <button
-                              type="button"
-                              className={cn(ANIM_ICON_BUTTON, animLoop && "text-blue-600 hover:text-blue-700")}
-                              onClick={() => setAnimLoop(l => !l)}
-                              title={animLoop ? "Loop on" : "Loop off"}
-                              aria-pressed={animLoop}
-                            >
-                              <Repeat className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                          <span className="px-1 text-[11px] text-muted-foreground tabular-nums whitespace-nowrap">
-                            {new Date(animSliderTime * 1000).toLocaleDateString([], { month: "short", day: "2-digit", year: "2-digit" })}
-                            {" "}
-                            {new Date(animSliderTime * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                          </span>
-                          <div className="flex items-center justify-end gap-0.5">
-                            <button
-                              type="button"
-                              className={ANIM_ICON_BUTTON}
-                              onClick={() => { setFlowsData(null); setFlowsStatus("idle"); }}
-                              title="Stop"
-                            >
-                              <Square className="h-3.5 w-3.5" />
-                            </button>
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <button
-                                  type="button"
-                                  className={ANIM_ICON_BUTTON}
-                                  title={`Playback settings · ${fmtSpeed(animPlaySpeed)}, ${connectorMode}`}
-                                >
-                                  <Settings2 className="h-3.5 w-3.5" />
-                                </button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                <DropdownMenuLabel className="text-xs">Playback options</DropdownMenuLabel>
-                                <DropdownMenuSeparator />
-                                {/* Speed and connectors side by side; the long speed list scrolls */}
-                                <div className="flex">
-                                  <div>
-                                    <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Speed</DropdownMenuLabel>
-                                    <DropdownMenuRadioGroup
-                                      value={String(animPlaySpeed)}
-                                      onValueChange={v => setAnimPlaySpeed(Number(v))}
-                                      className="max-h-24 overflow-y-auto"
-                                    >
-                                      {_SPEED_OPTIONS.map(s => (
-                                        <DropdownMenuRadioItem key={s} value={String(s)}>{s}×</DropdownMenuRadioItem>
-                                      ))}
-                                    </DropdownMenuRadioGroup>
-                                  </div>
-                                  <div className="w-px bg-border mx-1 my-1" />
-                                  <div>
-                                    <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Connectors</DropdownMenuLabel>
-                                    <DropdownMenuRadioGroup value={connectorMode} onValueChange={v => setConnectorMode(v as "fade" | "persist" | "none")}>
-                                      <DropdownMenuRadioItem value="fade">Fade</DropdownMenuRadioItem>
-                                      <DropdownMenuRadioItem value="persist">Persist</DropdownMenuRadioItem>
-                                      <DropdownMenuRadioItem value="none">None</DropdownMenuRadioItem>
-                                    </DropdownMenuRadioGroup>
-                                  </div>
-                                </div>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          </div>
-                        </div>
-                      </>
-                    )}
+              <PlaybackPanel
+                open={animationOpen}
+                onClose={() => setAnimationOpen(false)}
+                status={playbackStatus}
+                renderChart={(height) =>
+                  flowsData && (
+                    <PlaybackChart
+                      metrics={ACTIVITY_METRICS}
+                      seriesFor={seriesFor}
+                      timeline={flowsData.timeline}
+                      time={animSliderTime}
+                      onScrub={t => animScrubRef.current?.(t)}
+                      height={height}
+                      moverRef={playheadMover}
+                      timeLabel={fmtPlaybackTime(animSliderTime)}
+                      testIdPrefix="handover"
+                    />
+                  )
+                }
+                playing={animIsPlaying}
+                onPlay={() => animPlayRef.current?.()}
+                onPause={() => animPauseRef.current?.()}
+                loop={animLoop}
+                onLoopChange={setAnimLoop}
+                onStop={stopAnimation}
+                speed={animPlaySpeed}
+                onSpeedChange={setAnimPlaySpeed}
+                extraRow={
+                  // The lines between an object's consecutive handovers.
+                  <div className="flex items-center gap-2 -mt-1 text-[11px]">
+                    <span className="text-slate-500">Connectors</span>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          className="flex items-center gap-0.5 text-xs capitalize text-slate-700 transition-colors hover:text-slate-900"
+                          title="Lines between an object's consecutive handovers"
+                        >
+                          {connectorMode}
+                          <ChevronDown className="h-3 w-3 shrink-0 text-slate-400" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start">
+                        <DropdownMenuRadioGroup value={connectorMode} onValueChange={v => setConnectorMode(v as "fade" | "persist" | "none")}>
+                          <DropdownMenuRadioItem value="fade">Fade</DropdownMenuRadioItem>
+                          <DropdownMenuRadioItem value="persist">Persist</DropdownMenuRadioItem>
+                          <DropdownMenuRadioItem value="none">None</DropdownMenuRadioItem>
+                        </DropdownMenuRadioGroup>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
-                  {flowsData && <AnimPanelResizeGrip size={animPanelSize} onResize={setAnimPanelSize} />}
-                </FloatingPanel>
-              )}
+                }
+                pillRegion={pillRegion}
+                top={UNDER_TITLE}
+                sizeKey="ochandover.animationPanelSize"
+                testIdPrefix="handover"
+              />
             </>
           );
         }}
@@ -2058,7 +2048,6 @@ function EventLogTable({
 
 /* ── Activity timeline ──────────────────────────────────────── */
 const ACTIVITY_W = 1000;           // viewBox width; the SVG is stretched to the panel
-const ACTIVITY_H = 56;             // default chart height; the panel can be resized taller
 const ACTIVITY_MAX_STEPS = 2000;   // above this, a step curve is binned
 const ACTIVITY_BINS = 240;
 const ACTIVITY_SAMPLES = 480;      // sample points of the time-in-transit curve
@@ -2114,11 +2103,6 @@ const activityXOf = (timeline: FlowsData["timeline"]) => {
 const ACTIVITY_BIN_W = ACTIVITY_W / ACTIVITY_BINS;
 const activityBinOf = (x: number) => Math.min(ACTIVITY_BINS - 1, Math.floor(x / ACTIVITY_BIN_W));
 const fmtCount = (v: number) => v.toLocaleString();
-const legendDotColor = (line: { color: string; negColor?: string }, v: number) =>
-  !line.negColor ? line.color : v > 0 ? line.color : v < 0 ? line.negColor : NEUTRAL_CURVE_COLOR;
-/** Chart y of `v` on a scale from `trough` (bottom) to `peak` (top) in a chart `height` tall. */
-const activityY = (v: number, peak: number, trough: number, height: number) =>
-  2 + ((peak - v) / (peak - trough > 0 ? peak - trough : 1)) * (height - 3);
 const fmtSigned = (v: number) => (v > 0 ? `+${v.toLocaleString()}` : v < 0 ? `−${(-v).toLocaleString()}` : "0");
 
 /**
@@ -2293,175 +2277,6 @@ function ageAt(flows: FlowEvent[], time: number): number {
   return active > 0 ? sum / active : NaN;
 }
 
-/**
- * Curves of the selected activity metric, drawn above the animation
- * slider. Clicking or dragging on it scrubs, like the slider.
- *
- * The caller insets it by the slider thumb's half-width, the range the thumb
- * centre travels, so a time sits at the same x in both.
- */
-function ActivityChart({
-  flowsData,
-  time,
-  typeColorMap,
-  onScrub,
-  height = ACTIVITY_H,
-}: {
-  flowsData: FlowsData;
-  time: number;
-  typeColorMap: Record<string, string>;
-  onScrub: (time: number) => void;
-  height?: number;
-}) {
-  const [metric, setMetric] = useState<ActivityMetric>("objects");
-  const metricInfo = ACTIVITY_METRICS.find(m => m.value === metric)!;
-  const series = useMemo(() => {
-    if (metric === "rate") return computeBalanceSeries(flowsData.flows, flowsData.timeline);
-    if (metric === "age") return computeAgeSeries(flowsData.flows, flowsData.timeline);
-    return computeObjectSeries(flowsData.flows, flowsData.timeline, typeColorMap);
-  }, [flowsData, metric, typeColorMap]);
-  const values = useMemo(() => series.valueAt(time), [series, time]);
-
-  // Clicking a legend entry shows only that line, rescaled to its own peak
-  const [solo, setSolo] = useState<string | null>(null);
-  const visible = useMemo(
-    () => (series.lines.some(l => l.key === solo) ? series.lines.filter(l => l.key === solo) : series.lines),
-    [series, solo],
-  );
-  // Scale from the lowest to the highest visible value, always including zero
-  const { peak, trough } = useMemo(() => {
-    let hi = 0, lo = 0;
-    for (const line of visible) for (const p of line.points) {
-      if (p.v > hi) hi = p.v;
-      if (p.v < lo) lo = p.v;
-    }
-    return { peak: hi, trough: lo };
-  }, [visible]);
-
-  const paths = useMemo(() => {
-    const y = (v: number) => activityY(v, peak, trough, height).toFixed(2);
-    return visible.map(({ points }) => {
-      if (series.kind === "bars") {
-        let up = "", down = "";
-        points.forEach((p, i) => {
-          if (p.v === 0) return;
-          const x0 = p.x.toFixed(2), x1 = (points[i + 1]?.x ?? ACTIVITY_W).toFixed(2);
-          const rect = `M${x0} ${y(0)}H${x1}V${y(p.v)}H${x0}Z`;
-          if (p.v > 0) up += rect; else down += rect;
-        });
-        return { up, down };
-      }
-      if (series.kind === "step") {
-        return { line: `M0 ${y(0)}` + points.map(p => `H${p.x.toFixed(2)}V${y(p.v)}`).join("") + `H${ACTIVITY_W}` };
-      }
-      let d = "", pen = false;
-      for (const p of points) {
-        if (!Number.isFinite(p.v)) { pen = false; continue; }
-        d += `${pen ? "L" : "M"}${p.x.toFixed(2)} ${y(p.v)}`;
-        pen = true;
-      }
-      return { line: d };
-    });
-  }, [series, visible, peak, trough, height]);
-
-  const { start, end } = flowsData.timeline;
-  const span = Math.max(end - start, 1e-9);
-  const scrubFromPointer = (e: React.PointerEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-    onScrub(start + frac * span);
-  };
-  const playheadPct = Math.min(100, Math.max(0, (time - start) / span * 100));
-
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button className="flex items-center gap-0.5 hover:text-foreground transition-colors" title={metricInfo.hint}>
-              <span>{metricInfo.label}</span>
-              <ChevronDown className="h-3 w-3 shrink-0" />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            <DropdownMenuRadioGroup value={metric} onValueChange={v => { setMetric(v as ActivityMetric); setSolo(null); }}>
-              {ACTIVITY_METRICS.map(m => (
-                <DropdownMenuRadioItem key={m.value} value={m.value}>{m.label}</DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
-        <span className="tabular-nums">
-          {series.kind === "bars"
-            ? `peak ${fmtSigned(peak)} / ${fmtSigned(trough)}`
-            : `peak ${series.format(peak)}${series.unit ? ` ${series.unit}` : ""}`}
-        </span>
-      </div>
-      <div className="px-2">
-        <div
-          className="relative cursor-pointer touch-none"
-          style={{ height }}
-          onPointerDown={e => { e.preventDefault(); e.currentTarget.setPointerCapture(e.pointerId); scrubFromPointer(e); }}
-          onPointerMove={e => { if (e.currentTarget.hasPointerCapture(e.pointerId)) scrubFromPointer(e); }}
-        >
-          <svg
-            className="absolute inset-0 h-full w-full overflow-visible"
-            viewBox={`0 0 ${ACTIVITY_W} ${height}`}
-            preserveAspectRatio="none"
-          >
-            {visible.map((line, i) => (series.kind === "bars"
-              ? (
-                <g key={line.key}>
-                  <path d={paths[i].up} fill={line.color} />
-                  <path d={paths[i].down} fill={line.negColor ?? line.color} />
-                </g>
-              ) : (
-                <path
-                  key={line.key}
-                  d={paths[i].line}
-                  fill="none"
-                  stroke={line.color}
-                  strokeWidth={1.5}
-                  strokeLinejoin="round"
-                  vectorEffect="non-scaling-stroke"
-                />
-              )
-            ))}
-            {/* Zero line, on top so it stays visible through bars */}
-            <line
-              x1={0} x2={ACTIVITY_W} y1={activityY(0, peak, trough, height)} y2={activityY(0, peak, trough, height)}
-              className="text-border" stroke="currentColor" vectorEffect="non-scaling-stroke"
-            />
-          </svg>
-          <div
-            className="absolute top-0 bottom-0 w-px bg-foreground/40 pointer-events-none"
-            style={{ left: `${playheadPct}%` }}
-          />
-        </div>
-      </div>
-      <div className="flex items-start gap-2 text-[11px]">
-        {series.footnote && <span className="text-muted-foreground whitespace-nowrap">{series.footnote}</span>}
-        <div className="ml-auto flex flex-wrap justify-end gap-x-3 gap-y-0.5">
-          {series.lines.map(line => (
-            <button
-              key={line.key}
-              type="button"
-              className={`flex items-center gap-1 transition-opacity${visible.includes(line) ? "" : " opacity-40"}`}
-              title={solo === line.key ? `${line.label} · click to show all` : `${line.label} · click to show only this`}
-              onClick={() => setSolo(s => (s === line.key ? null : line.key))}
-            >
-              <span
-                className="w-2 h-2 rounded-full shrink-0"
-                style={{ backgroundColor: legendDotColor(line, values[line.key] ?? 0) }}
-              />
-              <span className="tabular-nums">{series.format(values[line.key] ?? 0)}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 /* ── HandoverGraph ──────────────────────────────────────────── */
 type SimNode = SimulationNodeDatum & { id: string; object_type: string };
@@ -2729,6 +2544,9 @@ function HandoverGraph({
   embedded = false,
   pillLeading,
   renderedSize,
+  legendTop = CHROME_INSET,
+  onPillRegionChange,
+  frameRef,
 }: {
   nodes: HandoverNode[];
   edges: HandoverEdge[];
@@ -2756,10 +2574,16 @@ function HandoverGraph({
   bindingsData?: BindingPattern[] | null;
   /** Fill the parent and float every control over the canvas (dashboard tile). */
   embedded?: boolean;
-  /** Rendered at the start of the control pill (the explorer's view switcher). */
+  /** Rendered in the control pill after zoom and fit (the explorer's play, bindings and units). */
   pillLeading?: React.ReactNode;
   /** Size to render at; when omitted the graph measures its own container. */
   renderedSize?: Size;
+  /** Embedded: where the legend starts (under the card's title, when there is one). */
+  legendTop?: number;
+  /** Where the control pill sits, for panels outside the graph that must keep clear of it. */
+  onPillRegionChange?: (region: PillRegion | null) => void;
+  /** Called with the playhead on every animation frame (e.g. the chart's playhead, without a render). */
+  frameRef?: React.RefObject<((time: number) => void) | null>;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -2776,6 +2600,12 @@ function HandoverGraph({
    * box that no longer existed.
    */
   const userAdjustedRef = useRef(false);
+  /** The fit mode (the fit button grey): the view follows the fit until the user moves it. */
+  const [fitted, setFitted] = useState(true);
+  const markUserView = () => {
+    userAdjustedRef.current = true;
+    setFitted(false);
+  };
   // Tile size the current viewBox was built for, so a resize can follow it.
   const prevSizeRef = useRef({ width: 0, height: 0 });
   const [viewBox, setViewBox] = useState({ x: 0, y: 0, w: HANDOVER_CANVAS.width, h: HANDOVER_CANVAS.height });
@@ -3079,6 +2909,7 @@ function HandoverGraph({
       lastWallClockRef.current = wallNow;
       const newTime = Math.min(playheadTimeRef.current + wallDelta * playSpeedRef.current, fd.timeline.end);
       playheadTimeRef.current = newTime;
+      frameRef?.current?.(newTime);
       const layer = dotsLayerRef.current;
       if (layer) updateDotLayer(layer, pathMapRef.current, fd.flows, newTime, tcm, connectorModeRef.current);
       frameCountRef.current = (frameCountRef.current + 1) % 4;
@@ -3122,6 +2953,52 @@ function HandoverGraph({
   const [timeMetricOpen, setTimeMetricOpen] = useState(false);
   const [selectedTimeMetric, setSelectedTimeMetric] = useState<"max" | "min" | "avg" | "range" | null>(null);
   const [highlightedObjectType, setHighlightedObjectType] = useState<string | null>(null);
+  // The legend: hovering a type highlights it for as long as the pointer stays,
+  // a click (there or on an arc) keeps it highlighted (highlightedObjectType).
+  const [legendHover, setLegendHover] = useState<string | null>(null);
+  const [legendCollapsed, setLegendCollapsed] = useState(true);
+  const shownHighlight = legendHover ?? highlightedObjectType;
+  const [pillRegion, setPillRegion] = useState<PillRegion | null>(null);
+  const popoverPlace = panelAtPill(pillRegion);
+  // Self-loops per node: they reach above the node, the fit makes room for them.
+  const selfLoops = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const e of edges) if (e.source === e.target) m.set(e.source, (m.get(e.source) ?? 0) + 1);
+    return m;
+  }, [edges]);
+  /**
+   * The canvas controls the fit keeps clear of (besides the pill): every
+   * element of the surrounding canvas marked `data-fit-avoid` — "header" (the
+   * title, the top-right chips: the graph starts below them), "box" (a
+   * collapsed chip: the graph may sit beside it) or "optional" (an open panel,
+   * which only gets room while that leaves the graph at least half its size).
+   * In px from the graph's top-left corner, measured as they change.
+   */
+  const [avoidRects, setAvoidRects] = useState<FitRect[]>([]);
+  useEffect(() => {
+    const host = containerRef.current;
+    const shell = host?.closest<HTMLElement>("[data-canvas-shell]");
+    if (!host || !shell || typeof ResizeObserver === "undefined") return;
+    const measure = () => {
+      const origin = host.getBoundingClientRect();
+      const rects: FitRect[] = [];
+      shell.querySelectorAll<HTMLElement>("[data-fit-avoid]").forEach(el => {
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) return;
+        const kind = el.dataset.fitAvoid;
+        rects.push({
+          x: r.left - origin.left, y: r.top - origin.top, w: r.width, h: r.height,
+          ...(kind === "header" ? { header: true } : kind === "optional" ? { optional: true } : {}),
+        });
+      });
+      setAvoidRects(prev => (JSON.stringify(prev) === JSON.stringify(rects) ? prev : rects));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(shell);
+    shell.querySelectorAll("[data-fit-avoid]").forEach(el => observer.observe(el));
+    return () => observer.disconnect();
+  }, [legendCollapsed, nodes]);
   const [typePercentages, setTypePercentages] = useState<Record<string, number>>({});
   const [nodeSearch, setNodeSearch] = useState("");
   const [checkedNodes, setCheckedNodes] = useState<Set<string>>(() => new Set(nodes.map(n => n.id)));
@@ -3221,7 +3098,7 @@ function HandoverGraph({
       if (savedViewBoxRef?.current) {
         setViewBox(savedViewBoxRef.current);
         // Theirs, not a fresh opening view — do not re-frame it.
-        userAdjustedRef.current = true;
+        markUserView();
       }
       return;
     }
@@ -3286,6 +3163,7 @@ function HandoverGraph({
     // A new layout gets a fresh opening view; the effect below applies it
     // once the tile's real size is known.
     userAdjustedRef.current = false;
+    setFitted(true);
     // `size` is deliberately absent: the layout lives in HANDOVER_CANVAS, so a
     // resize only moves the view (see the effects below) instead of
     // rearranging every node under the user.
@@ -3293,21 +3171,27 @@ function HandoverGraph({
   }, [nodes, edges]);
 
   /**
-   * The view the graph opens with: exactly what the fit button plus one
-   * zoom-out gives, for the size the tile actually has.
-   *
-   * Re-derived on every size change until the user adjusts the view, so it
-   * settles on the tile's final size rather than whatever it measured first.
+   * The fit mode: the graph opens fitted (fittedView: clear of the canvas
+   * controls) and follows the fit — on every size change, and when a control
+   * moves or opens (the pill, the legend) — until the user zooms, pans or
+   * drags a node. A tile is not its final size when it mounts (GridStack
+   * animates it, the analysis page starts from a placeholder), so it settles
+   * on the final size rather than whatever it measured first. The fit button
+   * returns to it.
    */
+  const fitAvoid = useMemo(
+    () => [...avoidRects, ...(pillRegion ? [pillRect(pillRegion)] : [])],
+    [avoidRects, pillRegion],
+  );
   useEffect(() => {
-    if (userAdjustedRef.current) return;
+    if (!fitted || userAdjustedRef.current) return;
     if (size.width === 0 || size.height === 0) return;
     if (Object.keys(positions).length === 0) return;
-    const next = zoomedOut(fittedToNodes(positions, size.width / size.height));
+    const next = fittedView(positions, selfLoops, size, fitAvoid);
     setViewBox(next);
     if (savedViewBoxRef) savedViewBoxRef.current = next;
     prevSizeRef.current = { width: size.width, height: size.height };
-  }, [positions, size.width, size.height, savedViewBoxRef]);
+  }, [fitted, positions, selfLoops, size, fitAvoid, savedViewBoxRef]);
 
   /**
    * Follow a resize of a view the user has set up themselves.
@@ -3634,7 +3518,9 @@ function HandoverGraph({
   // Each of these is the user taking over the view; from here it is theirs to
   // keep, and a resize follows it instead of re-framing.
   const applyUserViewBox = (newVb: { x: number; y: number; w: number; h: number }) => {
-    userAdjustedRef.current = true;
+    markUserView();
+    // At once, not only after the render: wheel events come faster than renders.
+    viewBoxRef.current = newVb;
     setViewBox(newVb);
     if (savedViewBoxRef) savedViewBoxRef.current = newVb;
   };
@@ -3643,7 +3529,11 @@ function HandoverGraph({
 
   const zoomOut = () => applyUserViewBox(zoomedOut(viewBoxRef.current));
 
-  const fitToView = () => applyUserViewBox(fittedToNodes(positions, size.width / (size.height || 1)));
+  /** Back to the fit mode (the effect above places the graph). */
+  const fitToView = () => {
+    userAdjustedRef.current = false;
+    setFitted(true);
+  };
 
   /**
    * Drag the background to pan the graph.
@@ -3653,7 +3543,7 @@ function HandoverGraph({
    * pointer exactly, at any zoom level.
    */
   const handleBackgroundMouseDown = (e: React.MouseEvent) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || interactionLocked) return;
     const rect = svgRef.current?.getBoundingClientRect();
     if (!rect) return;
     const vb = viewBoxRef.current;
@@ -3680,6 +3570,39 @@ function HandoverGraph({
     applyUserViewBox({ ...vb, x: vb.x - dx, y: vb.y - dy });
   };
 
+  /**
+   * Trackpad, pinch and touch, as on the DFG canvas (the shared hook): two
+   * fingers move the graph, a pinch or the mouse wheel zooms at the pointer,
+   * two fingers on a touch screen do both. The background drag stays as it is.
+   * The lock (pill) switches all of it off, so the page scrolls over the
+   * tile; it starts locked, as the DFG does.
+   */
+  const [interactionLocked, setInteractionLocked] = useState(true);
+  useCanvasGestures(svgRef, !interactionLocked, {
+    onPan: (dx, dy) => {
+      const rect = svgRef.current?.getBoundingClientRect();
+      if (!rect || rect.width === 0 || rect.height === 0) return;
+      const vb = viewBoxRef.current;
+      applyUserViewBox({ ...vb, x: vb.x - dx * (vb.w / rect.width), y: vb.y - dy * (vb.h / rect.height) });
+    },
+    onZoom: (scale, clientX, clientY) => {
+      const rect = svgRef.current?.getBoundingClientRect();
+      if (!rect || rect.width === 0 || rect.height === 0 || !(scale > 0)) return;
+      const vb = viewBoxRef.current;
+      // The point under the pointer stays where it is.
+      const fx = (clientX - rect.left) / rect.width;
+      const fy = (clientY - rect.top) / rect.height;
+      const px = vb.x + fx * vb.w;
+      const py = vb.y + fy * vb.h;
+      const w = vb.w / scale, h = vb.h / scale;
+      applyUserViewBox({ x: px - fx * w, y: py - fy * h, w, h });
+    },
+    onMultiTouchStart: () => {
+      panAnchor.current = null;
+      setIsPanning(false);
+    },
+  });
+
   const endPan = () => {
     panAnchor.current = null;
     setIsPanning(false);
@@ -3703,7 +3626,7 @@ function HandoverGraph({
     dragHasMoved.current = false;
     // Moving a node makes the arrangement theirs; re-framing it on the next
     // resize would undo the placement they just chose.
-    userAdjustedRef.current = true;
+    markUserView();
     setDragId(id);
   };
 
@@ -4112,7 +4035,7 @@ function HandoverGraph({
             setNodeTooltip(t => t?.pinned ? null : t);
             setHighlightedObjectType(null);
           }}
-          style={{ cursor: dragId || isPanning ? "grabbing" : "grab", display: "block" }}
+          style={{ cursor: dragId || isPanning ? "grabbing" : interactionLocked ? "default" : "grab", display: "block" }}
         >
           <defs>
             {boTypes.map(bt => {
@@ -4149,10 +4072,10 @@ function HandoverGraph({
                   stroke: ep.color,
                   strokeWidth: ep.strokeWidth,
                   opacity: (() => {
-                    const isHighlighted = !highlightedObjectType || ep.businessobject_type === highlightedObjectType;
+                    const isHighlighted = !shownHighlight || ep.businessobject_type === shownHighlight;
                     const timeScore = edgeTimeScores ? (0.1 + 0.75 * (edgeTimeScores.get(`${ep.source}\x00${ep.target}\x00${ep.businessobject_type}`) ?? 0)) : null;
                     let base: number;
-                    if (highlightedObjectType) {
+                    if (shownHighlight) {
                       base = !isHighlighted ? 0.12 : (timeScore ?? 0.85);
                     } else if (timeScore !== null) {
                       base = timeScore;
@@ -4195,8 +4118,8 @@ function HandoverGraph({
 
           {/* Nodes */}
           {(() => {
-            const highlightedNodeIds = highlightedObjectType
-              ? new Set(edgePaths.filter(ep => ep.businessobject_type === highlightedObjectType).flatMap(ep => [ep.source, ep.target]))
+            const highlightedNodeIds = shownHighlight
+              ? new Set(edgePaths.filter(ep => ep.businessobject_type === shownHighlight).flatMap(ep => [ep.source, ep.target]))
               : null;
             return nodes.filter(n => filteredNodeIds.has(n.id)).map(node => {
             const pos = positions[node.id];
@@ -4278,10 +4201,9 @@ function HandoverGraph({
           </div>
         )}
 
-        {highlightedObjectType && (
+        {!embedded && highlightedObjectType && (
           <div style={{
-            // Below the widget title, which the dashboard floats at top: 12.
-            position: "absolute", top: embedded ? 40 : 12, left: "50%", transform: "translateX(-50%)", zIndex: 10,
+            position: "absolute", top: 12, left: "50%", transform: "translateX(-50%)", zIndex: 10,
             display: "flex", alignItems: "center", gap: 7,
             background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 9999,
             padding: "5px 12px 5px 10px",
@@ -4314,18 +4236,43 @@ function HandoverGraph({
           />
         )}
 
-        {/* Button bar */}
-        <ControlPill>
-          {pillLeading}
+        {/* Button bar: movable like the DFG's; its popovers open beside it (panelAtPill). */}
+        <ControlPill
+          spots={HANDOVER_PILL_SPOTS}
+          storageKey={embedded ? "ochandover:dashboard" : "ochandover"}
+          onRegionChange={(region) => { setPillRegion(region); onPillRegionChange?.(region); }}
+        >
+          {/* As on the DFG: zoom and fit first, then the graph's own controls. */}
           <Button type="button" variant="outline" size="icon" onClick={zoomIn} className="rounded-full h-9 w-9" title="Zoom in">
             <PlusIcon className="h-4 w-4" />
           </Button>
           <Button type="button" variant="outline" size="icon" onClick={zoomOut} className="rounded-full h-9 w-9" title="Zoom out">
             <MinusIcon className="h-4 w-4" />
           </Button>
-          <Button type="button" variant="outline" size="icon" onClick={fitToView} className="rounded-full h-9 w-9" title="Fit graph to view">
+          <Button
+            type="button"
+            // Grey while the view follows the fit; zooming, panning or dragging a node ends it.
+            variant={fitted ? "secondary" : "outline"}
+            size="icon"
+            onClick={fitToView}
+            className="rounded-full h-9 w-9"
+            title={fitted ? "Fitted to view: follows the panels until you zoom or pan" : "Fit to view"}
+            aria-label="Fit to view"
+            aria-pressed={fitted}
+          >
             <ScanIcon className="h-4 w-4" />
           </Button>
+          <Button
+            type="button"
+            variant={interactionLocked ? "secondary" : "outline"}
+            size="icon"
+            onClick={() => setInteractionLocked(prev => !prev)}
+            className="rounded-full h-9 w-9"
+            title={interactionLocked ? "Unlock interactions" : "Lock interactions"}
+          >
+            {interactionLocked ? <UnlockIcon className="h-4 w-4" /> : <LockIcon className="h-4 w-4" />}
+          </Button>
+          {pillLeading}
           <Button
             type="button"
             variant={downloadOpen ? "secondary" : "outline"}
@@ -4404,48 +4351,37 @@ function HandoverGraph({
         </ControlPill>
 
         {embedded && legendTypes.length > 0 && (
-          <FloatingPanel
-            title="Object types"
-            // Always starts collapsed: the chip already carries the count, and
-            // expanded it covers a corner of the graph.
-            narrow
-            collapsedLabel={`${legendTypes.length} Object Type${legendTypes.length === 1 ? "" : "s"}`}
-            style={{ position: "absolute", top: 12, left: 12, zIndex: 12 }}
+          // The shared legend of the graph canvases, as on the DFG: under the
+          // title, down to just above the pill when the pill is on this side.
+          <div
+            data-fit-avoid={legendCollapsed ? "box" : "optional"}
+            style={{
+              position: "absolute", top: legendTop, left: CHROME_INSET, zIndex: 12,
+              display: "flex", flexDirection: "column",
+              maxHeight: `calc(100% - ${legendTop + roomBelowForPill(pillRegion, true, { reach: 280 })}px)`,
+            }}
           >
-            <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: "#334155" }}>
-              {legendTypes.map(t => {
-                const highlightable = boTypeSet.has(t);
-                return (
-                  <button
-                    key={t}
-                    type="button"
-                    disabled={!highlightable}
-                    title={highlightable ? `Highlight ${t} arcs` : t}
-                    onClick={() => setHighlightedObjectType(prev => (prev === t ? null : t))}
-                    style={{
-                      display: "flex", alignItems: "center", gap: 7,
-                      background: "none", border: "none", padding: 0,
-                      cursor: highlightable ? "pointer" : "default",
-                      font: "inherit", color: "inherit", textAlign: "left",
-                      opacity: highlightedObjectType && highlightedObjectType !== t ? 0.4 : 1,
-                    }}
-                  >
-                    <span style={{ width: 10, height: 10, borderRadius: "50%", background: typeColorMap[t] ?? "#94a3b8", flexShrink: 0 }} />
-                    {t}
-                  </button>
-                );
-              })}
-            </div>
-          </FloatingPanel>
+            <ObjectTypePanel
+              testId="handover-legend"
+              // Only the arcs' (business object) types can be highlighted; the
+              // node types are listed for their colour.
+              types={legendTypes.map(t => ({ type: t, color: typeColorMap[t] ?? "#94a3b8", highlightable: boTypeSet.has(t) }))}
+              onHighlight={setLegendHover}
+              pinned={highlightedObjectType}
+              onPinnedChange={setHighlightedObjectType}
+              collapsed={legendCollapsed}
+              onCollapsedChange={setLegendCollapsed}
+            />
+          </div>
         )}
 
         {/* Download panel */}
         {downloadOpen && (
           <div
             style={{
-              position: "absolute", bottom: 68, right: 12, width: 272, zIndex: 20,
+              position: "absolute", ...popoverPlace, width: 272, zIndex: 20,
               ...GLASS_SURFACE, border: "1px solid #E2E8F0", borderRadius: 12,
-              boxShadow: "0 10px 24px rgba(15,23,42,0.14)", overflow: "hidden",
+              boxShadow: "0 10px 24px rgba(15,23,42,0.14)", overflow: "hidden", overflowY: "auto",
             }}
             onMouseDown={e => e.stopPropagation()}
           >
@@ -4541,7 +4477,7 @@ function HandoverGraph({
         {filterOpen && (
           <div
             style={{
-              position: "absolute", bottom: 68, right: 12, width: 272, zIndex: 20,
+              position: "absolute", ...popoverPlace, width: 272, zIndex: 20,
               ...GLASS_SURFACE, border: "1px solid #E2E8F0", borderRadius: 12,
               boxShadow: "0 10px 24px rgba(15,23,42,0.14)", overflow: "hidden",
               display: "flex", flexDirection: "column",
@@ -4762,9 +4698,9 @@ function HandoverGraph({
         {timeMetricOpen && (
           <div
             style={{
-              position: "absolute", bottom: 68, right: 12, width: 272, zIndex: 20,
+              position: "absolute", ...popoverPlace, width: 272, zIndex: 20,
               ...GLASS_SURFACE, border: "1px solid #E2E8F0", borderRadius: 12,
-              boxShadow: "0 10px 24px rgba(15,23,42,0.14)", overflow: "hidden",
+              boxShadow: "0 10px 24px rgba(15,23,42,0.14)", overflow: "hidden", overflowY: "auto",
             }}
             onMouseDown={e => e.stopPropagation()}
           >
@@ -4819,9 +4755,9 @@ function HandoverGraph({
         {centralityOpen && (
           <div
             style={{
-              position: "absolute", bottom: 68, right: 12, width: 272, zIndex: 20,
+              position: "absolute", ...popoverPlace, width: 272, zIndex: 20,
               ...GLASS_SURFACE, border: "1px solid #E2E8F0", borderRadius: 12,
-              boxShadow: "0 10px 24px rgba(15,23,42,0.14)", overflow: "hidden",
+              boxShadow: "0 10px 24px rgba(15,23,42,0.14)", overflow: "hidden", overflowY: "auto",
             }}
             onMouseDown={e => e.stopPropagation()}
           >

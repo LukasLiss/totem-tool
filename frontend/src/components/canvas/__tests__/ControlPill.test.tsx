@@ -87,8 +87,8 @@ describe('ControlPill', () => {
       </ControlPill>,
     );
     const bar = container.firstElementChild as HTMLElement;
-    expect(bar.style.bottom).toBe('12px');
-    expect(bar.style.right).toBe('12px');
+    expect(bar.style.bottom).toBe('16px');
+    expect(bar.style.right).toBe('16px');
     expect(container.querySelector('[data-pill-spot]')).toBeNull();
   });
 

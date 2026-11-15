@@ -158,4 +158,48 @@ describe('ObjectTypePanel', () => {
     expect(utils.queryByRole('button', { name: 'Object types options' })).toBeNull();
     expect(utils.getByText('order')).not.toBeNull();
   });
+
+  it('keeps a clicked type highlighted, releases it on a second click, and skips node-only types', () => {
+    function Pinning() {
+      const [pinned, setPinned] = useState<string | null>(null);
+      const [collapsed, setCollapsed] = useState(false);
+      return (
+        <ObjectTypePanel
+          types={[
+            { type: 'order', color: '#f00' },
+            { type: 'clerk', color: '#0f0', highlightable: false },
+          ]}
+          pinned={pinned}
+          onPinnedChange={setPinned}
+          collapsed={collapsed}
+          onCollapsedChange={setCollapsed}
+        />
+      );
+    }
+    const utils = render(<Pinning />);
+    const order = () => utils.getByRole('button', { name: 'Highlight order' });
+    expect(utils.queryByRole('button', { name: 'Highlight clerk' })).toBeNull();
+    fireEvent.click(order());
+    expect(order().getAttribute('aria-pressed')).toBe('true');
+    // Collapsed, the chip still tells which type is highlighted.
+    fireEvent.click(utils.getByRole('button', { name: 'Hide object types' }));
+    expect(utils.getByRole('button', { name: 'Show object types' }).textContent).toContain('order highlighted');
+    fireEvent.click(utils.getByRole('button', { name: 'Show object types' }));
+    fireEvent.click(order());
+    expect(order().getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('does not highlight node-only types on hover', () => {
+    const onHighlight = vi.fn();
+    const utils = render(
+      <ObjectTypePanel
+        types={[{ type: 'clerk', color: '#0f0', highlightable: false }]}
+        onHighlight={onHighlight}
+        collapsed={false}
+        onCollapsedChange={() => undefined}
+      />,
+    );
+    fireEvent.mouseEnter(utils.container.querySelector('[data-object-type="clerk"]')!);
+    expect(onHighlight).not.toHaveBeenCalledWith('clerk');
+  });
 });

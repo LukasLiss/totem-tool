@@ -7,6 +7,9 @@
  *    it, Alt-click to show only that type (again: show all), and "Show all" /
  *    "Hide all" in the ⋯ menu;
  *  - highlight (`onHighlight`): hovering a type highlights it in the graph;
+ *  - pinned highlight (`pinned` + `onPinnedChange`, for lists without
+ *    show/hide): clicking a type keeps it highlighted, clicking it again
+ *    releases it; the other types are greyed meanwhile;
  *  - per-type details (`renderDetail`), e.g. a filter slider, folded behind a
  *    › on the type's line, with a short value (`detailSummary`) on the line.
  *
@@ -36,6 +39,8 @@ export interface ObjectTypePanelEntry {
   color: string;
   /** False greys the type out (e.g. it has no arcs); it can't be shown then. */
   available?: boolean;
+  /** False: listed for its colour only, it can't be highlighted (e.g. node-only types). */
+  highlightable?: boolean;
 }
 
 export interface ObjectTypePanelProps {
@@ -46,6 +51,9 @@ export interface ObjectTypePanelProps {
   onVisibilityChange?: (next: Record<string, boolean>) => void;
   /** Called with the hovered (shown) type, and null when the pointer leaves it. */
   onHighlight?: (type: string | null) => void;
+  /** The type kept highlighted by a click (null: none). Only without show/hide. */
+  pinned?: string | null;
+  onPinnedChange?: (type: string | null) => void;
   /** Folded content of a type, e.g. its filter slider; null when it has none. */
   renderDetail?: (type: string) => React.ReactNode | null;
   /**
@@ -73,6 +81,8 @@ export function ObjectTypePanel({
   visibility,
   onVisibilityChange,
   onHighlight,
+  pinned = null,
+  onPinnedChange,
   renderDetail,
   detailSummary,
   menuItems = [],
@@ -84,6 +94,8 @@ export function ObjectTypePanel({
   const toggles = visibility != null && onVisibilityChange != null;
   const isShown = (type: string) => !toggles || visibility![type] !== false;
   const isAvailable = (entry: ObjectTypePanelEntry) => entry.available !== false;
+  const pins = !toggles && onPinnedChange != null;
+  const canHighlight = (entry: ObjectTypePanelEntry) => isAvailable(entry) && entry.highlightable !== false;
   const hiddenCount = toggles ? types.filter((t) => isAvailable(t) && !isShown(t.type)).length : 0;
 
   const [open, setOpen] = useState<Set<string>>(() => new Set());
@@ -114,7 +126,10 @@ export function ObjectTypePanel({
   };
 
   if (collapsed) {
-    const label = `${types.length} object type${types.length === 1 ? '' : 's'}${hiddenCount > 0 ? ` · ${hiddenCount} hidden` : ''}`;
+    const label =
+      `${types.length} object type${types.length === 1 ? '' : 's'}` +
+      (hiddenCount > 0 ? ` · ${hiddenCount} hidden` : '') +
+      (pins && pinned ? ` · ${pinned} highlighted` : '');
     return (
       <button
         type="button"
@@ -209,6 +224,10 @@ export function ObjectTypePanel({
           const { type, color } = entry;
           const available = isAvailable(entry);
           const shown = isShown(type);
+          const highlightable = canHighlight(entry);
+          const isPinned = pins && pinned === type;
+          // While a type is pinned, the others are greyed like hidden ones.
+          const muted = pins && pinned != null && !isPinned;
           const detail = renderDetail?.(type) ?? null;
           const expanded = detail != null && open.has(type);
           const summary = detailSummary?.(type) ?? null;
@@ -217,18 +236,22 @@ export function ObjectTypePanel({
               <span
                 aria-hidden
                 className="h-3 w-3 shrink-0 rounded-full"
-                style={{ background: shown && available ? color : 'transparent', border: `2px solid ${color}` }}
+                style={{ background: shown && available ? color : 'transparent', border: `2px solid ${color}`, opacity: muted ? 0.4 : 1 }}
               />
-              <span className={`truncate text-[13px] ${shown && available ? 'text-slate-700' : 'text-slate-400'}`}>{type}</span>
+              <span
+                className={`truncate text-[13px] ${shown && available && !muted ? 'text-slate-700' : 'text-slate-400'} ${isPinned ? 'font-semibold' : ''}`}
+              >
+                {type}
+              </span>
             </>
           );
           return (
             <div
               key={type}
               data-object-type={type}
-              className="rounded-md hover:bg-slate-100/70"
+              className={`rounded-md ${isPinned ? 'bg-slate-100' : highlightable || toggles ? 'hover:bg-slate-100/70' : ''}`}
               style={{ opacity: available ? 1 : 0.45 }}
-              onMouseEnter={() => onHighlight && shown && available && onHighlight(type)}
+              onMouseEnter={() => onHighlight && shown && highlightable && onHighlight(type)}
               onMouseLeave={() => onHighlight?.(null)}
             >
               <div className="flex min-h-8 items-center gap-1 pl-2 pr-1">
@@ -242,6 +265,17 @@ export function ObjectTypePanel({
                     title={available ? `${shown ? 'Hide' : 'Show'} ${type} · Alt-click: only ${type}` : `${type}: nothing to show`}
                     onClick={(e) => toggle(entry, e.altKey)}
                     className="flex min-w-0 flex-1 items-center gap-2.5 py-1 text-left disabled:cursor-not-allowed"
+                  >
+                    {label}
+                  </button>
+                ) : pins && highlightable ? (
+                  <button
+                    type="button"
+                    aria-pressed={isPinned}
+                    aria-label={`Highlight ${type}`}
+                    title={isPinned ? `Stop highlighting ${type}` : `Keep ${type} highlighted`}
+                    onClick={() => onPinnedChange!(isPinned ? null : type)}
+                    className="flex min-w-0 flex-1 items-center gap-2.5 py-1 text-left"
                   >
                     {label}
                   </button>

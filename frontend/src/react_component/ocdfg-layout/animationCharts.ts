@@ -7,9 +7,11 @@
  * event to its next; the curves only count the steps that get a dot (`shown`).
  */
 import type { Tokens } from './tokenAnimation';
+import { ACTIVITY_W, NEUTRAL_CURVE_COLOR, fmtSigned, type ActivitySeries, type CurvePoint } from '@/components/canvas/playback';
 
-export const ACTIVITY_W = 1000; // viewBox width; the SVG is stretched to the panel
-export const ACTIVITY_H = 56; // default chart height; the panel can be resized taller
+// The chart's data shape is shared with the handover (components/canvas/playback).
+export { ACTIVITY_H, ACTIVITY_W, NEUTRAL_CURVE_COLOR, fmtSigned } from '@/components/canvas/playback';
+export type { ActivitySeries, CurvePoint } from '@/components/canvas/playback';
 const ACTIVITY_MAX_STEPS = 2000; // above this, a step curve is binned
 const ACTIVITY_BINS = 240;
 const ACTIVITY_SAMPLES = 480; // sample points of the waiting-time curve
@@ -25,7 +27,6 @@ const RATE_WINDOWS: { seconds: number; label: string }[] = [
   { seconds: 30 * 86400, label: '30 days' },
   { seconds: 365 * 86400, label: '1 year' },
 ];
-export const NEUTRAL_CURVE_COLOR = '#64748b';
 const BALANCE_UP_COLOR = '#16a34a'; // more steps started than completed
 const BALANCE_DOWN_COLOR = '#dc2626'; // more completed than started
 
@@ -48,24 +49,6 @@ export const ACTIVITY_METRICS: { value: ActivityMetric; label: string; hint: str
   },
 ];
 
-/**
- * A curve point. A step curve holds `v` from `x` until the next point; a line
- * curve joins points straight, and a NaN `v` breaks it; a bar runs from `x` to
- * the next point's `x` (the last to the chart's end) between zero and `v`.
- */
-export type CurvePoint = { x: number; v: number };
-export type ActivitySeries = {
-  kind: 'step' | 'line' | 'bars';
-  /** `negColor` marks a signed line: it colours negative bars and the legend dot of a negative value. */
-  lines: { key: string; label: string; color: string; negColor?: string; points: CurvePoint[] }[];
-  /** Each line's value at `time`, for the legend. */
-  valueAt: (time: number) => Record<string, number>;
-  format: (v: number) => string;
-  unit?: string;
-  /** Shown bottom left, e.g. the bin size. */
-  footnote?: string;
-};
-
 type Timeline = Tokens['timeline'];
 
 const activityXOf = (timeline: Timeline) => {
@@ -75,7 +58,6 @@ const activityXOf = (timeline: Timeline) => {
 const ACTIVITY_BIN_W = ACTIVITY_W / ACTIVITY_BINS;
 const activityBinOf = (x: number) => Math.min(ACTIVITY_BINS - 1, Math.floor(x / ACTIVITY_BIN_W));
 export const fmtCount = (v: number) => v.toLocaleString();
-export const fmtSigned = (v: number) => (v > 0 ? `+${v.toLocaleString()}` : v < 0 ? `−${(-v).toLocaleString()}` : '0');
 
 /** Same format as the handover's durations. */
 export function fmtDuration(seconds: number | null | undefined): string {

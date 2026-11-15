@@ -59,6 +59,45 @@ export function roomBelowForPill(
   return Math.max(fallback, region.canvasHeight - region.top + gap);
 }
 
+/** Where a panel opened from the pill goes (px for an absolutely positioned box). */
+export interface PanelAtPill {
+  top?: number;
+  bottom?: number;
+  left?: number;
+  right?: number;
+  maxHeight: number | string;
+}
+
+/** Height of a lying pill (36 px buttons, 6 px padding, border), for when it is not measured yet. */
+const PILL_HEIGHT = 50;
+
+/**
+ * The place of a panel that opens from the pill (its popovers): `gap` away
+ * from the pill, on the canvas side of it, flush with its outer edge —
+ * above a pill in a bottom corner, below one in a top corner, beside one
+ * standing at the left or right edge (bottom edges level). Without a
+ * measured pill: above the bottom-right corner, where the fixed pill sits.
+ */
+export function panelAtPill(region: PillRegion | null, gap = 8): PanelAtPill {
+  if (!region) {
+    const bottom = PILL_MARGIN + PILL_HEIGHT + gap;
+    return { bottom, right: PILL_MARGIN, maxHeight: `calc(100% - ${bottom + PILL_MARGIN}px)` };
+  }
+  const { spot, top, left, width, height, canvasWidth, canvasHeight } = region;
+  const fromRight = canvasWidth - (left + width);
+  const side = spot === 'top-left' || spot === 'bottom-left' ? { left } : { right: fromRight };
+  if (spot === 'bottom-left' || spot === 'bottom-right') {
+    return { ...side, bottom: canvasHeight - top + gap, maxHeight: Math.max(0, top - gap - PILL_MARGIN) };
+  }
+  if (spot === 'top-left' || spot === 'top-right') {
+    const below = top + height + gap;
+    return { ...side, top: below, maxHeight: Math.max(0, canvasHeight - below - PILL_MARGIN) };
+  }
+  const bottom = canvasHeight - (top + height);
+  const beside = spot === 'left' ? { left: left + width + gap } : { right: canvasWidth - left + gap };
+  return { ...beside, bottom, maxHeight: Math.max(0, canvasHeight - bottom - PILL_MARGIN) };
+}
+
 /** The middle of the left or right edge holds the pill vertically; the corners horizontally. */
 export const isVerticalSpot = (spot: PillSpot) => spot === 'left' || spot === 'right';
 

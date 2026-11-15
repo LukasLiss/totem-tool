@@ -134,8 +134,8 @@ function FixedPill({ children, style, zIndex = 16, rootProps }: ControlPillProps
       {...stopPointer}
       style={{
         position: 'absolute',
-        bottom: 12,
-        right: 12,
+        bottom: PILL_MARGIN,
+        right: PILL_MARGIN,
         // Above the canvas's panels and the widget title, below its popovers,
         // which open from this bar. Without an explicit value the pill paints
         // below anything with a positive z-index, including the title.
@@ -145,7 +145,7 @@ function FixedPill({ children, style, zIndex = 16, rootProps }: ControlPillProps
         alignItems: 'center',
         flexWrap: 'wrap',
         justifyContent: 'flex-end',
-        maxWidth: 'calc(100% - 24px)',
+        maxWidth: `calc(100% - ${2 * PILL_MARGIN}px)`,
         ...PILL_SURFACE,
         padding: '6px 12px',
         ...style,

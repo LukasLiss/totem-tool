@@ -28,12 +28,32 @@ describe('bestFit', () => {
     expect(fit.scale).toBeGreaterThan(0.6);
   });
 
-  it('starts the graph below the title row, but may set it beside the legend chip', () => {
+  it('sets the graph centred below the legend chip rather than pushed aside next to it for a little more size', () => {
     const box = { w: 1200, h: 900 };
-    // A square graph is larger beside the chip (from below the title) than below the chip.
+    // A square graph: beside the chip (from below the title) 806 px, below it 768 px — under 5 % more.
     const fit = bestFit(box, { w: 1000, h: 1000 }, BASE, [TITLE, LEGEND_CHIP, playChip(box)], 1.4);
-    expect(fit.y).toBeCloseTo(16 + 30 + 24, 5);
-    expect(fit.scale).toBeCloseTo((900 - 70 - 24) / 1000, 5);
+    expect(fit.scale).toBeCloseTo((900 - 108 - 24) / 1000, 5);
+    expect(fit.y).toBeCloseTo(54 + 30 + 24, 5);
+    expect(fit.x).toBeCloseTo((1200 - 768) / 2, 5);
+  });
+
+  it('centres the handover graph of the screenshot instead of pushing it right of the chip', () => {
+    // A 630 × 460 tile, title and chips at the top, a wide pill at the bottom right.
+    const box = { w: 630, h: 460 };
+    const chips: FitRect = { x: 520, y: 16, w: 94, h: 30, header: true };
+    const chip: FitRect = { x: 16, y: 54, w: 124, h: 30 };
+    const bottomPill: FitRect = { x: 205, y: 404, w: 410, h: 48 };
+    const fit = bestFit(box, { w: 600, h: 400 }, BASE, [TITLE, chip, chips, bottomPill], 1.4);
+    // Below the chip, centred across the tile.
+    expect(fit.y).toBeGreaterThanOrEqual(54 + 30 + 24);
+    expect(Math.abs(fit.x - (630 - 600 * fit.scale) / 2)).toBeLessThan(1);
+  });
+
+  it('still sets the graph beside the legend chip where that shows it clearly larger', () => {
+    // A low box: below the chip leaves 168 px, beside it 206 px (over 20 % more).
+    const box = { w: 1200, h: 300 };
+    const fit = bestFit(box, { w: 1000, h: 1000 }, BASE, [TITLE, LEGEND_CHIP, playChip(box)], 1.4);
+    expect(fit.scale).toBeCloseTo((300 - 70 - 24) / 1000, 5);
     expect(fit.x).toBeGreaterThanOrEqual(LEGEND_CHIP.x + LEGEND_CHIP.w + 24);
   });
 
@@ -62,12 +82,13 @@ describe('bestFit', () => {
     expect(Math.abs(gapAbove - gapBelow)).toBeLessThan(4);
   });
 
-  it('may set a tall graph beside a corner pill when that shows it larger', () => {
-    const box = { w: 1200, h: 900 };
+  it('may set a tall graph beside a corner pill when that shows it clearly larger', () => {
+    const box = { w: 1200, h: 600 };
     const bottomPill = pill('bottom-left', box);
     const fit = bestFit(box, { w: 600, h: 1000 }, BASE, [TITLE, LEGEND_CHIP, bottomPill], 1.4);
-    // Right of the pill (and the chip), from below the title to the bottom margin: (900 − 70 − 24) / 1000.
-    expect(fit.scale).toBeCloseTo(806 / 1000, 5);
+    // Right of the pill (and the chip), from below the title to the bottom margin: (600 − 70 − 24) / 1000;
+    // above the pill it would get only 420 px.
+    expect(fit.scale).toBeCloseTo(506 / 1000, 5);
     expect(fit.x).toBeGreaterThanOrEqual(bottomPill.x + bottomPill.w + 24);
   });
 
