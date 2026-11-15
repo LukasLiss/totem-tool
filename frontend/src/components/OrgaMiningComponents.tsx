@@ -24,7 +24,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { WidgetHeader, WidgetTitle } from "@/components/ui/WidgetTitle";
+import { WidgetTitle } from "@/components/ui/WidgetTitle";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
@@ -758,19 +758,22 @@ export const ResourceProfilingComponent: React.FC<ComponentProps> = ({
     );
   }
 
+  // The explorer fills the tile; the title and the filters sit on its canvas (top left).
   return (
     <div className="w-full h-full flex flex-col overflow-hidden bg-background text-left">
-      <WidgetHeader
-        label="Resource Profiling"
-        filterEnabled={filterEnabled}
-        onToggleFilter={() => setFilterEnabled((p) => !p)}
-        fileId={selectedFile?.id}
-        onLocalFilterChange={handleLocalFilterChange}
-        localFilterParams={localFilterParams}
-      />
       <div className="flex-1 relative overflow-hidden">
         <OrgaMiningExplorer
           key={`${persistedJson}|${automaticLoading}`}
+          title={
+            <WidgetTitle
+              label="Resource Profiling"
+              fileId={selectedFile?.id}
+              filterEnabled={filterEnabled}
+              onToggleFilter={() => setFilterEnabled((p) => !p)}
+              localFilterParams={localFilterParams}
+              onLocalFilterChange={handleLocalFilterChange}
+            />
+          }
           fileId={selectedFile?.id}
           embedded
           initialSettings={settings}

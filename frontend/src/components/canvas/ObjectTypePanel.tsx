@@ -10,6 +10,8 @@
  *  - pinned highlight (`pinned` + `onPinnedChange`, for lists without
  *    show/hide): clicking a type keeps it highlighted, clicking it again
  *    releases it; the other types are greyed meanwhile;
+ *  - more groups below the types (`sections`), e.g. the clusters of the
+ *    resource profiling, listed in the same lines (colour only);
  *  - per-type details (`renderDetail`), e.g. a filter slider, folded behind a
  *    › on the type's line, with a short value (`detailSummary`) on the line.
  *
@@ -43,6 +45,12 @@ export interface ObjectTypePanelEntry {
   highlightable?: boolean;
 }
 
+/** A group of colour entries below the types (e.g. clusters); `dashed`: an outlined, dashed dot (e.g. outliers). */
+export interface ObjectTypePanelSection {
+  title: string;
+  entries: { key: string; label: string; color: string; dashed?: boolean }[];
+}
+
 export interface ObjectTypePanelProps {
   types: ObjectTypePanelEntry[];
   title?: string;
@@ -68,6 +76,8 @@ export interface ObjectTypePanelProps {
   onCollapsedChange: (collapsed: boolean) => void;
   /** From this many types on, a search field filters the list. */
   searchFrom?: number;
+  /** More groups listed below the types, with a small heading each. */
+  sections?: ObjectTypePanelSection[];
   testId?: string;
 }
 
@@ -89,6 +99,7 @@ export function ObjectTypePanel({
   collapsed,
   onCollapsedChange,
   searchFrom = 10,
+  sections = [],
   testId,
 }: ObjectTypePanelProps) {
   const toggles = visibility != null && onVisibilityChange != null;
@@ -315,6 +326,27 @@ export function ObjectTypePanel({
           );
         })}
         {listed.length === 0 && <div className="px-2 py-1.5 text-xs text-slate-400">No type matches.</div>}
+        {sections
+          .filter((section) => section.entries.length > 0)
+          .map((section) => (
+            <div key={section.title} data-panel-section={section.title} className="mt-1 border-t border-slate-100 pt-1">
+              <div className="px-2 pb-0.5 pt-1 text-[11px] font-medium text-slate-500">{section.title}</div>
+              {section.entries.map((entry) => (
+                <div key={entry.key} className="flex min-h-8 items-center gap-2.5 pl-2 pr-1">
+                  <span
+                    aria-hidden
+                    className="h-3 w-3 shrink-0 rounded-full"
+                    style={
+                      entry.dashed
+                        ? { border: `2px dashed ${entry.color}` }
+                        : { background: entry.color, border: `2px solid ${entry.color}` }
+                    }
+                  />
+                  <span className="truncate text-[13px] text-slate-700">{entry.label}</span>
+                </div>
+              ))}
+            </div>
+          ))}
       </div>
     </div>
   );

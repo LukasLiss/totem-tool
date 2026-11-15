@@ -28,9 +28,10 @@ import {
   CanvasSelect,
   CanvasShell,
   ControlPill,
-  FloatingPanel,
   MetricChips,
 } from "@/react_component/orgamining/canvas";
+import { ObjectTypePanel } from "@/components/canvas/ObjectTypePanel";
+import { roomBelowForPill, type PillRegion, type PillSpot } from "@/components/canvas/pillSpots";
 import {
   fitBoxToAspect,
   pointsBounds,
@@ -73,6 +74,8 @@ type OrgaMiningExplorerProps = {
    * edit mode. The analysis page uses the default, full form.
    */
   embedded?: boolean;
+  /** Embedded only: the card's title (with its filters), drawn in the canvas's top-left corner. */
+  title?: React.ReactNode;
   /** Preselected settings; dashboard widgets persist these. Read once on mount. */
   initialSettings?: Partial<ResourceProfilingSettings>;
   /** Start the computation as soon as the object types are known. */
@@ -118,6 +121,14 @@ const TRANSPARENT_NODE_OPACITY = 0.45;
 const MDS_CANVAS = { width: 1000, height: 1000 };
 // Screen pixels a press must move before it counts as a zoom drag, not a click.
 const DRAG_THRESHOLD_PX = 4;
+/**
+ * The embedded canvas's chrome, as on the handover's: 16 px from the edges,
+ * the title row (30 px) top left with the legend 8 px under it.
+ */
+const CHROME_INSET = 16;
+const UNDER_TITLE = CHROME_INSET + 30 + 8;
+/** Where the control pill may go: the top corners hold the title, the legend and the chips. */
+const PROFILING_PILL_SPOTS: readonly PillSpot[] = ["bottom-right", "bottom-left", "left", "right"];
 /** Padding around the point cloud in MDS canvas units. */
 const MDS_VIEW_PAD = NODE_R + 26;
 
@@ -143,6 +154,7 @@ export default function OrgaMiningExplorer({
   autoStart = false,
   filterEnabled = true,
   localFilterParams,
+  title,
 }: OrgaMiningExplorerProps) {
   // Settings are read once; a host that changes them re-mounts the explorer.
   const [initial] = useState<ResourceProfilingSettings>(() => ({ ...DEFAULT_PROFILING_SETTINGS, ...initialSettings }));
@@ -408,7 +420,7 @@ export default function OrgaMiningExplorer({
   // the dashboard's edit mode, the same contract the OCCN widget follows.
   if (embedded) {
     return (
-      <CanvasShell>
+      <CanvasShell title={title}>
         {(size) => {
           // The tile has not been laid out yet; drawing against a zero box
           // would flash a collapsed graph before the first real measurement.
@@ -452,10 +464,10 @@ export default function OrgaMiningExplorer({
           if (viewMode === "table") {
             return (
               <>
-                <div className="absolute inset-0 flex flex-col p-3" style={{ paddingTop: 52 }}>
+                <div className="absolute inset-0 flex flex-col p-4" style={{ paddingTop: UNDER_TITLE }}>
                   <ProfileTable data={data} maxHeight={null} fill />
                 </div>
-                <div style={{ position: "absolute", top: 12, right: 12, zIndex: 14 }}>{viewSelect}</div>
+                <div style={{ position: "absolute", top: CHROME_INSET, right: CHROME_INSET, zIndex: 14 }}>{viewSelect}</div>
               </>
             );
           }
@@ -468,6 +480,8 @@ export default function OrgaMiningExplorer({
               showClusters={data.cluster_labels !== undefined}
               embedded
               topRight={viewSelect}
+              legendTop={title ? UNDER_TITLE : CHROME_INSET}
+              topInset={title ? UNDER_TITLE : 0}
               nodeSize={initial.pointSize}
               transparentNodes={initial.transparentPoints}
             />
@@ -984,13 +998,15 @@ type ZoomedView = { x: number; y: number; w: number; h: number };
 function ResourceGraph({
   data,
   typeColorMap,
-  size,
+  size: canvasSize,
   clusterColors,
   showClusters,
   embedded = false,
   topRight,
   nodeSize,
   transparentNodes = false,
+  legendTop = CHROME_INSET,
+  topInset = 0,
 }: {
   data: ProfileMatrixData;
   typeColorMap: Record<string, string>;
@@ -1005,8 +1021,23 @@ function ResourceGraph({
   nodeSize?: ProfilingPointSize;
   /** See-through resources, so overlapping ones stay visible. */
   transparentNodes?: boolean;
+  /** Embedded: where the legend starts (under the card's title, when there is one). */
+  legendTop?: number;
+  /**
+   * Embedded: the graph starts this far down (below the card's title row),
+   * as it did below the former header bar. It gets the canvas less this strip
+   * as its size; its fitting and zoom are the same as for any tile size.
+   */
+  topInset?: number;
 }) {
+  const size = useMemo<Size>(
+    () => ({ width: canvasSize.width, height: Math.max(0, canvasSize.height - topInset) }),
+    [canvasSize.width, canvasSize.height, topInset],
+  );
   const containerRef = useRef<HTMLDivElement>(null);
+  // The shared legend (collapsed at first, as before) and where the movable pill sits.
+  const [legendCollapsed, setLegendCollapsed] = useState(true);
+  const [pillRegion, setPillRegion] = useState<PillRegion | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const rbRef = useRef<SVGRectElement>(null);
   const [zoomed, setZoomed] = useState<ZoomedView | null>(null);
@@ -1381,7 +1412,7 @@ function ResourceGraph({
           width={size.width}
           height={size.height}
           viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`}
-          style={{ cursor: "crosshair", userSelect: "none", display: "block" }}
+          style={{ cursor: "crosshair", userSelect: "none", display: "block", marginTop: topInset }}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
@@ -1588,8 +1619,13 @@ function ResourceGraph({
             style={{ pointerEvents: "none" }} />
         </svg>
 
-        {/* Control pill — bottom-right of the graph canvas */}
-        <ControlPill>
+        {/* Control pill: movable like the handover's and the DFG's. Only the
+            pill moves; the graph's view stays as it is (no re-fit). */}
+        <ControlPill
+          spots={PROFILING_PILL_SPOTS}
+          storageKey={embedded ? "resourceprofiling:dashboard" : "resourceprofiling"}
+          onRegionChange={setPillRegion}
+        >
           {zoomed && (
             <Button type="button" variant="outline" size="icon" onClick={() => setZoomed(null)}
               className="rounded-full h-9 w-9" title="Reset zoom">
@@ -1663,47 +1699,40 @@ function ResourceGraph({
 
         {embedded && (
           <>
-            <FloatingPanel
-              title="Object Types"
-              // Always starts collapsed: the chip already carries the count, and
-              // expanded it covers a corner of the graph.
-              narrow
-              collapsedLabel={`${legendTypes.length} Object Type${legendTypes.length === 1 ? "" : "s"}`}
-              style={{ position: "absolute", top: 12, left: 12, zIndex: 8 }}
+            {/* The shared legend of the graph canvases, as on the handover: under
+                the title, down to just above the pill when the pill is on this side. */}
+            <div
+              style={{
+                position: "absolute", top: legendTop, left: CHROME_INSET, zIndex: 12,
+                display: "flex", flexDirection: "column",
+                maxHeight: `calc(100% - ${legendTop + roomBelowForPill(pillRegion, true, { reach: 280 })}px)`,
+              }}
             >
-              <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: "#334155" }}>
-                {legendTypes.map(t => (
-                  <div key={t} style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                    <span style={{ width: 10, height: 10, borderRadius: "50%", background: typeColorMap[t] ?? "#94a3b8", flexShrink: 0 }} />
-                    {t}
-                  </div>
-                ))}
-                {showClusters && (data.n_clusters || hasOutliers) && (
-                  <>
-                    <div style={{ marginTop: 6, fontWeight: 700, fontSize: 10, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                      Clusters
-                    </div>
-                    {Array.from({ length: data.n_clusters ?? 0 }, (_, ci) => (
-                      <div key={`c-${ci}`} style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                        <span style={{ width: 10, height: 10, borderRadius: "50%", background: clusterColors[ci % clusterColors.length], flexShrink: 0 }} />
-                        Cluster {ci + 1}
-                      </div>
-                    ))}
-                    {hasOutliers && (
-                      <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                        <span style={{ width: 10, height: 10, borderRadius: "50%", border: "2px dashed #94a3b8", flexShrink: 0 }} />
-                        Outlier
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            </FloatingPanel>
+              <ObjectTypePanel
+                testId="profiling-legend"
+                types={legendTypes.map(t => ({ type: t, color: typeColorMap[t] ?? "#94a3b8" }))}
+                sections={
+                  showClusters && (data.n_clusters || hasOutliers)
+                    ? [{
+                        title: "Clusters",
+                        entries: [
+                          ...Array.from({ length: data.n_clusters ?? 0 }, (_, ci) => ({
+                            key: `c-${ci}`, label: `Cluster ${ci + 1}`, color: clusterColors[ci % clusterColors.length],
+                          })),
+                          ...(hasOutliers ? [{ key: "outlier", label: "Outlier", color: "#94a3b8", dashed: true }] : []),
+                        ],
+                      }]
+                    : []
+                }
+                collapsed={legendCollapsed}
+                onCollapsedChange={setLegendCollapsed}
+              />
+            </div>
             {/* Top-right cluster: the metrics sit beside the view select, the
                 same arrangement the handover canvas uses. Right anchored, so
                 expanding the metrics grows the row leftwards. */}
             <div style={{
-              position: "absolute", top: 12, right: 12, zIndex: 14,
+              position: "absolute", top: CHROME_INSET, right: CHROME_INSET, zIndex: 14,
               display: "flex", alignItems: "flex-start", gap: 8,
             }}>
             <MetricChips

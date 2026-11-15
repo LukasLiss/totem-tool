@@ -202,4 +202,28 @@ describe('ObjectTypePanel', () => {
     fireEvent.mouseEnter(utils.container.querySelector('[data-object-type="clerk"]')!);
     expect(onHighlight).not.toHaveBeenCalledWith('clerk');
   });
+
+  it('lists more groups below the types, e.g. clusters with a dashed outlier dot', () => {
+    const utils = render(
+      <ObjectTypePanel
+        types={[{ type: 'clerk', color: '#0f0' }]}
+        sections={[
+          {
+            title: 'Clusters',
+            entries: [
+              { key: 'c-0', label: 'Cluster 1', color: '#f43f5e' },
+              { key: 'outlier', label: 'Outlier', color: '#94a3b8', dashed: true },
+            ],
+          },
+          { title: 'Empty', entries: [] },
+        ]}
+        collapsed={false}
+        onCollapsedChange={() => undefined}
+      />,
+    );
+    const section = utils.container.querySelector('[data-panel-section="Clusters"]')!;
+    expect(section.textContent).toContain('Cluster 1');
+    expect(section.textContent).toContain('Outlier');
+    expect(utils.container.querySelector('[data-panel-section="Empty"]')).toBeNull();
+  });
 });
