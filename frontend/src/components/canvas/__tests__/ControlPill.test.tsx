@@ -2,6 +2,8 @@
 
 import { cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useContext } from 'react';
+import { PillVerticalContext } from '../pillContext';
 import { ControlPill } from '../ControlPill';
 import { isVerticalSpot, nearestSpot, pillRegion, roomBelowForPill, type PillSpot } from '../pillSpots';
 
@@ -208,5 +210,24 @@ describe('ControlPill', () => {
   it('passes canvas markers to its root', () => {
     const { root } = movablePill({ rootProps: { 'data-totem-control': '' } });
     expect(root.hasAttribute('data-totem-control')).toBe(true);
+  });
+
+  it('tells its controls whether it stands upright (at a side) or lies (in a corner)', () => {
+    function Shape() {
+      return <span data-testid="shape">{useContext(PillVerticalContext) ? 'vertical' : 'horizontal'}</span>;
+    }
+    let utils = render(
+      <ControlPill spots={['left']}>
+        <Shape />
+      </ControlPill>,
+    );
+    expect(utils.getByTestId('shape').textContent).toBe('vertical');
+    cleanup();
+    utils = render(
+      <ControlPill spots={['bottom-left']}>
+        <Shape />
+      </ControlPill>,
+    );
+    expect(utils.getByTestId('shape').textContent).toBe('horizontal');
   });
 });

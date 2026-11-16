@@ -26,7 +26,8 @@ import { RelationLegend } from './process-area/RelationLegend';
 import { ControlPill, type PillSpot } from '@/components/canvas/ControlPill';
 
 /** Free places for the control pill: the relation legend holds the bottom-left corner. */
-const TOTEM_PILL_SPOTS: readonly PillSpot[] = ['bottom-right', 'top-right'];
+// No top-right corner (too little room there, and it reads oddly); the sides come with TOTeM's redesign.
+const TOTEM_PILL_SPOTS: readonly PillSpot[] = ['bottom-right'];
 import { RelationStatsCard } from './process-area/RelationStatsCard';
 import { indexRelationStats, type RelationStats } from './process-area/relationStats';
 

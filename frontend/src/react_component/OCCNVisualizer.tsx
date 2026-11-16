@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { useFilterVersion, getEffectiveFilterConfig } from '@/store/filterStore';
 import { isCancelledError } from '@/store/computationStore';
@@ -54,10 +54,30 @@ import {
 import OccnOverflowBadges from './OccnOverflowBadges';
 import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
 import { ControlPill, type PillSpot } from '@/components/canvas/ControlPill';
+import { PillVerticalContext } from '@/components/canvas/pillContext';
+import { ObjectTypePanel } from '@/components/canvas/ObjectTypePanel';
+import { roomBelowForPill, type PillRegion } from '@/components/canvas/pillSpots';
+import { FIT_GAP, bestFit, pillRect } from '@/components/canvas/canvasFit';
+import { useCanvasGestures } from '@/components/canvas/useCanvasGestures';
+import { useFitAvoidRects } from '@/components/canvas/useFitAvoidRects';
 import { toast } from 'sonner';
 
-/** Free places for the control pill: the legend holds the top-left corner. */
-const OCCN_PILL_SPOTS: readonly PillSpot[] = ['bottom-right', 'bottom-left', 'top-right'];
+/**
+ * Free places for the control pill, as on the other graph canvases: the
+ * bottom corners, or standing at the left or right edge (the threshold slider
+ * then turns vertical). The top corners hold the title, legend and focus button.
+ */
+const OCCN_PILL_SPOTS: readonly PillSpot[] = ['bottom-right', 'bottom-left', 'left', 'right'];
+/** React Flow's zoom limits of this view (dense logs lay out tens of thousands of px tall). */
+const MIN_ZOOM = 0.005;
+const MAX_ZOOM = 2.5;
+/** Largest zoom of the fit, so a small net is not blown up. */
+const FIT_MAX_ZOOM = 1.5;
+/**
+ * Room around the nodes' boxes for what is drawn outside them: self-loops
+ * (they arc ~70 px above a node), the binding markers and the arrowheads.
+ */
+const FIT_MARGIN = 80;
 
 interface OCCNVisualizerProps {
   height?: string | number;
@@ -95,6 +115,52 @@ const EMPTY_CONFORMANCE_HIGHLIGHTS: Record<
 > = {};
 const EMPTY_MISSING_CONFORMANCE_ACTIVITIES: string[] = [];
 const EMPTY_UNVISITED_ACTIVITIES: string[] = [];
+
+/**
+ * The relative occurrence threshold in the control pill: a slider that
+ * commits on release (and re-discovers the net). Lying in a lying pill with
+ * its label; upright in a standing pill, its value below it.
+ */
+function ThresholdControl({
+  threshold,
+  onCommit,
+  disabled,
+}: {
+  threshold: number;
+  onCommit: (value: number) => void;
+  disabled: boolean;
+}) {
+  const vertical = useContext(PillVerticalContext);
+  const title = 'Relative occurrence threshold — commits on release and re-discovers the net';
+  const slider = (
+    <Slider
+      orientation={vertical ? 'vertical' : 'horizontal'}
+      className={vertical ? 'data-[orientation=vertical]:h-24 data-[orientation=vertical]:min-h-0' : 'w-28'}
+      min={0}
+      max={1}
+      step={0.05}
+      defaultValue={[threshold]}
+      onValueCommit={(value) => onCommit(value[0] ?? 0)}
+      disabled={disabled}
+      thumbAriaLabel="Relative occurrence threshold"
+    />
+  );
+  if (vertical) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, padding: '2px 0' }} title={title}>
+        {slider}
+        <span style={{ fontSize: 11, color: '#475569', fontVariantNumeric: 'tabular-nums' }}>{threshold.toFixed(2)}</span>
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingRight: 4 }} title={title}>
+      <span style={{ fontSize: 11, fontWeight: 600, color: '#475569', whiteSpace: 'nowrap' }}>Threshold</span>
+      {slider}
+      <span style={{ fontSize: 11, color: '#475569', width: 28 }}>{threshold.toFixed(2)}</span>
+    </div>
+  );
+}
 
 function resolveHeightValue(height: string | number) {
   return typeof height === 'number' ? `${height}px` : height;
@@ -136,6 +202,16 @@ function OCCNVisualizer({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [interactionLocked, setInteractionLocked] = useState(initialInteractionLocked);
+  // The shared legend (collapsed at first) and where the movable pill sits.
+  const [legendCollapsed, setLegendCollapsed] = useState(true);
+  const [pillRegion, setPillRegion] = useState<PillRegion | null>(null);
+  /**
+   * The fit mode (the fit button grey), as on the DFG and the handover: the
+   * net is placed clear of the title, legend and pill, and follows when they
+   * or the box change, until the user zooms, pans or drags a node.
+   */
+  const [fitted, setFitted] = useState(true);
+  const flowRef = useRef<HTMLDivElement>(null);
   const [tooltipState, setTooltipState] = useState<
     { x: number; y: number; title?: string; rows: TooltipRow[] } | null
   >(null);
@@ -283,6 +359,8 @@ function OCCNVisualizer({
           }))
         );
         setLayoutReadyTick((tick) => tick + 1);
+        // A new layout opens fitted again.
+        setFitted(true);
       });
     return () => {
       cancelled = true;
@@ -320,24 +398,44 @@ function OCCNVisualizer({
     };
   }, []);
 
-  // Re-fit once the container actually has real dimensions (and whenever it is
-  // resized). Gated on positioned nodes so we never fit against origin {0,0}
-  // placeholders before ELK layout has resolved.
+  // The canvas controls the fit keeps clear of (title, legend, focus button:
+  // marked data-fit-avoid), and the pill.
+  const avoidRects = useFitAvoidRects(containerRef, [legendCollapsed, showControls, showTitle, Boolean(net)]);
+  const fitAvoid = useMemo(
+    () => [...avoidRects, ...(pillRegion ? [pillRect(pillRegion)] : [])],
+    [avoidRects, pillRegion],
+  );
+
+  /** Places the whole net as large as fits clear of the controls (bestFit), centred while it has room. */
+  const placeFitted = useCallback(() => {
+    if (containerSize.width <= 0 || containerSize.height <= 0 || nodes.length === 0) return;
+    const bounds = reactFlow.getNodesBounds(nodes);
+    const graph = { x: bounds.x - FIT_MARGIN, y: bounds.y - FIT_MARGIN, w: bounds.width + 2 * FIT_MARGIN, h: bounds.height + 2 * FIT_MARGIN };
+    const fit = bestFit(
+      { w: containerSize.width, h: containerSize.height },
+      { w: graph.w, h: graph.h },
+      { top: FIT_GAP, right: FIT_GAP, bottom: FIT_GAP, left: FIT_GAP },
+      fitAvoid,
+      FIT_MAX_ZOOM,
+    );
+    const zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, fit.scale));
+    void reactFlow.setViewport({ x: fit.x - graph.x * zoom, y: fit.y - graph.y * zoom, zoom });
+  }, [containerSize.width, containerSize.height, nodes, reactFlow, fitAvoid]);
+
+  // In the fit mode, fit once the container has real dimensions and the
+  // layout has positioned (and measured) the nodes, and again whenever the
+  // box, the layout or a control changes. Gated on positioned nodes so we
+  // never fit against origin {0,0} placeholders before ELK has resolved.
   useEffect(() => {
+    if (!fitted) return;
     if (containerSize.width <= 0 || containerSize.height <= 0) return;
     if (nodes.length === 0 || !nodesInitialized || layoutReadyTick === 0) return;
-    const frame = window.requestAnimationFrame(() => {
-      void fitView({ padding: 0.25, minZoom: 0.005, duration: 300 });
-    });
+    const frame = window.requestAnimationFrame(placeFitted);
     return () => cancelAnimationFrame(frame);
-  }, [
-    containerSize.width,
-    containerSize.height,
-    nodes.length,
-    nodesInitialized,
-    layoutReadyTick,
-    fitView,
-  ]);
+    // placeFitted changes with the nodes' positions too: a fit per layout
+    // (layoutReadyTick), not per node drag (which ends the fit mode anyway).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fitted, containerSize.width, containerSize.height, nodes.length, nodesInitialized, layoutReadyTick, fitAvoid]);
 
   const renderContext = useMemo(
     () => ({
@@ -366,6 +464,33 @@ function OCCNVisualizer({
   );
 
   const interactionsDisabled = interactionLocked;
+
+  /**
+   * Trackpad, pinch and touch, as on the DFG and the handover (the shared
+   * hook) instead of React Flow's own wheel handling, which zooms on every
+   * wheel event: two fingers move the net, a pinch or the mouse wheel zooms at
+   * the pointer, two fingers on a touch screen do both. Dragging the
+   * background stays React Flow's. The lock switches all of it off.
+   */
+  useCanvasGestures(flowRef, !interactionsDisabled, {
+    onPan: (dx, dy) => {
+      setFitted(false);
+      const vp = reactFlow.getViewport();
+      void reactFlow.setViewport({ x: vp.x + dx, y: vp.y + dy, zoom: vp.zoom });
+    },
+    onZoom: (scale, clientX, clientY) => {
+      const rect = flowRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setFitted(false);
+      const vp = reactFlow.getViewport();
+      const zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, vp.zoom * scale));
+      // The point under the pointer stays where it is.
+      const px = clientX - rect.left;
+      const py = clientY - rect.top;
+      const k = zoom / vp.zoom;
+      void reactFlow.setViewport({ x: px - (px - vp.x) * k, y: py - (py - vp.y) * k, zoom });
+    },
+  });
 
   /**
    * Arc hover card. These handlers must sit on the ReactFlow, not inside the
@@ -421,6 +546,7 @@ function OCCNVisualizer({
 
   const focusStoppingPoint = useCallback(() => {
     if (!focusTarget) return;
+    setFitted(false);
     void fitView({
       nodes: [focusTarget],
       padding: 1.2,
@@ -437,6 +563,8 @@ function OCCNVisualizer({
     <div
       ref={containerRef}
       data-occn-readonly
+      // The box in which the fit looks for the controls (data-fit-avoid).
+      data-canvas-shell
       style={{ height: resolveHeightValue(height), width: '100%', position: 'relative' }}
       className={interactionsDisabled ? 'interactions-disabled' : ''}
     >
@@ -462,23 +590,30 @@ function OCCNVisualizer({
           edges={edges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
+          ref={flowRef}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
-          fitView
-          fitViewOptions={{ padding: 0.15 }}
           proOptions={{ hideAttribution: true }}
           // Dense logs at threshold 0 lay out tens of thousands of px tall;
-          // fitView cannot go below minZoom, so keep it low enough to fit.
-          minZoom={0.005}
-          maxZoom={2.5}
+          // the fit cannot go below minZoom, so keep it low enough to fit.
+          minZoom={MIN_ZOOM}
+          maxZoom={MAX_ZOOM}
           nodesDraggable={!interactionsDisabled}
           nodesConnectable={false}
           elementsSelectable={!interactionsDisabled}
           panOnDrag={!interactionsDisabled}
-          zoomOnPinch={!interactionsDisabled}
-          zoomOnScroll={!interactionsDisabled}
+          // Wheel and pinch are the shared gestures' (useCanvasGestures above).
+          zoomOnPinch={false}
+          zoomOnScroll={false}
+          panOnScroll={false}
           zoomOnDoubleClick={!interactionsDisabled}
           preventScrolling={!interactionsDisabled}
+          // The user moving the view (drag, double-click) or a node ends the fit
+          // mode; the fit's own moves come without an event.
+          onMoveStart={(event) => {
+            if (event) setFitted(false);
+          }}
+          onNodeDragStart={() => setFitted(false)}
           onEdgeMouseEnter={showArcTooltip}
           onEdgeMouseMove={showArcTooltip}
           onEdgeMouseLeave={() => setTooltipState(null)}
@@ -510,6 +645,7 @@ function OCCNVisualizer({
         <Button
           type="button"
           variant="outline"
+          data-fit-avoid="header"
           onClick={focusStoppingPoint}
           className={`absolute right-4 top-4 z-20 bg-background shadow-md ${
             conformanceHighlights[focusTarget.id] === 'non_fitting'
@@ -574,15 +710,16 @@ function OCCNVisualizer({
             left: 16,
             display: 'flex',
             flexDirection: 'column',
-            // As the DFG: the legend close under the title.
+            // As the DFG: the legend close under the title, down to just above
+            // the pill when the pill is on this side.
             gap: 8,
-            maxHeight: 'calc(100% - 32px)',
+            maxHeight: `calc(100% - ${16 + roomBelowForPill(pillRegion, true, { reach: 280 })}px)`,
             zIndex: 15,
           }}
         >
           {/* The title stays when the controls are switched off: it holds the filters. */}
           {showTitle && (
-            <div style={{ alignSelf: 'flex-start' }}>
+            <div data-fit-avoid="header" style={{ alignSelf: 'flex-start' }}>
               <WidgetTitle
                 label="Object-Centric Causal Net (OCCN)"
                 fileId={fileId}
@@ -595,40 +732,18 @@ function OCCNVisualizer({
           )}
 
           {showControls && Object.keys(typeColors).length > 0 && (
+            // The shared legend of the graph canvases (colours only here).
             <div
-              onPointerDown={(e) => e.stopPropagation()}
-              onMouseDown={(e) => e.stopPropagation()}
-              style={{
-                background: '#FFFFFF',
-                border: '1px solid #E5E7EB',
-                borderRadius: 12,
-                padding: '10px 14px',
-                boxShadow: '0 6px 16px rgba(15, 23, 42, 0.05)',
-                fontFamily: 'var(--font-primary, Inter, sans-serif)',
-                maxHeight: '50vh',
-                overflowY: 'auto',
-              }}
+              // Collapsed: a corner chip (the net starts below it, or beside it where it stays centred).
+              data-fit-avoid={legendCollapsed ? 'corner' : 'optional'}
+              style={{ display: 'flex', flexDirection: 'column', minHeight: 0, alignSelf: 'flex-start' }}
             >
-              <div style={{ fontWeight: 700, fontSize: 13, color: '#0F172A', marginBottom: 6 }}>
-                Object types
-              </div>
-              {Object.entries(typeColors).map(([type, color]) => (
-                <div
-                  key={type}
-                  style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#334155', lineHeight: '20px' }}
-                >
-                  <span
-                    style={{
-                      width: 10,
-                      height: 10,
-                      borderRadius: '50%',
-                      background: color,
-                      flexShrink: 0,
-                    }}
-                  />
-                  {type}
-                </div>
-              ))}
+              <ObjectTypePanel
+                testId="occn-legend"
+                types={Object.entries(typeColors).map(([type, color]) => ({ type, color }))}
+                collapsed={legendCollapsed}
+                onCollapsedChange={setLegendCollapsed}
+              />
             </div>
           )}
         </div>
@@ -636,26 +751,8 @@ function OCCNVisualizer({
 
       {showControls && (
         <>
-          {/* The legend holds the top-left corner; the threshold slider keeps the pill horizontal. */}
-          <ControlPill spots={OCCN_PILL_SPOTS} storageKey="occn">
-            <div
-              style={{ display: 'flex', alignItems: 'center', gap: 8, paddingRight: 4 }}
-              title="Relative occurrence threshold — commits on release and re-discovers the net"
-            >
-              <span style={{ fontSize: 11, fontWeight: 600, color: '#475569', whiteSpace: 'nowrap' }}>
-                Threshold
-              </span>
-              <Slider
-                className="w-28"
-                min={0}
-                max={1}
-                step={0.05}
-                defaultValue={[threshold]}
-                onValueCommit={(value) => setThreshold(value[0] ?? 0)}
-                disabled={data != null || loading}
-              />
-              <span style={{ fontSize: 11, color: '#475569', width: 28 }}>{threshold.toFixed(2)}</span>
-            </div>
+          <ControlPill spots={OCCN_PILL_SPOTS} storageKey="occn" onRegionChange={setPillRegion}>
+            <ThresholdControl threshold={threshold} onCommit={setThreshold} disabled={data != null || loading} />
             <Button
               type="button"
               variant="outline"
@@ -690,8 +787,12 @@ function OCCNVisualizer({
               type="button"
               variant="outline"
               size="icon"
-              onClick={() => reactFlow.zoomIn?.()}
+              onClick={() => {
+                setFitted(false);
+                void reactFlow.zoomIn?.();
+              }}
               className="rounded-full h-9 w-9"
+              title="Zoom in"
             >
               <PlusIcon className="h-4 w-4" />
             </Button>
@@ -699,17 +800,28 @@ function OCCNVisualizer({
               type="button"
               variant="outline"
               size="icon"
-              onClick={() => reactFlow.zoomOut?.()}
+              onClick={() => {
+                setFitted(false);
+                void reactFlow.zoomOut?.();
+              }}
               className="rounded-full h-9 w-9"
+              title="Zoom out"
             >
               <MinusIcon className="h-4 w-4" />
             </Button>
             <Button
               type="button"
-              variant="outline"
+              // Grey while the view follows the fit; zooming, panning or dragging a node ends it.
+              variant={fitted ? 'secondary' : 'outline'}
               size="icon"
-              onClick={() => fitView({ padding: 0.15 })}
+              onClick={() => {
+                setFitted(true);
+                placeFitted();
+              }}
               className="rounded-full h-9 w-9"
+              title={fitted ? 'Fitted to view: follows the panels until you zoom or pan' : 'Fit to view'}
+              aria-label="Fit to view"
+              aria-pressed={fitted}
             >
               <ScanIcon className="h-4 w-4" />
             </Button>

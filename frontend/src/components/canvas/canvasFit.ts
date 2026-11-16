@@ -18,10 +18,17 @@ export type FitPadding = { top: number; right: number; bottom: number; left: num
 
 /**
  * A control's box on the canvas (px from the view's top left).
- * `header`: part of the header row (title, collapsed chips): the graph always
- * starts below it, never beside it. `optional`: a large panel the graph only
- * makes room for while that leaves it at least half its size; otherwise
- * (narrow boxes) the panel lies over it.
+ * `header`: part of the header row (title, top-right chips): the graph always
+ * starts below it, never beside it.
+ * `corner`: a small chip in a top corner under the title (the collapsed
+ * legend): the graph starts below it, or beside it from the top of the free
+ * room only where the chip does not push it aside (where it lies anyway) —
+ * so a narrow graph gets the full height, and a wide one is never pushed
+ * aside for it.
+ * `footer`: a bar along the bottom (the open control pill lying in a bottom
+ * corner): the graph stays above it, never squeezed into the strip beside it.
+ * `optional`: a large panel the graph only makes room for while that leaves
+ * it at least half its size; otherwise (narrow boxes) the panel lies over it.
  */
 export interface FitRect {
   x: number;
@@ -29,6 +36,8 @@ export interface FitRect {
   w: number;
   h: number;
   header?: boolean;
+  corner?: boolean;
+  footer?: boolean;
   optional?: boolean;
 }
 
@@ -53,28 +62,28 @@ export function placeSpan(box: number, graph: number, start: number, end: number
 }
 
 /**
- * How much smaller (share of the largest) a centred placement may show the
- * graph and still win over an off-centre one: a graph pushed aside next to a
- * chip, leaving an empty strip below the chip, looks worse than a slightly
- * smaller one in the middle.
+ * The pill's box, for the fit. Open and lying in a bottom corner, it is a bar
+ * along the bottom (`footer`: the graph stays above it); collapsed to its grip
+ * the graph may use the room beside it, and standing at a side it goes beside it.
  */
-export const CENTRE_PREFERENCE = 0.12;
-
-/** The pill's box, for the fit. */
-export const pillRect = (region: PillRegion): FitRect => ({ x: region.left, y: region.top, w: region.width, h: region.height });
+export const pillRect = (region: PillRegion): FitRect => {
+  const rect = { x: region.left, y: region.top, w: region.width, h: region.height };
+  const lyingAtBottom = region.spot === 'bottom-left' || region.spot === 'bottom-right';
+  return lyingAtBottom && region.width > 2 * region.height ? { ...rect, footer: true } : rect;
+};
 
 /**
  * The best place for a graph of `graph` size (layout units) in a box of `box`
  * px: clear of every control in `rects` (by `gap`) and of the `base` margins.
  *
- * The header row (title, collapsed chips) is cleared by starting below it;
- * any other control by keeping the graph above, below, left or right of it.
- * Of all these combinations the one closest to the centre wins among those
- * that show the graph about as large as the largest (within
- * CENTRE_PREFERENCE). So the graph slides below an open legend rather than
- * squeezing beside it when that leaves it clearly larger, sits centred below
- * a chip rather than pushed aside next to it for a little more size, and
- * stays centred while it has room to spare.
+ * The header row (title, top-right chips) is cleared by starting below it,
+ * a bottom bar (the open pill in a corner) by ending above it; a corner chip by starting below it or by lying beside it where it is not
+ * moved for that (see FitRect); any other control by keeping the graph above, below,
+ * left or right of it. Of all these combinations the one that shows the
+ * graph largest wins, and of equally large ones the one closest to the
+ * centre. So the graph uses the room beside a collapsed pill, moves aside for
+ * an open legend where that leaves it larger, and stays centred while it has
+ * room to spare.
  */
 export function bestFit(
   box: { w: number; h: number },
@@ -85,23 +94,33 @@ export function bestFit(
   gap = FIT_GAP,
 ): FitPlacement {
   type Candidate = FitPlacement & { shift: number };
+  /** A way around a control; `soft`: only valid where it does not move the graph (beside a corner chip). */
+  type Way = Partial<FitPadding> & { soft?: boolean };
   const solve = (controls: FitRect[]): Candidate | null => {
-    const ways = controls.map((r): Partial<FitPadding>[] =>
-      r.header
-        ? [{ top: r.y + r.h + gap }]
-        : [{ bottom: box.h - r.y + gap }, { top: r.y + r.h + gap }, { right: box.w - r.x + gap }, { left: r.x + r.w + gap }],
-    );
+    const ways = controls.map((r): Way[] => {
+      if (r.header) return [{ top: r.y + r.h + gap }];
+      if (r.footer) return [{ bottom: box.h - r.y + gap }];
+      if (r.corner) {
+        const onLeft = r.x + r.w / 2 < box.w / 2;
+        return [
+          { top: r.y + r.h + gap },
+          onLeft ? { left: r.x + r.w + gap, soft: true } : { right: box.w - r.x + gap, soft: true },
+        ];
+      }
+      return [{ bottom: box.h - r.y + gap }, { top: r.y + r.h + gap }, { right: box.w - r.x + gap }, { left: r.x + r.w + gap }];
+    });
     const candidates: Candidate[] = [];
-    const visit = (i: number, pad: FitPadding) => {
+    const widen = (pad: FitPadding, way: Way): FitPadding => ({
+      top: Math.max(pad.top, way.top ?? 0),
+      right: Math.max(pad.right, way.right ?? 0),
+      bottom: Math.max(pad.bottom, way.bottom ?? 0),
+      left: Math.max(pad.left, way.left ?? 0),
+    });
+    // `pad`: all the ways taken; `hard`: without the soft ones, to tell
+    // whether a corner chip moved the graph.
+    const visit = (i: number, pad: FitPadding, hard: FitPadding) => {
       if (i < ways.length) {
-        for (const way of ways[i]) {
-          visit(i + 1, {
-            top: Math.max(pad.top, way.top ?? 0),
-            right: Math.max(pad.right, way.right ?? 0),
-            bottom: Math.max(pad.bottom, way.bottom ?? 0),
-            left: Math.max(pad.left, way.left ?? 0),
-          });
-        }
+        for (const way of ways[i]) visit(i + 1, widen(pad, way), way.soft ? hard : widen(hard, way));
         return;
       }
       const availW = box.w - pad.left - pad.right;
@@ -112,22 +131,25 @@ export function bestFit(
       const gh = graph.h * scale;
       const x = placeSpan(box.w, gw, pad.left, pad.right);
       const y = placeSpan(box.h, gh, pad.top, pad.bottom);
+      // Beside a corner chip only where the chip itself does not push the
+      // graph aside (other controls, e.g. the pill, may).
+      if ((pad.left !== hard.left || pad.right !== hard.right) && Math.abs(x - placeSpan(box.w, gw, hard.left, hard.right)) > 0.5) return;
       const shift = Math.abs(x - (box.w - gw) / 2) + Math.abs(y - (box.h - gh) / 2);
       candidates.push({ scale, x, y, shift });
     };
-    visit(0, base);
-    if (candidates.length === 0) return null;
-    const largest = Math.max(...candidates.map((c) => c.scale));
+    visit(0, base, base);
     let best: Candidate | null = null;
     for (const c of candidates) {
-      if (c.scale < largest * (1 - CENTRE_PREFERENCE) - 1e-9) continue;
-      const closer = !best || c.shift < best.shift - 1e-6;
-      const asClose = best != null && Math.abs(c.shift - best.shift) <= 1e-6;
-      if (closer || (asClose && c.scale > best!.scale)) best = c;
+      const larger = !best || c.scale > best.scale * (1 + 1e-6);
+      const asLarge = best != null && c.scale >= best.scale * (1 - 1e-6);
+      if (larger || (asLarge && c.shift < best!.shift)) best = c;
     }
     return best;
   };
 
+  // A control taking room (the pill opening) only makes the graph smaller,
+  // and a smaller graph clears a corner chip all the more: its top can only
+  // move up then (beside the chip), never down.
   const all = solve(rects);
   let chosen = all;
   if (rects.some((r) => r.optional)) {

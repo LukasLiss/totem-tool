@@ -48,6 +48,7 @@ import { defaultSpeed, fmtPlaybackTime } from "@/components/canvas/playback";
 import { panelAtPill, roomBelowForPill, type PillRegion, type PillSpot } from "@/components/canvas/pillSpots";
 import { FIT_GAP, bestFit, pillRect, type FitRect } from "@/components/canvas/canvasFit";
 import { useCanvasGestures } from "@/components/canvas/useCanvasGestures";
+import { useFitAvoidRects } from "@/components/canvas/useFitAvoidRects";
 import { type Size } from "@/react_component/orgamining/canvasGeometry";
 
 
@@ -2966,39 +2967,9 @@ function HandoverGraph({
     for (const e of edges) if (e.source === e.target) m.set(e.source, (m.get(e.source) ?? 0) + 1);
     return m;
   }, [edges]);
-  /**
-   * The canvas controls the fit keeps clear of (besides the pill): every
-   * element of the surrounding canvas marked `data-fit-avoid` — "header" (the
-   * title, the top-right chips: the graph starts below them), "box" (a
-   * collapsed chip: the graph may sit beside it) or "optional" (an open panel,
-   * which only gets room while that leaves the graph at least half its size).
-   * In px from the graph's top-left corner, measured as they change.
-   */
-  const [avoidRects, setAvoidRects] = useState<FitRect[]>([]);
-  useEffect(() => {
-    const host = containerRef.current;
-    const shell = host?.closest<HTMLElement>("[data-canvas-shell]");
-    if (!host || !shell || typeof ResizeObserver === "undefined") return;
-    const measure = () => {
-      const origin = host.getBoundingClientRect();
-      const rects: FitRect[] = [];
-      shell.querySelectorAll<HTMLElement>("[data-fit-avoid]").forEach(el => {
-        const r = el.getBoundingClientRect();
-        if (r.width === 0 || r.height === 0) return;
-        const kind = el.dataset.fitAvoid;
-        rects.push({
-          x: r.left - origin.left, y: r.top - origin.top, w: r.width, h: r.height,
-          ...(kind === "header" ? { header: true } : kind === "optional" ? { optional: true } : {}),
-        });
-      });
-      setAvoidRects(prev => (JSON.stringify(prev) === JSON.stringify(rects) ? prev : rects));
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(shell);
-    shell.querySelectorAll("[data-fit-avoid]").forEach(el => observer.observe(el));
-    return () => observer.disconnect();
-  }, [legendCollapsed, nodes]);
+  // The canvas controls the fit keeps clear of, besides the pill (title,
+  // chips, legend: marked data-fit-avoid in the CanvasShell).
+  const avoidRects = useFitAvoidRects(containerRef, [legendCollapsed, nodes]);
   const [typePercentages, setTypePercentages] = useState<Record<string, number>>({});
   const [nodeSearch, setNodeSearch] = useState("");
   const [checkedNodes, setCheckedNodes] = useState<Set<string>>(() => new Set(nodes.map(n => n.id)));
@@ -4354,7 +4325,8 @@ function HandoverGraph({
           // The shared legend of the graph canvases, as on the DFG: under the
           // title, down to just above the pill when the pill is on this side.
           <div
-            data-fit-avoid={legendCollapsed ? "box" : "optional"}
+            // Collapsed: a corner chip (the graph starts below it, or beside it where it stays centred).
+            data-fit-avoid={legendCollapsed ? "corner" : "optional"}
             style={{
               position: "absolute", top: legendTop, left: CHROME_INSET, zIndex: 12,
               display: "flex", flexDirection: "column",

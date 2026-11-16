@@ -28,34 +28,60 @@ describe('bestFit', () => {
     expect(fit.scale).toBeGreaterThan(0.6);
   });
 
-  it('sets the graph centred below the legend chip rather than pushed aside next to it for a little more size', () => {
+  it('starts the graph below the title row, but may set it beside a small control', () => {
     const box = { w: 1200, h: 900 };
-    // A square graph: beside the chip (from below the title) 806 px, below it 768 px — under 5 % more.
+    // A square graph is larger beside the chip (from below the title) than below the chip.
     const fit = bestFit(box, { w: 1000, h: 1000 }, BASE, [TITLE, LEGEND_CHIP, playChip(box)], 1.4);
-    expect(fit.scale).toBeCloseTo((900 - 108 - 24) / 1000, 5);
-    expect(fit.y).toBeCloseTo(54 + 30 + 24, 5);
-    expect(fit.x).toBeCloseTo((1200 - 768) / 2, 5);
+    expect(fit.y).toBeCloseTo(16 + 30 + 24, 5);
+    expect(fit.scale).toBeCloseTo((900 - 70 - 24) / 1000, 5);
+    expect(fit.x).toBeGreaterThanOrEqual(LEGEND_CHIP.x + LEGEND_CHIP.w + 24);
   });
 
-  it('centres the handover graph of the screenshot instead of pushing it right of the chip', () => {
-    // A 630 × 460 tile, title and chips at the top, a wide pill at the bottom right.
+  it('sets a wide graph centred below the legend chip, never pushed aside next to it', () => {
+    // The handover of an earlier screenshot: 630 × 460, chips top right, a wide pill bottom right.
     const box = { w: 630, h: 460 };
     const chips: FitRect = { x: 520, y: 16, w: 94, h: 30, header: true };
-    const chip: FitRect = { x: 16, y: 54, w: 124, h: 30 };
+    const chip: FitRect = { x: 16, y: 54, w: 124, h: 30, corner: true };
     const bottomPill: FitRect = { x: 205, y: 404, w: 410, h: 48 };
     const fit = bestFit(box, { w: 600, h: 400 }, BASE, [TITLE, chip, chips, bottomPill], 1.4);
-    // Below the chip, centred across the tile.
-    expect(fit.y).toBeGreaterThanOrEqual(54 + 30 + 24);
+    expect(fit.y).toBeCloseTo(54 + 30 + 24, 5);
     expect(Math.abs(fit.x - (630 - 600 * fit.scale) / 2)).toBeLessThan(1);
   });
 
-  it('still sets the graph beside the legend chip where that shows it clearly larger', () => {
-    // A low box: below the chip leaves 168 px, beside it 206 px (over 20 % more).
-    const box = { w: 1200, h: 300 };
-    const fit = bestFit(box, { w: 1000, h: 1000 }, BASE, [TITLE, LEGEND_CHIP, playChip(box)], 1.4);
-    expect(fit.scale).toBeCloseTo((300 - 70 - 24) / 1000, 5);
-    expect(fit.x).toBeGreaterThanOrEqual(LEGEND_CHIP.x + LEGEND_CHIP.w + 24);
+  it('uses the room beside a collapsed pill, and gives it up when the pill opens', () => {
+    // The causal net of the screenshots: 740 × 700, a narrow tall net, the
+    // pill collapsed to its grip in the bottom-right corner.
+    const box = { w: 740, h: 700 };
+    const chip: FitRect = { x: 16, y: 54, w: 132, h: 30, corner: true };
+    const graph = { w: 420, h: 640 };
+    const grip = bestFit(box, graph, BASE, [TITLE, chip, { x: 680, y: 640, w: 44, h: 44 }], 1.5);
+    // Down to the bottom margin, beside the grip.
+    expect(grip.y + graph.h * grip.scale).toBeCloseTo(700 - 24, 5);
+    const open = bestFit(box, graph, BASE, [TITLE, chip, { x: 230, y: 642, w: 494, h: 50 }], 1.5);
+    // Above the open pill, so smaller — and it never moves down for that
+    // (here it now clears the chip, so it starts right under the title).
+    expect(open.y + graph.h * open.scale).toBeLessThanOrEqual(642 - 24 + 1e-6);
+    expect(open.scale).toBeLessThan(grip.scale);
+    expect(open.y).toBeLessThanOrEqual(grip.y + 1e-6);
   });
+
+  it('gives a narrow net the full height beside the collapsed chip, at least as large as beside the open legend', () => {
+    // The causal net of the screenshots: a narrow net clears the chip where it is centred anyway.
+    const box = { w: 740, h: 700 };
+    const graph = { w: 420, h: 640 };
+    const chip: FitRect = { x: 16, y: 54, w: 132, h: 30, corner: true };
+    const panel: FitRect = { x: 16, y: 54, w: 186, h: 210, optional: true };
+    const openPill: FitRect = { x: 230, y: 642, w: 494, h: 50 };
+    const collapsed = bestFit(box, graph, BASE, [TITLE, chip, openPill], 1.5);
+    const open = bestFit(box, graph, BASE, [TITLE, panel, openPill], 1.5);
+    // Collapsed: from right under the title, centred (beside the chip).
+    expect(collapsed.y).toBeCloseTo(16 + 30 + 24, 5);
+    expect(Math.abs(collapsed.x - (740 - 420 * collapsed.scale) / 2)).toBeLessThan(1);
+    // The open legend never makes the net larger than the small chip does.
+    expect(collapsed.scale).toBeGreaterThanOrEqual(open.scale - 1e-9);
+    expect(open.x).toBeGreaterThanOrEqual(16 + 186 + 24);
+  });
+
 
   it('gives the graph the same room with the legend collapsed as with it open, where both fit beside it', () => {
     const box = { w: 1650, h: 780 };
@@ -82,14 +108,45 @@ describe('bestFit', () => {
     expect(Math.abs(gapAbove - gapBelow)).toBeLessThan(4);
   });
 
-  it('may set a tall graph beside a corner pill when that shows it clearly larger', () => {
-    const box = { w: 1200, h: 600 };
-    const bottomPill = pill('bottom-left', box);
-    const fit = bestFit(box, { w: 600, h: 1000 }, BASE, [TITLE, LEGEND_CHIP, bottomPill], 1.4);
-    // Right of the pill (and the chip), from below the title to the bottom margin: (600 − 70 − 24) / 1000;
-    // above the pill it would get only 420 px.
-    expect(fit.scale).toBeCloseTo(506 / 1000, 5);
-    expect(fit.x).toBeGreaterThanOrEqual(bottomPill.x + bottomPill.w + 24);
+  it('never moves the graph down when the pill opens, with the legend chip collapsed', () => {
+    // The causal net of the screenshots: a 740 × 700 card, the pill bottom
+    // left, collapsed to its grip and open across most of the width.
+    const box = { w: 740, h: 700 };
+    const chipInHeader: FitRect = { ...LEGEND_CHIP, w: 132, corner: true };
+    const graph = { w: 500, h: 640 };
+    const collapsed = bestFit(box, graph, BASE, [TITLE, chipInHeader, { x: 16, y: 648, w: 44, h: 44 }], 1.5);
+    const open = bestFit(box, graph, BASE, [TITLE, chipInHeader, { x: 16, y: 642, w: 490, h: 50 }], 1.5);
+    // Opening the pill never moves the graph down.
+    expect(open.y).toBeLessThanOrEqual(collapsed.y + 1e-6);
+    expect(open.y + graph.h * open.scale).toBeLessThanOrEqual(642 - 24 + 1e-6);
+  });
+
+  it('keeps a tall graph above the open pill in a corner, but beside it when collapsed to its grip', () => {
+    const box = { w: 1200, h: 900 };
+    const openPill = pill('bottom-left', box);
+    expect(openPill.footer).toBe(true);
+    const open = bestFit(box, { w: 600, h: 1000 }, BASE, [TITLE, LEGEND_CHIP, openPill], 1.4);
+    expect(open.y + 1000 * open.scale).toBeLessThanOrEqual(openPill.y - 24 + 1e-6);
+    const grip = pillRect(pillRegion('bottom-left', { width: 44, height: 44 }, { width: box.w, height: box.h }));
+    expect(grip.footer).toBeUndefined();
+    const collapsed = bestFit(box, { w: 600, h: 1000 }, BASE, [TITLE, LEGEND_CHIP, grip], 1.4);
+    // Down to the bottom margin, beside the grip.
+    expect(collapsed.y + 1000 * collapsed.scale).toBeCloseTo(900 - 24, 5);
+  });
+
+  it('never moves the graph down when the pill opens, over many tile, graph and pill sizes', () => {
+    for (const [bw, bh] of [[640, 460], [740, 700], [1200, 900], [500, 380]])
+      for (const [gw, gh] of [[200, 640], [300, 400], [420, 640], [600, 400], [1000, 900]])
+        for (const spot of ['bottom-left', 'bottom-right'] as const)
+          for (const openW of [200, 350, 494]) {
+            const box = { w: bw, h: bh };
+            const chip: FitRect = { x: 16, y: 54, w: 132, h: 30, corner: true };
+            const grip = pillRect(pillRegion(spot, { width: 44, height: 44 }, { width: bw, height: bh }));
+            const bar = pillRect(pillRegion(spot, { width: openW, height: 50 }, { width: bw, height: bh }));
+            const collapsed = bestFit(box, { w: gw, h: gh }, BASE, [TITLE, chip, grip], 1.5);
+            const open = bestFit(box, { w: gw, h: gh }, BASE, [TITLE, chip, bar], 1.5);
+            expect(open.y).toBeLessThanOrEqual(collapsed.y + 0.5);
+          }
   });
 
   it('keeps a graph with room to spare where it is when the pill changes sides', () => {

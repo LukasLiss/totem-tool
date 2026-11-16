@@ -26,6 +26,8 @@ import {
   type PillSpot,
 } from './pillSpots';
 
+import { PillVerticalContext } from './pillContext';
+
 export type { PillRegion, PillSpot } from './pillSpots';
 
 /** Distance of the pill from the canvas edges. */
@@ -409,7 +411,7 @@ function MovablePill({
         {/* The grip stays the first element and moves to the end with `order`:
             re-mounting it mid-drag would lose the pointer capture. */}
         {grip}
-        {!collapsed && children}
+        {!collapsed && <PillVerticalContext.Provider value={vertical}>{children}</PillVerticalContext.Provider>}
       </div>
     </div>
   );

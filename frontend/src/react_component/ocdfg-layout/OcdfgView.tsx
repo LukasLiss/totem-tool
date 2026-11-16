@@ -341,10 +341,12 @@ export default function OcdfgView({
       : [
           // The header row: the title.
           ...(titleShown && chromeRects.title ? [{ ...chromeRects.title, header: true }] : []),
-          // The legend, chip or open panel, is cleared on its best side (the
-          // graph may sit beside it); the open panel is large, so in narrow
-          // boxes it lies over the graph.
-          ...(chrome && chromeRects.legend ? [{ ...chromeRects.legend, optional: !legendCollapsed }] : []),
+          // The legend: collapsed, a corner chip (the graph starts below it, or
+          // beside it where it stays centred); the open panel is cleared on its
+          // best side, and as it is large, it lies over the graph in narrow boxes.
+          ...(chrome && chromeRects.legend
+            ? [legendCollapsed ? { ...chromeRects.legend, corner: true } : { ...chromeRects.legend, optional: true }]
+            : []),
           ...(chrome && pillRegion ? [pillRect(pillRegion)] : []),
         ];
   const fitKey = `${options.direction}|${types.join(',')}`;
