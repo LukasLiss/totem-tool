@@ -61,7 +61,7 @@ def resource_cooldown_distribution(
         )
         return {}
 
-    sorted_events = ocel.events.sort("_timestampUnix")
+    sorted_events = ocel.events.sort(["_timestampUnix", "_eventId"])
 
     for row in sorted_events.iter_rows(named=True):
         timestamp = row["_timestampUnix"]
