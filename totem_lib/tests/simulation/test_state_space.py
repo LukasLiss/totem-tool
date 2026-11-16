@@ -4,7 +4,7 @@
 Organised to follow the generation pipeline, one ``# --- section ---`` per unit:
 
     connected-component extraction -> object-structure variants -> control-flow VMM
-    -> stateful (object-conditioned) VMM -> graph-signature level -> object
+    -> stateful (object-conditioned) VMM -> state and backoff chain -> object
     participation -> participation signatures -> execution generator (invariants,
     incremental contract, relational selection) -> expected activity occurrences.
 
@@ -31,7 +31,6 @@ from totem_lib.simulation.utils.state_space import (
     StateSpaceModel,
     _activity_projections,
     _summarize_state,
-    _wl_hash_window,
     extract_state_space_executions,
 )
 from totem_lib.variants.state_space_executions import find_object_structure_variants
@@ -281,7 +280,7 @@ def test_stateful_vmm_conditions_on_object_state():
     suffix the pure-suffix context ("Pick",) is ambiguous, so distinguishing Pick
     from Ship requires the remaining/active object state."""
     model = StateSpaceModel.build(
-        _order_items_ocel(), config=StateConfig.m3(suffix_length=1, min_support=1)
+        _order_items_ocel(), config=StateConfig(suffix_length=1, min_support=1)
     )
     gen = model.new_generator(_order_pool(), _rng(0))
 
@@ -298,10 +297,10 @@ def test_stateful_vmm_conditions_on_object_state():
 
 
 def test_stateful_vmm_flat_config_ignores_object_state():
-    """At M0 (suffix only, length 1) the model cannot tell the two post-Pick states
-    apart, so the ("Pick",) context mixes Pick and Ship."""
+    """With the history only (length 1) the model cannot tell the two post-Pick
+    states apart, so the ("Pick",) context mixes Pick and Ship."""
     model = StateSpaceModel.build(
-        _order_items_ocel(), config=StateConfig.m0(suffix_length=1)
+        _order_items_ocel(), config=StateConfig.history_only(suffix_length=1)
     )
     gen = model.new_generator(_order_pool(), _rng(0))
     gen.step()  # Create
@@ -310,68 +309,62 @@ def test_stateful_vmm_flat_config_ignores_object_state():
     assert {"Pick", "Ship"} <= set(after_one)  # ambiguous without object state
 
 
-def test_stateful_vmm_support_counts_only_allowed_continuations():
-    """min_support is checked after the mask: a level with enough observations in
-    total but fewer than min_support allowed ones is skipped for a coarser level."""
-    config = StateConfig.m0(suffix_length=1, min_support=3)
+def test_stateful_vmm_support_counts_only_admissible_continuations():
+    """min_support is checked on the admissible observations; a level with enough
+    observations in total but too few admissible ones is skipped."""
+    config = StateConfig.history_only(suffix_length=1, min_support=3)
     counts = {
-        ("S", ("A",)): Counter({"B": 2, "C": 1}),
-        ("S", ()): Counter({"C": 2, "D": 2}),
+        ("H", ("A",)): Counter({"B": 2, "C": 1}),
+        ("L", ("A",)): Counter({"B": 2, "C": 1}),
+        ("*",): Counter({"C": 3, "D": 3}),
     }
     vmm = StatefulActivityVMM(counts, config)
-    state = _summarize_state([START, "A"], {}, {}, Counter(), set(), config, [])
+    state = _summarize_state([START, "A"], Counter(), config)
 
     assert vmm.next_distribution(state) == {"B": 2 / 3, "C": 1 / 3}
-    # Only one allowed observation (C) on ("A",) -> back off to the empty context.
-    assert vmm.next_distribution(state, allowed={"C", "D"}) == {"C": 0.5, "D": 0.5}
-    # No level has enough allowed observations -> END.
-    assert vmm.next_distribution(state, allowed={"D"}) == {END: 1.0}
+    # Only one admissible observation (C) on ("A",) -> back off to "*".
+    assert vmm.next_distribution(state, admissible={"C", "D"}) == {"C": 0.5, "D": 0.5}
 
 
-# --- graph-signature conditioning level (advisor decision 2026-07-28) ---
+def test_stateful_vmm_last_level_needs_no_min_support():
+    """The global level is used with fewer than min_support admissible
+    observations; without any admissible observation the model returns END."""
+    config = StateConfig.history_only(suffix_length=1, min_support=3)
+    counts = {("H", ("A",)): Counter({END: 5}), ("*",): Counter({"B": 1, END: 5})}
+    vmm = StatefulActivityVMM(counts, config)
+    state = _summarize_state([START, "A"], Counter(), config)
+
+    assert vmm.next_distribution(state, admissible={"B"}) == {"B": 1.0}
+    assert vmm.next_distribution(state, admissible={"C"}) == {END: 1.0}
 
 
-def _order_state(config):
-    """State after Create+Pick over an Order + two Items pool."""
-    events = [("Create", ["o1"]), ("Pick", ["o1", "i1"])]
-    object_types = {"o1": "Order", "i1": "Item"}
-    return _summarize_state(
-        [START, "Create", "Pick"],
-        {"o1": "Pick", "i1": "Pick"},
-        object_types,
-        Counter({"Order": 1, "Item": 2}),
-        {"Order", "Item"},
-        config,
-        events,
+# --- state and backoff chain ---
+
+
+def test_state_caps_groups_and_keeps_unused_objects():
+    """G_j counts every group, unused objects under (type, START), capped at
+    group_cap; the history keeps the last suffix_length elements incl. START."""
+    config = StateConfig(suffix_length=4, group_cap=3)
+    groups = Counter({("Item", START): 5, ("Order", "Create"): 1, ("Item", "Pick"): 0})
+    state = _summarize_state([START, "Create"], groups, config)
+
+    assert state.history == (START, "Create")
+    assert state.groups == ((("Item", START), 3), (("Order", "Create"), 1))
+
+
+def test_backoff_chain_order():
+    """(h, G) -> G -> h -> last(h) -> *, and the ablations keep their levels."""
+    state = _summarize_state(
+        [START, "Create", "Pick"], Counter({("Order", "Pick"): 1}), StateConfig()
     )
 
+    def tags(config):
+        return [key[0] for key in _activity_projections(state, config)]
 
-def test_graph_signature_window_is_id_invariant_and_structure_sensitive():
-    """The prefix-subgraph signature ignores object ids but captures structure —
-    including per-event object multiplicity (1 vs 2 items in a pack event)."""
-    w1 = [("Create", ["o1"]), ("Pack", ["o1", "i1"])]
-    ot1 = {"o1": "Order", "i1": "Item"}
-    # same structure, different object ids -> identical hash
-    w2 = [("Create", ["oX"]), ("Pack", ["oX", "iX"])]
-    ot2 = {"oX": "Order", "iX": "Item"}
-    assert _wl_hash_window(w1, ot1) == _wl_hash_window(w2, ot2)
-    # two items in the pack event -> different structure -> different hash
-    w3 = [("Create", ["o1"]), ("Pack", ["o1", "i1", "i2"])]
-    ot3 = {"o1": "Order", "i1": "Item", "i2": "Item"}
-    assert _wl_hash_window(w3, ot3) != _wl_hash_window(w1, ot1)
-    # empty prefix -> empty signature
-    assert _wl_hash_window([], {}) == ""
-
-
-def test_graph_signature_is_richest_backoff_level():
-    """With graph signatures on, the chain leads with a ('G', ...) level; the M0
-    ablation (signatures off) has none."""
-    config = StateConfig()  # use_graph_signature=True by default
-    keys = _activity_projections(_order_state(config), config)
-    assert keys[0][0] == "G"
-
-    m0 = StateConfig.m0()
-    assert all(key[0] != "G" for key in _activity_projections(_order_state(m0), m0))
+    assert tags(StateConfig()) == ["HG", "G", "H", "L", "*"]
+    assert tags(StateConfig.history_only()) == ["H", "L", "*"]
+    assert tags(StateConfig.groups_only()) == ["G", "*"]
+    assert _activity_projections(state, StateConfig())[3] == ("L", ("Pick",))
 
 
 # --- object participation model (mandatory-type gating + count distribution) ---
@@ -511,29 +504,14 @@ def test_generator_reproduces_deterministic_trace():
     assert labels == ["A", "B", "C"]
 
 
-def test_generator_graph_signatures_produce_valid_executions():
-    """The full model (graph signatures on) still generates connected, fully
-    covered executions across seeds."""
-    ocel = _order_items_ocel()
-    model = StateSpaceModel.build(ocel, config=StateConfig(min_support=1))
-    for seed in range(8):
-        graph, otm = _generate_over_structure(model, ocel, seed)
-        covered = set()
-        for _, data in graph.nodes(data=True):
-            covered.update(data["objects"])
-        assert covered == set(otm)
-        assert nx.is_weakly_connected(graph)
-
-
 def test_generator_ablation_configs_produce_valid_executions():
-    """Every ablation level M0-M3 still generates connected, fully covered
+    """The full state and both ablations generate connected, fully covered
     executions."""
     ocel = _order_items_ocel()
     for config in (
-        StateConfig.m0(min_support=1),
-        StateConfig.m1(min_support=1),
-        StateConfig.m2(min_support=1),
-        StateConfig.m3(min_support=1),
+        StateConfig(min_support=1),
+        StateConfig.history_only(min_support=1),
+        StateConfig.groups_only(min_support=1),
     ):
         model = StateSpaceModel.build(ocel, config=config)
         for seed in range(5):
@@ -543,6 +521,76 @@ def test_generator_ablation_configs_produce_valid_executions():
                 covered.update(data["objects"])
             assert covered == set(otm)
             assert nx.is_weakly_connected(graph)
+
+
+def test_generator_end_not_admissible_while_objects_unused():
+    """END is not drawn while an object is unused and an activity is allowed,
+    although the history alone observed END after Create."""
+    events = [
+        _event("e1", "Create", 1, ["o1"]),
+        _event("e2", "Create", 2, ["o2"]),
+        _event("e3", "Pick", 3, ["o2", "i2"]),
+    ]
+    objects = [_object("o1", "Order"), _object("o2", "Order"), _object("i2", "Item")]
+    model = StateSpaceModel.build(
+        make_ocel(events, objects),
+        config=StateConfig.history_only(min_support=1),
+    )
+    for seed in range(10):
+        graph, _ = model.new_generator({"O": "Order", "I": "Item"}, _rng(seed)).run()
+        labels = sorted(d["label"] for _, d in graph.nodes(data=True))
+        assert labels == ["Create", "Pick"]
+
+
+def test_generator_end_admissible_when_no_unused_object_can_join():
+    """END may be drawn although an Item is unused, because no allowed activity
+    has a realizable signature that takes it (Pick needs a confirmed Order)."""
+    events = [
+        _event("e1", "Create", 1, ["o1"]),
+        _event("e2", "Pay", 2, ["o1"]),
+        _event("e3", "Create", 3, ["o2"]),
+        _event("e4", "Confirm", 4, ["o2"]),
+        _event("e5", "Pick", 5, ["o2", "i2"]),
+        _event("e6", "Create", 6, ["o3"]),
+    ]
+    objects = [
+        _object("o1", "Order"),
+        _object("o2", "Order"),
+        _object("o3", "Order"),
+        _object("i2", "Item"),
+    ]
+    model = StateSpaceModel.build(
+        make_ocel(events, objects),
+        config=StateConfig.history_only(min_support=1),
+    )
+    runs = []
+    for seed in range(30):
+        graph, _ = model.new_generator({"O": "Order", "I": "Item"}, _rng(seed)).run()
+        runs.append([d["label"] for _, d in graph.nodes(data=True)])
+    assert ["Create"] in runs
+    assert ["Create", "Pay"] in runs
+
+
+def test_generator_omits_unused_objects():
+    """At a dead end unused objects are left out instead of being attached to an
+    existing event."""
+    events = [
+        _event("e1", "Create", 1, ["o1"]),
+        _event("e2", "Pick", 2, ["o1", "i1"]),
+        _event("e3", "Ship", 3, ["o1", "i1"]),
+    ]
+    objects = [_object("o1", "Order"), _object("i1", "Item")]
+    model = StateSpaceModel.build(
+        make_ocel(events, objects), config=StateConfig(min_support=1)
+    )
+    pool = {"O": "Order", "I1": "Item", "I2": "Item"}
+    graph, object_type_map = model.new_generator(pool, _rng(0)).run()
+
+    covered = set()
+    for _, data in graph.nodes(data=True):
+        covered.update(data["objects"])
+    assert len(covered) == 2
+    assert set(object_type_map) == covered
 
 
 # --- execution generator: incremental step()/run() contract ---

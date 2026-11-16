@@ -14,26 +14,22 @@ Items it picks belong to the Order it involves).
 
 Two learned models drive it:
 
-- ``StatefulActivityVMM`` — ``P(activity | S)`` where the state S abstracts the
-  execution graph so far. A linear backoff chain from the graph-native level down
-  to the flat suffix resolves sparsity: an isomorphism-invariant WL signature of
-  the recent prefix subgraph (``("G", ...)``) -> the object-lifecycle level (per
-  ``(type, last activity)`` histogram + remaining-object counts) -> the bare
-  activity suffix, shortened to the empty context. A support threshold picks the
-  richest level with enough evidence. StateConfig selects how much of S is used;
-  the ablation helpers M0-M3 switch the graph signature off to isolate the
-  object-lifecycle features (M0 reduces to the bare-suffix ``ControlFlowVMM``).
+- ``StatefulActivityVMM`` — ``P(activity | S)`` with the state ``S = (h, G)``:
+  the activity history ``h`` and the capped number of objects per group ``(type,
+  last activity)`` ``G``. Sparsity is resolved by the backoff ``(h, G) -> G -> h
+  -> last(h) -> *``; a support threshold on the admissible continuations picks the
+  first level with enough evidence.
 - ``ParticipationSignatureModel`` — ``P(participant signature | activity)``, the
   joint count of participants per pre-event object group, so multi-object
   dependencies are preserved and only pool-realizable signatures are drawn.
 
 ``ExecutionGenerator`` weaves both into a connected event graph, one event at a
 time, so the playout can drive generation lazily and  in the future can feed runtime
-state back through ``runtime_context``; ``run`` drives it to completion. Two
-invariants hold by construction: connectivity (every non-start event shares an
-object with the case so far) and coverage (every pool object ends up in at least
-one event). The EOG structure re-emerges from object sharing, so linear generation
-still yields a partial-order graph.
+state back through ``runtime_context``; ``run`` drives it to completion.
+Connectivity (every non-start event shares an object with the case so far) holds
+by construction. ``END`` is delayed while an allowed activity can still take an
+unused object; objects unused at the end are omitted. The EOG structure re-emerges from
+object sharing, so linear generation still yields a partial-order graph.
 """
 
 from collections import Counter, defaultdict, namedtuple
@@ -211,243 +207,121 @@ class ObjectParticipationModel:
 
 
 class StateConfig:
-    """Which features the object-centric activity state ``S`` conditions on.
+    """Parameters of the object-centric state ``S_j = (h_j, G_j)``.
 
-    ``S`` combines the recent activity suffix with a compact summary of the object
-    pool. ``object_level`` selects the richest active-object context
-    (``"histogram"`` = per ``(type, last_activity)`` counts (M3), ``"type_counts"``
-    = per-type counts of active objects (M2), ``"none"`` = no active-object context).
-    ``use_remaining`` adds bucketed counts of not-yet-used objects per type (a
-    progress signal; only sound under conditional simulation with a given pool).
-    ``suffix_length`` is the activity horizon k. Remaining counts are bucketed as
-    ``0, 1, ..., remaining_cap`` (cap meaning "cap or more"). A projection is used at
-    query time only if its allowed continuations (after masking, ``END`` included)
-    have at least ``min_support`` observations, else the model backs off (guards
-    single-observation probability-1 states). The M0-M3 helpers name the ablation
-    levels.
+    ``h_j`` is the activity history, the last ``suffix_length`` elements of
+    ``<START, a_1, ..., a_j>``. ``G_j`` maps every object group ``(type, last
+    activity)`` to its number of objects, capped at ``group_cap``. A backoff level
+    is used only if its admissible continuations have at least ``min_support``
+    observations; the last level needs a single one.
+
+    ``use_history`` and ``use_groups`` select the state components for the
+    ablations ``history_only`` and ``groups_only``.
     """
 
     def __init__(
         self,
         suffix_length=DEFAULT_MAX_ORDER,
-        object_level="histogram",
-        use_remaining=True,
-        remaining_cap=3,
+        group_cap=3,
         min_support=3,
-        use_graph_signature=True,
-        graph_windows=(4, 3, 2),
+        use_history=True,
+        use_groups=True,
     ):
-        if object_level not in ("histogram", "type_counts", "none"):
-            raise ValueError(f"unknown object_level: {object_level!r}")
+        if not (use_history or use_groups):
+            raise ValueError("the state needs the history, the groups or both")
         self.suffix_length = suffix_length
-        self.object_level = object_level
-        self.use_remaining = use_remaining
-        self.remaining_cap = remaining_cap
+        self.group_cap = group_cap
         self.min_support = min_support
-        # Richest backoff level(s): an isomorphism-invariant signature of the
-        # recent prefix subgraph (one per window size, largest first) — the
-        # graph-native conditioning that sits above the object-lifecycle and
-        # suffix levels.
-        self.use_graph_signature = use_graph_signature
-        self.graph_windows = graph_windows
-
-    # The M0-M3 helpers are the object-feature ablation and switch the
-    # graph-signature level OFF (unless overridden), so they isolate the effect
-    # of the object-lifecycle features against the bare suffix.
+        self.use_history = use_history
+        self.use_groups = use_groups
 
     @classmethod
-    def m0(cls, **kw):
-        """Ablation M0: activity suffix only (the flat VMM)."""
-        kw.setdefault("use_graph_signature", False)
-        return cls(object_level="none", use_remaining=False, **kw)
+    def history_only(cls, **kw):
+        """Ablation: activity history ``h_j`` only."""
+        return cls(use_groups=False, **kw)
 
     @classmethod
-    def m1(cls, **kw):
-        """Ablation M1: suffix + remaining-object counts."""
-        kw.setdefault("use_graph_signature", False)
-        return cls(object_level="none", use_remaining=True, **kw)
-
-    @classmethod
-    def m2(cls, **kw):
-        """Ablation M2: suffix + active-object type counts + remaining."""
-        kw.setdefault("use_graph_signature", False)
-        return cls(object_level="type_counts", use_remaining=True, **kw)
-
-    @classmethod
-    def m3(cls, **kw):
-        """Ablation M3: suffix + (type, last_activity) histogram + remaining."""
-        kw.setdefault("use_graph_signature", False)
-        return cls(object_level="histogram", use_remaining=True, **kw)
+    def groups_only(cls, **kw):
+        """Ablation: object groups ``G_j`` only."""
+        return cls(use_history=False, **kw)
 
 
-def _bucket(n, cap):
-    """Clamp a count into ``0, 1, ..., cap`` (cap meaning "cap or more")."""
-    return n if n < cap else cap
+_ActivityState = namedtuple("_ActivityState", ["history", "groups"])
 
 
-_ActivityState = namedtuple(
-    "_ActivityState", ["graph_sigs", "suffix", "hist_items", "type_items", "rem_items"]
-)
-
-
-def _wl_hash_window(window_events, object_types):
-    """Isomorphism-invariant WL hash of one prefix window subgraph.
-
-    Each event is a node labelled by its activity *and* its object-type multiset
-    (so a single-object and a two-object occurrence of the same activity differ,
-    which pure directly-follows edges miss when an object appears in one event
-    only). Edges connect an object's consecutive events within the window,
-    labelled by object type. Labels use activity + type only, never object ids,
-    so the hash is invariant to object identity — the same recent *structure*
-    hashes the same across executions and across a fresh simulated pool.
-    """
-    if not window_events:
-        return ""
-    graph = nx.DiGraph()
-    for idx, (activity, objs) in enumerate(window_events):
-        type_counts = Counter(object_types.get(o) or "?" for o in objs)
-        label = (
-            activity
-            + "|"
-            + ",".join(f"{t}:{c}" for t, c in sorted(type_counts.items()))
-        )
-        graph.add_node(idx, label=label)
-    obj_last = {}
-    for idx, (_activity, objs) in enumerate(window_events):
-        for oid in objs:
-            otype = object_types.get(oid) or "?"
-            if oid in obj_last:
-                graph.add_edge(obj_last[oid], idx, otype=otype)
-            obj_last[oid] = idx
-    return nx.weisfeiler_lehman_graph_hash(graph, node_attr="label", edge_attr="otype")
-
-
-def _prefix_graph_signatures(events, object_types, windows):
-    """WL hashes of the recent prefix subgraph, one per window size (largest
-    first). ``events`` is ``[(activity, object_ids), ...]`` of the prefix so far.
-    """
-    return tuple(
-        _wl_hash_window(events[-w:] if w else events, object_types) for w in windows
-    )
-
-
-def _summarize_state(
-    context, last_act, object_types, total_by_type, present_types, config, events
-):
-    """Build the compact ``_ActivityState`` from the current generation state.
+def _summarize_state(context, groups, config):
+    """The state ``S_j = (h_j, G_j)`` as hashable tuples.
 
     Shared by training and generation so their projection keys always match.
-    ``last_act`` maps each *used* object to its last activity; unused objects are
-    implicit (they show up only in the remaining counts). ``events`` is the
-    prefix so far, used for the graph-signature level.
+
+    Args:
+        context: ``<START, a_1, ..., a_j>``.
+        groups: Number of objects per group ``(type, last activity)``, unused
+            objects in ``(type, START)``.
+        config: The ``StateConfig``.
     """
-    used_by_type = Counter(object_types[o] for o in last_act)
-    hist = Counter((object_types[o], last_act[o]) for o in last_act)
-    type_counts = Counter(object_types[o] for o in last_act)
-    rem = {
-        t: _bucket(total_by_type[t] - used_by_type.get(t, 0), config.remaining_cap)
-        for t in present_types
-    }
-    suffix = tuple(context[-config.suffix_length :])
-    graph_sigs = (
-        _prefix_graph_signatures(events, object_types, config.graph_windows)
-        if config.use_graph_signature
-        else ()
+    history = tuple(context[-config.suffix_length :])
+    capped = tuple(
+        sorted((g, min(config.group_cap, n)) for g, n in groups.items() if n > 0)
     )
-    return _ActivityState(
-        graph_sigs,
-        suffix,
-        tuple(sorted(hist.items())),
-        tuple(sorted(type_counts.items())),
-        tuple(sorted(rem.items())),
-    )
+    return _ActivityState(history, capped)
 
 
 def _activity_projections(state, config):
-    """Ordered backoff projections of ``state`` (richest first) as count keys.
+    """Backoff projections of ``state``, richest first, as count keys.
 
-    The chain: recent-subgraph signature(s) first (the graph-native level), then
-    the object-lifecycle level (histogram -> type counts) with remaining counts,
-    then the bare activity suffix shortened down to the empty context.
+    ``(h, G) -> G -> h -> last(h) -> *``; the ablations keep the levels of their
+    component.
     """
     keys = []
-    if config.use_graph_signature:
-        seen = set()
-        for sig in state.graph_sigs:  # largest window first
-            if sig and sig not in seen:
-                keys.append(("G", sig))
-                seen.add(sig)
-    rem = state.rem_items if config.use_remaining else ()
-    if config.object_level == "histogram":
-        keys.append(("H", state.suffix, state.hist_items, rem))
-    if config.object_level in ("histogram", "type_counts"):
-        keys.append(("T", state.suffix, state.type_items, rem))
-    if config.use_remaining:
-        keys.append(("R", state.suffix, rem))
-    suffix = state.suffix
-    for length in range(len(suffix), -1, -1):
-        keys.append(("S", suffix[len(suffix) - length :]))
+    if config.use_history and config.use_groups:
+        keys.append(("HG", state.history, state.groups))
+    if config.use_groups:
+        keys.append(("G", state.groups))
+    if config.use_history:
+        keys.append(("H", state.history))
+        keys.append(("L", state.history[-1:]))
+    keys.append(("*",))
     return keys
 
 
-def _execution_activity_examples(execution, config):
-    """``(state, target_activity)`` training pairs for one execution.
+def _initial_groups(object_types):
+    return Counter((t, START) for t in object_types.values() if t is not None)
 
-    One pair per event (target = its activity) plus a final ``END`` pair once all
-    events are observed.
-    """
+
+def _advance_groups(groups, last_act, object_types, activity, object_ids):
+    """Move the participants of an event into the group of ``activity``."""
+    for oid in object_ids:
+        obj_type = object_types.get(oid)
+        if obj_type is None:
+            continue
+        groups[(obj_type, last_act.get(oid, START))] -= 1
+        groups[(obj_type, activity)] += 1
+        last_act[oid] = activity
+
+
+def _execution_activity_examples(execution, config):
+    """``(S_j, a_{j+1})`` for ``0 <= j < n`` and ``(S_n, END)`` of one execution."""
     object_types = execution.object_types
-    total_by_type = Counter(t for t in object_types.values() if t is not None)
-    present_types = set(total_by_type)
+    groups = _initial_groups(object_types)
     context = [START]
     last_act = {}
-    prefix_events = []
     examples = []
     for activity, object_ids in execution.events:
-        examples.append(
-            (
-                _summarize_state(
-                    context,
-                    last_act,
-                    object_types,
-                    total_by_type,
-                    present_types,
-                    config,
-                    prefix_events,
-                ),
-                activity,
-            )
-        )
-        for oid in object_ids:
-            if object_types.get(oid) is not None:
-                last_act[oid] = activity
+        examples.append((_summarize_state(context, groups, config), activity))
+        _advance_groups(groups, last_act, object_types, activity, object_ids)
         context.append(activity)
-        prefix_events.append((activity, object_ids))
-    examples.append(
-        (
-            _summarize_state(
-                context,
-                last_act,
-                object_types,
-                total_by_type,
-                present_types,
-                config,
-                prefix_events,
-            ),
-            END,
-        )
-    )
+    examples.append((_summarize_state(context, groups, config), END))
     return examples
 
 
 class StatefulActivityVMM:
-    """Variable-order Markov model over the object-centric activity state ``S``.
+    """Next-activity distribution ``P_act(a | S)`` with backoff.
 
-    Generalizes ``ControlFlowVMM`` from a bare activity suffix to the full
-    ``_ActivityState`` (suffix + object-pool summary). Holds counts
-    ``{projection_key: Counter{activity_or_END: n}}`` at every backoff level and
-    resolves the richest projection whose allowed continuations meet
-    ``min_support`` at query time.
+    Holds counts ``{projection_key: Counter{activity_or_END: n}}`` for every
+    backoff level. A query uses the first level whose admissible continuations
+    have at least ``min_support`` observations; the last level (``*``) only needs
+    one.
     """
 
     def __init__(self, counts, config):
@@ -463,24 +337,35 @@ class StatefulActivityVMM:
                     counts[key][target] += 1
         return cls(dict(counts), config)
 
-    def next_distribution(self, state, allowed=None):
-        """Distribution over the next activity (plus ``END``) for ``state``."""
-        for key in _activity_projections(state, self.config):
+    def next_distribution(self, state, admissible=None):
+        """Distribution over the admissible outcomes for ``state``.
+
+        Args:
+            state: The ``_ActivityState``.
+            admissible: Activities (and possibly ``END``) that may follow; ``None``
+                admits every observed outcome.
+
+        Returns:
+            ``{activity_or_END: probability}``, or ``{END: 1.0}`` when no level has
+            an admissible observation.
+        """
+        keys = _activity_projections(state, self.config)
+        for level, key in enumerate(keys):
             counts = self._counts.get(key)
             if not counts:
                 continue
             filtered = {
-                a: n
-                for a, n in counts.items()
-                if a == END or allowed is None or a in allowed
+                a: n for a, n in counts.items() if admissible is None or a in admissible
             }
             total = sum(filtered.values())
-            if filtered and total >= self.config.min_support:
+            if total == 0:
+                continue
+            if total >= self.config.min_support or level == len(keys) - 1:
                 return {a: n / total for a, n in filtered.items()}
         return {END: 1.0}
 
-    def sample_next(self, state, allowed, rng):
-        distribution = self.next_distribution(state, allowed)
+    def sample_next(self, state, admissible, rng):
+        distribution = self.next_distribution(state, admissible)
         activities = list(distribution)
         weights = [distribution[a] for a in activities]
         return rng.choices(activities, weights=weights, k=1)[0]
@@ -550,6 +435,15 @@ class ParticipationSignatureModel:
             self._realizable(s, available_groups, require_active) for s in distribution
         )
 
+    def can_join(self, activity, available_groups, require_active):
+        """Whether a realizable observed signature of ``activity`` takes an unused
+        object, i.e. includes a group ``(type, START)``."""
+        return any(
+            self._realizable(s, available_groups, require_active)
+            and any(group[1] == START for group, _ in s)
+            for s in self._counts.get(activity, {})
+        )
+
     def sample_signature(self, activity, available_groups, require_active, rng):
         """Sample a participant signature realizable from ``available_groups``.
 
@@ -569,26 +463,6 @@ class ParticipationSignatureModel:
         signatures = list(candidates)
         weights = [candidates[s] for s in signatures]
         return rng.choices(signatures, weights=weights, k=1)[0]
-
-
-def _cover_leftovers(events, object_type_map, used):
-    """Attach not-yet-used objects to an existing event of a matching type.
-
-    Guarantees every structure object appears in at least one event without
-    distorting the generated control flow (objects only join existing events).
-    """
-    leftover = [o for o in object_type_map if o not in used]
-    if not leftover or not events:
-        return
-    for oid in leftover:
-        obj_type = object_type_map[oid]
-        target = 0
-        for idx, (_, objs) in enumerate(events):
-            if any(object_type_map.get(x) == obj_type for x in objs):
-                target = idx
-                break
-        events[target][1].append(oid)
-        used.add(oid)
 
 
 def _build_case_graph(events, object_type_map):
@@ -650,9 +524,9 @@ class ExecutionGenerator:
     edges carry the object relations, so participant selection stays within one
     interaction cluster (which Item belongs to which Order). Connectivity — every
     non-start event shares an already-active object — holds by construction via the
-    ``require_active`` realizability mask. Coverage — every pool object appears in
-    some event — is enforced where reachable (END is blocked while pool objects
-    remain and an activity can still consume them).
+    ``require_active`` realizability mask. ``END`` is admissible once no allowed
+    activity has a realizable signature that takes an unused object; objects still
+    unused at the end are not part of the generated execution.
     """
 
     def __init__(
@@ -675,7 +549,7 @@ class ExecutionGenerator:
         self.rng = rng
         self.max_events = max_events
         self.present_types = set(self.object_type_map.values())
-        self.total_by_type = Counter(self.object_type_map.values())
+        self.groups = _initial_groups(self.object_type_map)
         self.last_act = {}
         self.context = [START]
         self.events = []
@@ -687,24 +561,21 @@ class ExecutionGenerator:
         )
 
     def _state(self):
-        return _summarize_state(
-            self.context,
-            self.last_act,
-            self.object_type_map,
-            self.total_by_type,
-            self.present_types,
-            self.config,
-            self.events,
-        )
+        return _summarize_state(self.context, self.groups, self.config)
 
     def _available_groups(self):
-        groups = Counter()
-        for oid, obj_type in self.object_type_map.items():
-            groups[(obj_type, self.last_act.get(oid, START))] += 1
-        return groups
+        """Uncapped ``Av_j``: number of pool objects per group."""
+        return Counter({g: n for g, n in self.groups.items() if n > 0})
 
-    def _all_used(self):
-        return len(self.last_act) == len(self.object_type_map)
+    def _can_join(self, allowed):
+        """``CanJoin_j``: an allowed activity has a realizable signature that takes
+        an unused object."""
+        available = self._available_groups()
+        require_active = bool(self.events)
+        return any(
+            self.participation_model.can_join(activity, available, require_active)
+            for activity in allowed
+        )
 
     def _allowed_now(self):
         """Activities that may fire in the current object state.
@@ -738,39 +609,23 @@ class ExecutionGenerator:
         if self.done or len(self.events) >= self.max_events:
             self.done = True
             return None
-        state = self._state()
         allowed = self._allowed_now()
-        activity = self.activity_model.sample_next(state, allowed, self.rng)
+        if self._can_join(allowed):
+            admissible = allowed
+        else:
+            admissible = allowed | {END}
+        activity = self.activity_model.sample_next(self._state(), admissible, self.rng)
         if activity == END:
-            # Coverage: block END while pool objects remain AND something can
-            # still fire; on a genuine dead-end, end and let to_graph() attach any
-            # stragglers.
-            if self._all_used() or not allowed:
-                self.done = True
-                return None
-            activity = self._forced_activity(state, allowed)
-            if activity is None:
-                self.done = True
-                return None
+            self.done = True
+            return None
         participants = self._select_participants(activity)
         event = (activity, participants)
         self.events.append(event)
-        for oid in participants:
-            self.last_act[oid] = activity
+        _advance_groups(
+            self.groups, self.last_act, self.object_type_map, activity, participants
+        )
         self.context.append(activity)
         return event
-
-    def _forced_activity(self, state, allowed):
-        distribution = {
-            a: p
-            for a, p in self.activity_model.next_distribution(state, allowed).items()
-            if a != END
-        }
-        if not distribution:
-            return None
-        activities = list(distribution)
-        weights = [distribution[a] for a in activities]
-        return self.rng.choices(activities, weights=weights, k=1)[0]
 
     def _select_participants(self, activity):
         signature = self.participation_model.sample_signature(
@@ -829,10 +684,12 @@ class ExecutionGenerator:
         return chosen
 
     def to_graph(self):
-        """Build the EOG-style case graph from the events generated so far."""
-        used = set(self.last_act)
-        _cover_leftovers(self.events, self.object_type_map, used)
-        return _build_case_graph(self.events, self.object_type_map)
+        """EOG-style case graph of the events generated so far, with the type map
+        of the objects that took part in them."""
+        used = {
+            oid: t for oid, t in self.object_type_map.items() if oid in self.last_act
+        }
+        return _build_case_graph(self.events, used)
 
     def run(self):
         """Drive :meth:`step` to completion; return ``(graph, object_type_map)``."""
