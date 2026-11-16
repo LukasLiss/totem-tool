@@ -179,9 +179,8 @@ def _mine_constraints_from_executions(
         same_inv = inverse_vector[0] / inverse_total
         # Subset-or-equal: rs1 ⊆ rs2 covers strict subset (idx 1) and equality (idx 0).
         subset_fwd = (vector[1] + vector[0]) / total
-        # Superset-or-equal, mirroring subset_fwd: if act1 ⊊ act2, the reverse
-        # pair (act2, act1) is "neither" (idx 3); equal sets stay at idx 0.
-        superset_inv = (inverse_vector[3] + inverse_vector[0]) / inverse_total
+        # Subset-or-equal in the reverse direction: act2 ⊆ act1.
+        subset_inv = (inverse_vector[1] + inverse_vector[0]) / inverse_total
         disjoint_fwd = vector[2] / total
         disjoint_inv = inverse_vector[2] / inverse_total
 
@@ -194,13 +193,26 @@ def _mine_constraints_from_executions(
             constraints_for_variant[act2][act1][res_type] = "same_resource"
             processed_pairs.add(inverse_key)
 
+        # Subset is directional: it is only assigned if the support reaches the
+        # threshold in exactly one direction. If both directions reach it (without
+        # sufficient support for same_resource), the direction is ambiguous and
+        # no subset constraint is assigned.
         elif (
             subset_fwd >= support_threshold_percentage
-            and superset_inv >= support_threshold_percentage
+            and subset_inv < support_threshold_percentage
         ):
             # Asymmetric: act1 ⊆ act2, emit both directions.
             constraints_for_variant[act1][act2][res_type] = "subset"
             constraints_for_variant[act2][act1][res_type] = "superset"
+            processed_pairs.add(inverse_key)
+
+        elif (
+            subset_inv >= support_threshold_percentage
+            and subset_fwd < support_threshold_percentage
+        ):
+            # Asymmetric: act2 ⊆ act1, emit both directions.
+            constraints_for_variant[act1][act2][res_type] = "superset"
+            constraints_for_variant[act2][act1][res_type] = "subset"
             processed_pairs.add(inverse_key)
 
         elif (
