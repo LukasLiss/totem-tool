@@ -121,20 +121,37 @@ describe('bestFit', () => {
     expect(open.y + graph.h * open.scale).toBeLessThanOrEqual(642 - 24 + 1e-6);
   });
 
-  it('keeps a tall graph above the open pill in a corner, but beside it when collapsed to its grip', () => {
+  it('lets a graph reach down beside the open corner pill only for a small push, else keeps it above', () => {
     const box = { w: 1200, h: 900 };
-    const openPill = pill('bottom-left', box);
-    expect(openPill.footer).toBe(true);
-    const open = bestFit(box, { w: 600, h: 1000 }, BASE, [TITLE, LEGEND_CHIP, openPill], 1.4);
-    expect(open.y + 1000 * open.scale).toBeLessThanOrEqual(openPill.y - 24 + 1e-6);
+    const graph = { w: 600, h: 1000 };
+    // A 340 px pill bottom left: the full-height graph would be pushed ~22 px right — fine.
+    const short = pill('bottom-left', box);
+    expect(short.footer).toBe(true);
+    const beside = bestFit(box, graph, BASE, [TITLE, short], 1.4);
+    expect(beside.y + 1000 * beside.scale).toBeCloseTo(900 - 24, 5);
+    // A pill across most of the width would push it far aside: it stays above the pill.
+    const wide: FitRect = { x: 16, y: 814, w: 900, h: 70, footer: true };
+    const above = bestFit(box, graph, BASE, [TITLE, wide], 1.4);
+    expect(above.y + 1000 * above.scale).toBeLessThanOrEqual(814 - 24 + 1e-6);
+    // Collapsed to its grip, the graph uses the room beside it.
     const grip = pillRect(pillRegion('bottom-left', { width: 44, height: 44 }, { width: box.w, height: box.h }));
     expect(grip.footer).toBeUndefined();
-    const collapsed = bestFit(box, { w: 600, h: 1000 }, BASE, [TITLE, LEGEND_CHIP, grip], 1.4);
-    // Down to the bottom margin, beside the grip.
+    const collapsed = bestFit(box, graph, BASE, [TITLE, LEGEND_CHIP, grip], 1.4);
     expect(collapsed.y + 1000 * collapsed.scale).toBeCloseTo(900 - 24, 5);
   });
 
-  it('never moves the graph down when the pill opens, over many tile, graph and pill sizes', () => {
+  it('lets a graph reach down beside the open pill where the pill does not push it aside', () => {
+    // The TOTeM of the screenshot: a wide, low tile, the open pill bottom left, the model centred.
+    const box = { w: 1260, h: 400 };
+    const bar: FitRect = { x: 30, y: 358, w: 410, h: 42, footer: true };
+    const fit = bestFit(box, { w: 700, h: 500 }, BASE, [TITLE, bar], 1.6);
+    // From below the title down to the bottom margin, and clear of the pill sideways.
+    expect(fit.y).toBeCloseTo(16 + 30 + 24, 5);
+    expect(fit.y + 500 * fit.scale).toBeCloseTo(400 - 24, 5);
+    expect(fit.x).toBeGreaterThanOrEqual(30 + 410 + 24);
+  });
+
+  it('never jumps the graph down when the pill opens, over many tile, graph and pill sizes', () => {
     for (const [bw, bh] of [[640, 460], [740, 700], [1200, 900], [500, 380]])
       for (const [gw, gh] of [[200, 640], [300, 400], [420, 640], [600, 400], [1000, 900]])
         for (const spot of ['bottom-left', 'bottom-right'] as const)
@@ -145,7 +162,10 @@ describe('bestFit', () => {
             const bar = pillRect(pillRegion(spot, { width: openW, height: 50 }, { width: bw, height: bh }));
             const collapsed = bestFit(box, { w: gw, h: gh }, BASE, [TITLE, chip, grip], 1.5);
             const open = bestFit(box, { w: gw, h: gh }, BASE, [TITLE, chip, bar], 1.5);
-            expect(open.y).toBeLessThanOrEqual(collapsed.y + 0.5);
+            // The top may only move down as a smaller graph stays centred (by at
+            // most half the height it lost), never jump down below the chip.
+            const lost = gh * (collapsed.scale - open.scale);
+            expect(open.y - collapsed.y).toBeLessThanOrEqual(Math.max(0, lost / 2) + 0.5);
           }
   });
 

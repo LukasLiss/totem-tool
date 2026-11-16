@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { useFilterVersion, getEffectiveFilterConfig } from '@/store/filterStore';
 import { isCancelledError } from '@/store/computationStore';
@@ -14,7 +14,6 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { Button } from '@/components/ui/button';
-import { Slider } from '@/components/ui/slider';
 import {
   PlusIcon,
   MinusIcon,
@@ -54,7 +53,7 @@ import {
 import OccnOverflowBadges from './OccnOverflowBadges';
 import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
 import { ControlPill, type PillSpot } from '@/components/canvas/ControlPill';
-import { PillVerticalContext } from '@/components/canvas/pillContext';
+import { PillSlider } from '@/components/canvas/PillSlider';
 import { ObjectTypePanel } from '@/components/canvas/ObjectTypePanel';
 import { roomBelowForPill, type PillRegion } from '@/components/canvas/pillSpots';
 import { FIT_GAP, bestFit, pillRect } from '@/components/canvas/canvasFit';
@@ -115,52 +114,6 @@ const EMPTY_CONFORMANCE_HIGHLIGHTS: Record<
 > = {};
 const EMPTY_MISSING_CONFORMANCE_ACTIVITIES: string[] = [];
 const EMPTY_UNVISITED_ACTIVITIES: string[] = [];
-
-/**
- * The relative occurrence threshold in the control pill: a slider that
- * commits on release (and re-discovers the net). Lying in a lying pill with
- * its label; upright in a standing pill, its value below it.
- */
-function ThresholdControl({
-  threshold,
-  onCommit,
-  disabled,
-}: {
-  threshold: number;
-  onCommit: (value: number) => void;
-  disabled: boolean;
-}) {
-  const vertical = useContext(PillVerticalContext);
-  const title = 'Relative occurrence threshold — commits on release and re-discovers the net';
-  const slider = (
-    <Slider
-      orientation={vertical ? 'vertical' : 'horizontal'}
-      className={vertical ? 'data-[orientation=vertical]:h-24 data-[orientation=vertical]:min-h-0' : 'w-28'}
-      min={0}
-      max={1}
-      step={0.05}
-      defaultValue={[threshold]}
-      onValueCommit={(value) => onCommit(value[0] ?? 0)}
-      disabled={disabled}
-      thumbAriaLabel="Relative occurrence threshold"
-    />
-  );
-  if (vertical) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, padding: '2px 0' }} title={title}>
-        {slider}
-        <span style={{ fontSize: 11, color: '#475569', fontVariantNumeric: 'tabular-nums' }}>{threshold.toFixed(2)}</span>
-      </div>
-    );
-  }
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingRight: 4 }} title={title}>
-      <span style={{ fontSize: 11, fontWeight: 600, color: '#475569', whiteSpace: 'nowrap' }}>Threshold</span>
-      {slider}
-      <span style={{ fontSize: 11, color: '#475569', width: 28 }}>{threshold.toFixed(2)}</span>
-    </div>
-  );
-}
 
 function resolveHeightValue(height: string | number) {
   return typeof height === 'number' ? `${height}px` : height;
@@ -752,7 +705,18 @@ function OCCNVisualizer({
       {showControls && (
         <>
           <ControlPill spots={OCCN_PILL_SPOTS} storageKey="occn" onRegionChange={setPillRegion}>
-            <ThresholdControl threshold={threshold} onCommit={setThreshold} disabled={data != null || loading} />
+            {/* Commits on release and re-discovers the net. */}
+            <PillSlider
+              label="Threshold"
+              ariaLabel="Relative occurrence threshold"
+              title="Relative occurrence threshold — commits on release and re-discovers the net"
+              value={threshold}
+              min={0}
+              max={1}
+              step={0.05}
+              onCommit={setThreshold}
+              disabled={data != null || loading}
+            />
             <Button
               type="button"
               variant="outline"
