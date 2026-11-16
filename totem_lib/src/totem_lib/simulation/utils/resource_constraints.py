@@ -238,6 +238,8 @@ def generate_resource_constraints(
     support_threshold_percentage=0.8,
     min_variant_frequency=0.05,
     min_variant_executions=5,
+    min_pair_executions=1,
+    fallback_min_pair_executions=None,
 ):
     """
     Generate per-resource-type resource constraints per variant, plus a pooled
@@ -266,8 +268,13 @@ def generate_resource_constraints(
         min_variant_frequency (float): Minimum fraction of all executions a variant
             must cover to be mined on its own.
         min_variant_executions (int): Minimum number of executions a variant must
-            have to be mined on its own; also the per-(pair, type) evidence floor
-            used when mining the global fallback.
+            have to be mined on its own.
+        min_pair_executions (int): Minimum number of executions in which a
+            (pair, type) must be compared to get a relation, when mining a variant
+            on its own.
+        fallback_min_pair_executions (int | None): The same evidence floor for the
+            global fallback. ``None`` uses ``min_variant_executions``, so that a
+            globally rare pair does not produce small-sample noise.
 
     Returns:
         tuple[dict, dict]:
@@ -287,6 +294,9 @@ def generate_resource_constraints(
 
     total_executions = sum(len(variant.executions) for variant in variants)
 
+    if fallback_min_pair_executions is None:
+        fallback_min_pair_executions = min_variant_executions
+
     # Global fallback mined over all executions pooled together, with an evidence
     # floor so globally-rare pairs do not produce small-sample noise.
     all_executions = [
@@ -297,7 +307,7 @@ def generate_resource_constraints(
         resource_lookup,
         ocel,
         support_threshold_percentage,
-        min_variant_executions,
+        fallback_min_pair_executions,
     )
 
     per_variant = {}
@@ -314,7 +324,7 @@ def generate_resource_constraints(
                 resource_lookup,
                 ocel,
                 support_threshold_percentage,
-                1,
+                min_pair_executions,
             )
 
     return per_variant, fallback

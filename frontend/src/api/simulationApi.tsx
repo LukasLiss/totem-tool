@@ -55,8 +55,13 @@ export type SimulationConfig = {
   resource_pool: Record<string, number>;
   sim_duration_days: number;
   sim_start_unix: number | null;
-  resource_constraint_violation_degree: number;
-  constraint_lookback_length: number | null;
+  // Play-out parameters; absent ones take the library defaults
+  resource_constraint_violation_degree?: number;
+  constraint_lookback_length?: number | null;
+  violation_cost_weights?: ViolationCostWeights;
+  // Must equal the parameters of the details request: the backend discovers
+  // the model again and uses it wherever the user did not override it.
+  discovery_params?: DiscoveryParams;
   mode: SimulationMode;
   // Present once the details phase has been loaded; carries the reviewed/edited
   // constraints, calendars, cooldowns, allocation and arrival distributions.
@@ -219,6 +224,48 @@ export type SimulationDetailsResponse = {
   pa_capacity_shares?: Record<string, number>;
   log_start_unix: number | null;
   log_duration_days: number | null;
+  // The discovery parameters the backend actually used (defaults filled in)
+  discovery_params?: DiscoveryParams;
+};
+
+// Parameters of the model discovery (DiscoveryParameters in totem_lib).
+export type DiscoveryParams = {
+  calendar_min_slot_support: number;
+  calendar_min_resource_events: number;
+  calendar_min_resource_weeks: number;
+  calendar_min_span_share: number;
+  calendar_smoothing_hours: number;
+  calendar_cluster_threshold: number;
+  constraint_support_threshold: number;
+  constraint_min_variant_executions: number;
+  constraint_min_variant_frequency: number;
+  constraint_min_pair_executions: number;
+  constraint_fallback_min_pair_executions: number;
+  allocation_busy_quantile: number;
+  allocation_min_absolute_support: number;
+  allocation_min_relative_support: number;
+  state_suffix_length: number;
+  state_group_cap: number;
+  state_min_support: number;
+};
+
+// Cost of violating one constraint of each type, in violation budget units.
+export type ViolationCostWeights = {
+  same_resource: number;
+  subset: number;
+  superset: number;
+  disjoint: number;
+};
+
+export type PlayoutParams = {
+  resource_constraint_violation_degree: number;
+  constraint_lookback_length: number | null;
+  violation_cost_weights: ViolationCostWeights;
+};
+
+export type SimulationParameterDefaults = {
+  discovery: DiscoveryParams;
+  playout: PlayoutParams;
 };
 
 export type SimulationDetailsRequest = {
@@ -226,9 +273,7 @@ export type SimulationDetailsRequest = {
   object_types: string[];
   activities: string[];
   resource_types?: string[];
-  support_threshold?: number;
-  min_variant_frequency?: number;
-  min_variant_executions?: number;
+  discovery_params?: DiscoveryParams;
   mode?: SimulationMode;
   // Client-generated id under which the backend publishes step progress
   progress_id?: string;
@@ -244,6 +289,16 @@ export type SimulationProgress = {
 export async function fetchProcessAreas(fileId: number): Promise<ProcessAreasResponse> {
   try {
     const { data } = await axios.get(`${BASE_URL}/simulation/process-areas/?file_id=${fileId}`);
+    return data;
+  } catch (e) {
+    throw toError(e, "HTTP error");
+  }
+}
+
+// Default values of the discovery and play-out parameters (kept in totem_lib).
+export async function fetchSimulationParameterDefaults(): Promise<SimulationParameterDefaults> {
+  try {
+    const { data } = await axios.get(`${BASE_URL}/simulation/parameter-defaults/`);
     return data;
   } catch (e) {
     throw toError(e, "HTTP error");

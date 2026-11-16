@@ -695,6 +695,10 @@ def discover_shift_patterns(
     distance_threshold: float = 0.5,
     smoothing_hours: float = DEFAULT_SMOOTHING_HOURS,
     pooled_fallback: bool = True,
+    min_slot_support: int = DEFAULT_MIN_SLOT_SUPPORT,
+    min_resource_events: int = DEFAULT_MIN_RESOURCE_EVENTS,
+    min_resource_weeks: int = DEFAULT_MIN_RESOURCE_WEEKS,
+    min_span_share: float = DEFAULT_MIN_SPAN_SHARE,
 ) -> tuple[dict[str, dict[str, dict[str, list[float]]]], dict[str, list[ShiftPattern]]]:
     """Mines individual calendars and clusters them into shift patterns per type.
 
@@ -708,6 +712,10 @@ def discover_shift_patterns(
             back to a single pooled pattern, see :func:`pooled_type_calendars`.
             Such a pattern has share 1.0 and no ``member_ids``, so every instance
             of the type receives it.
+        min_slot_support, min_resource_events, min_resource_weeks,
+        min_span_share: Evidence thresholds of the individual calendars, see
+            :func:`discover_individual_calendars`. ``min_slot_support`` and
+            ``min_resource_weeks`` also apply to the pooled fallback.
 
     Returns:
         ``(individual, patterns)`` — the per-resource calendars keyed by type and
@@ -715,7 +723,15 @@ def discover_shift_patterns(
         no resource of it was reliably observed; its patterns are then the pooled
         fallback, or empty when that is disabled or the type never occurs.
     """
-    individual = discover_individual_calendars(ocel, resource_types, obj_type_map)
+    individual = discover_individual_calendars(
+        ocel,
+        resource_types,
+        obj_type_map,
+        min_slot_support=min_slot_support,
+        min_resource_events=min_resource_events,
+        min_resource_weeks=min_resource_weeks,
+        min_span_share=min_span_share,
+    )
     patterns = {
         rtype: cluster_shift_patterns(
             individual.get(rtype, {}), distance_threshold, smoothing_hours
@@ -724,7 +740,13 @@ def discover_shift_patterns(
     }
     missing = [rtype for rtype in resource_types if not patterns[rtype]]
     if pooled_fallback and missing:
-        pooled = pooled_type_calendars(ocel, missing, obj_type_map)
+        pooled = pooled_type_calendars(
+            ocel,
+            missing,
+            obj_type_map,
+            min_slot_support=min_slot_support,
+            min_resource_weeks=min_resource_weeks,
+        )
         flat_spread = {day: [0.0] * HOURS_PER_DAY for day in WEEKDAYS}
         for rtype, calendar in pooled.items():
             patterns[rtype] = [

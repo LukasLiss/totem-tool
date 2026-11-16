@@ -16,9 +16,17 @@ from totem_lib.simulation.utils.basic_simulation_statistics import (
     variant_arrival_distribution as compute_variant_arrival_distribution,
 )
 from totem_lib.simulation.utils.resource_allocation_strategy import (
+    BUSY_QUANTILE,
+    MIN_ABSOLUTE_SUPPORT,
+    MIN_RELATIVE_SUPPORT,
     calculate_resource_allocation_strategy,
 )
 from totem_lib.simulation.utils.resource_calendar import (
+    DEFAULT_MIN_RESOURCE_EVENTS,
+    DEFAULT_MIN_RESOURCE_WEEKS,
+    DEFAULT_MIN_SLOT_SUPPORT,
+    DEFAULT_MIN_SPAN_SHARE,
+    DEFAULT_SMOOTHING_HOURS,
     WEEKDAYS,
     activity_working_windows,
     assign_shift_calendars,
@@ -37,7 +45,7 @@ from totem_lib.simulation.utils.resource_cooldown import (
 from totem_lib.simulation.utils.resource_external_load import (
     discover_pa_capacity_shares,
 )
-from totem_lib.simulation.utils.state_space import StateSpaceModel
+from totem_lib.simulation.utils.state_space import StateConfig, StateSpaceModel
 from totem_lib.variants.ocvariants import find_object_variants_connected_component
 from totem_lib.variants.state_space_executions import find_object_structure_variants
 
@@ -823,6 +831,77 @@ class OCProcessAreaSimulationConfiguration:
         self.violation_cost_weights = violation_cost_weights.copy()
 
 
+class DiscoveryParameters:
+    """
+    Parameters of the simulation model discovery.
+
+    Bundles every threshold the discovery uses, so that a caller (e.g. the
+    backend) can set them in one place. The defaults are the values of the
+    individual discovery functions.
+
+    - Resource calendars: ``calendar_min_slot_support`` (weeks with demand per
+      slot), ``calendar_min_resource_events``, ``calendar_min_resource_weeks``
+      and ``calendar_min_span_share`` (when a resource counts as reliably
+      observed), ``calendar_smoothing_hours`` (kernel of the calendar distance)
+      and ``calendar_cluster_threshold`` (cut of the shift pattern clustering).
+    - Resource constraints: ``constraint_support_threshold`` (minimum support of
+      a relation), ``constraint_min_variant_executions`` and
+      ``constraint_min_variant_frequency`` (when an arrival unit gets its own
+      constraints), ``constraint_min_pair_executions`` and
+      ``constraint_fallback_min_pair_executions`` (min. executions in which an
+      activity pair is compared, per arrival unit and for the fallback).
+    - Resource allocation: ``allocation_busy_quantile`` (quantile of the cooldown
+      samples used as busy time), ``allocation_min_absolute_support`` and
+      ``allocation_min_relative_support`` (when FIFO/LIFO is chosen).
+    - State space (advanced mode only): ``state_suffix_length``,
+      ``state_group_cap`` and ``state_min_support``, see ``StateConfig``.
+    """
+
+    FIELDS = {
+        "calendar_min_slot_support": (int, DEFAULT_MIN_SLOT_SUPPORT),
+        "calendar_min_resource_events": (int, DEFAULT_MIN_RESOURCE_EVENTS),
+        "calendar_min_resource_weeks": (int, DEFAULT_MIN_RESOURCE_WEEKS),
+        "calendar_min_span_share": (float, DEFAULT_MIN_SPAN_SHARE),
+        "calendar_smoothing_hours": (float, DEFAULT_SMOOTHING_HOURS),
+        "calendar_cluster_threshold": (float, 0.5),
+        "constraint_support_threshold": (float, 0.8),
+        "constraint_min_variant_executions": (int, 5),
+        "constraint_min_variant_frequency": (float, 0.05),
+        "constraint_min_pair_executions": (int, 1),
+        "constraint_fallback_min_pair_executions": (int, 5),
+        "allocation_busy_quantile": (float, BUSY_QUANTILE),
+        "allocation_min_absolute_support": (int, MIN_ABSOLUTE_SUPPORT),
+        "allocation_min_relative_support": (float, MIN_RELATIVE_SUPPORT),
+        "state_suffix_length": (int, StateConfig().suffix_length),
+        "state_group_cap": (int, StateConfig().group_cap),
+        "state_min_support": (int, StateConfig().min_support),
+    }
+
+    def __init__(self, **kwargs):
+        unknown = set(kwargs) - set(self.FIELDS)
+        if unknown:
+            raise ValueError(f"Unknown discovery parameters: {sorted(unknown)}")
+        for name, (cast, default) in self.FIELDS.items():
+            value = kwargs.get(name)
+            setattr(self, name, default if value is None else cast(value))
+
+    @classmethod
+    def from_dict(cls, data):
+        """Builds the parameters from a (possibly partial) dict; ``None`` -> default."""
+        return cls(**(data or {}))
+
+    def to_dict(self):
+        return {name: getattr(self, name) for name in self.FIELDS}
+
+    def state_config(self):
+        """The ``StateConfig`` of the advanced playout's state space."""
+        return StateConfig(
+            suffix_length=self.state_suffix_length,
+            group_cap=self.state_group_cap,
+            min_support=self.state_min_support,
+        )
+
+
 class OCProcessAreaSimulationModel:
     """
     Represents the Object-Centric Simulation Model for a specific process area.
@@ -894,7 +973,9 @@ class OCProcessAreaSimulationModel:
         )
 
     @staticmethod
-    def discover_resource_availability(ocel, resource_types, activities):
+    def discover_resource_availability(
+        ocel, resource_types, activities, discovery_params=None
+    ):
         """Mines calendars, shift patterns and cooldowns for the resource types.
 
         Individual calendars are mined per resource object and clustered into
@@ -907,18 +988,28 @@ class OCProcessAreaSimulationModel:
             ocel: Unfiltered ObjectCentricEventLog.
             resource_types: Object types treated as resources.
             activities: Activities whose cooldowns are mined.
+            discovery_params: ``DiscoveryParameters``; ``None`` uses the defaults.
 
         Returns:
             ``(type_calendars, shift_patterns, calendars, cooldown_dist)`` where
             ``calendars`` is the flat lookup ``{resource id | type: matrix}`` used
             for discounting.
         """
+        params = discovery_params or DiscoveryParameters()
         type_calendars = {}
         shift_patterns = {}
         calendars = {}
         if resource_types:
             individual, patterns = discover_shift_patterns(
-                ocel, resource_types, ocel.obj_type_map
+                ocel,
+                resource_types,
+                ocel.obj_type_map,
+                distance_threshold=params.calendar_cluster_threshold,
+                smoothing_hours=params.calendar_smoothing_hours,
+                min_slot_support=params.calendar_min_slot_support,
+                min_resource_events=params.calendar_min_resource_events,
+                min_resource_weeks=params.calendar_min_resource_weeks,
+                min_span_share=params.calendar_min_span_share,
             )
             for rtype, pats in patterns.items():
                 shift_patterns[rtype] = [pat.to_dict() for pat in pats]
@@ -961,14 +1052,15 @@ class OCProcessAreaSimulationModel:
         )
 
     @classmethod
-    def for_simple_simulation(cls, ocel, process_area):
+    def for_simple_simulation(cls, ocel, process_area, discovery_params=None):
+        params = discovery_params or DiscoveryParameters()
 
         # Resource object types are an explicit input on the process area
         resource_types = process_area.resource_types
 
         type_calendars, shift_patterns, calendars, resource_cooldown_dist = (
             cls.discover_resource_availability(
-                ocel, resource_types, process_area.activities
+                ocel, resource_types, process_area.activities, params
             )
         )
 
@@ -991,7 +1083,14 @@ class OCProcessAreaSimulationModel:
 
         # Calculate Resource Constraints
         resource_constraints, fallback_constraints = generate_resource_constraints(
-            filtered_ocel, variants, ocel.obj_type_map, support_threshold_percentage=0.8
+            filtered_ocel,
+            variants,
+            ocel.obj_type_map,
+            support_threshold_percentage=params.constraint_support_threshold,
+            min_variant_frequency=params.constraint_min_variant_frequency,
+            min_variant_executions=params.constraint_min_variant_executions,
+            min_pair_executions=params.constraint_min_pair_executions,
+            fallback_min_pair_executions=params.constraint_fallback_min_pair_executions,
         )
 
         # Calculate Resource Allocation Strategy
@@ -1003,6 +1102,9 @@ class OCProcessAreaSimulationModel:
             variants,
             resource_constraints,
             fallback_constraints,
+            min_absolute_support=params.allocation_min_absolute_support,
+            min_relative_support=params.allocation_min_relative_support,
+            busy_quantile=params.allocation_busy_quantile,
         )
 
         # Calculate needed resources per activity.
@@ -1038,13 +1140,17 @@ class OCProcessAreaSimulationModel:
         )
 
     @classmethod
-    def for_advanced_simulation(cls, ocel, process_area, runtime_context_provider=None):
+    def for_advanced_simulation(
+        cls, ocel, process_area, runtime_context_provider=None, discovery_params=None
+    ):
+        params = discovery_params or DiscoveryParameters()
+
         # Resource object types are an explicit input on the process area
         resource_types = process_area.resource_types
 
         type_calendars, shift_patterns, calendars, resource_cooldown_dist = (
             cls.discover_resource_availability(
-                ocel, resource_types, process_area.activities
+                ocel, resource_types, process_area.activities, params
             )
         )
 
@@ -1067,7 +1173,9 @@ class OCProcessAreaSimulationModel:
         )
 
         # Generative transition model: activities + participants over a structure.
-        state_space_model = StateSpaceModel.build(filtered_ocel)
+        state_space_model = StateSpaceModel.build(
+            filtered_ocel, params.state_config()
+        )
 
         # Playout strategy
         playout_strategy = StateSpacePlayoutStrategy(
@@ -1082,7 +1190,11 @@ class OCProcessAreaSimulationModel:
             filtered_ocel,
             structure_variants,
             ocel.obj_type_map,
-            support_threshold_percentage=0.8,
+            support_threshold_percentage=params.constraint_support_threshold,
+            min_variant_frequency=params.constraint_min_variant_frequency,
+            min_variant_executions=params.constraint_min_variant_executions,
+            min_pair_executions=params.constraint_min_pair_executions,
+            fallback_min_pair_executions=params.constraint_fallback_min_pair_executions,
         )
 
         # Calculate Resource Allocation Strategy
@@ -1094,6 +1206,9 @@ class OCProcessAreaSimulationModel:
             structure_variants,
             resource_constraints,
             fallback_constraints,
+            min_absolute_support=params.allocation_min_absolute_support,
+            min_relative_support=params.allocation_min_relative_support,
+            busy_quantile=params.allocation_busy_quantile,
         )
 
         # Per-structure needed resources per activity.

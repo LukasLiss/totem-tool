@@ -27,7 +27,15 @@ from totem_lib.ocel.importer import (
 from totem_lib.oc_dotted_chart import get_oc_dotted_chart_columns, get_oc_dotted_chart_data
 from types import SimpleNamespace
 from totem_lib.ocel.exporter import build_ocel2_json
-from totem_lib.simulation.simulation import OCProcessAreaSimulationModel, OCProcessAreaSimulationConfiguration, validate_resource_pool
+from totem_lib.simulation.simulation import (
+    OCProcessAreaSimulationModel,
+    OCProcessAreaSimulationConfiguration,
+    DiscoveryParameters,
+    RESOURCE_CONSTRAINT_VIOLATION_DEGREE,
+    CONSTRAINT_LOOKBACK_LENGTH,
+    VIOLATION_COST_WEIGHTS,
+    validate_resource_pool,
+)
 from totem_lib.simulation.evaluation.runtime import Timer as EvalTimer
 from .simulation_evaluation import build_evaluation_payload, compute_graph_edit_distance
 from .simulation_cooldowns import (
@@ -2645,6 +2653,72 @@ def _parse_resource_demand(variant_demand):
     return parsed
 
 
+# Discovery parameters that older clients sent at the top level of the
+# details request, mapped to their DiscoveryParameters field.
+_LEGACY_DISCOVERY_KEYS = {
+    "support_threshold": "constraint_support_threshold",
+    "min_variant_frequency": "constraint_min_variant_frequency",
+    "min_variant_executions": "constraint_min_variant_executions",
+}
+
+
+def _parse_discovery_params(data):
+    """Read the discovery parameters of a request.
+
+    They are sent as ``discovery_params`` (a partial dict of
+    ``DiscoveryParameters`` fields); missing fields keep their defaults.
+
+    Raises:
+        ValueError: On an unknown field or a value that is not a number.
+    """
+    raw = dict(data.get("discovery_params") or {})
+    for legacy, field in _LEGACY_DISCOVERY_KEYS.items():
+        if legacy in data and field not in raw:
+            raw[field] = data.get(legacy)
+    try:
+        return DiscoveryParameters.from_dict(raw)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"Invalid discovery parameters: {e}")
+
+
+def _parse_violation_cost_weights(raw):
+    """Merge the requested violation cost weights over the defaults.
+
+    Raises:
+        ValueError: On an unknown constraint type or a negative weight.
+    """
+    weights = dict(VIOLATION_COST_WEIGHTS)
+    if not raw:
+        return weights
+    unknown = sorted(set(raw) - set(weights))
+    if unknown:
+        raise ValueError(f"Unknown constraint types in violation_cost_weights: {unknown}")
+    for ctype, value in raw.items():
+        weight = float(value)
+        if weight < 0:
+            raise ValueError(f"Violation cost weight of {ctype} must not be negative")
+        weights[ctype] = weight
+    return weights
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_simulation_parameter_defaults(request):
+    """Default values of the discovery and play-out parameters.
+
+    The frontend shows them in its parameter dialogs, so the defaults are kept in
+    the library only.
+    """
+    return Response({
+        "discovery": DiscoveryParameters().to_dict(),
+        "playout": {
+            "resource_constraint_violation_degree": RESOURCE_CONSTRAINT_VIOLATION_DEGREE,
+            "constraint_lookback_length": CONSTRAINT_LOOKBACK_LENGTH,
+            "violation_cost_weights": dict(VIOLATION_COST_WEIGHTS),
+        },
+    }, status=status.HTTP_200_OK)
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def run_simulation(request):
@@ -2659,8 +2733,14 @@ def run_simulation(request):
         "resource_pool": {"ResourceType1": 3, "ResourceType2": 5},
         "sim_duration_days": 7,
         "resource_constraint_violation_degree": 0.0,
-        "constraint_lookback_length": null
+        "constraint_lookback_length": null,
+        "violation_cost_weights": {"same_resource": 2.0, ...},
+        "discovery_params": {"constraint_support_threshold": 0.8, ...}
     }
+
+    The discovery parameters must be the ones of the details request: the model
+    is discovered again here, and everything the user did not override (e.g. the
+    shift patterns of unedited types, the state space) comes from that discovery.
     """
     file_id = request.data.get("file_id")
     object_types = request.data.get("object_types", [])
@@ -2670,6 +2750,7 @@ def run_simulation(request):
     sim_start_unix = request.data.get("sim_start_unix", None)
     violation_degree = request.data.get("resource_constraint_violation_degree", 0.0)
     lookback_length = request.data.get("constraint_lookback_length", None)
+    raw_cost_weights = request.data.get("violation_cost_weights")
     mode =request.data.get("mode", "simple")  # "simple" or "advanced"
     overrides = request.data.get("overrides")  # user edits from the details phase
     progress_id = request.data.get("progress_id")
@@ -2684,7 +2765,9 @@ def run_simulation(request):
     resource_pool = resource_pool or {}
     try:
         validate_resource_pool(resource_pool)
-    except ValueError as e:
+        discovery_params = _parse_discovery_params(request.data)
+        violation_cost_weights = _parse_violation_cost_weights(raw_cost_weights)
+    except (TypeError, ValueError) as e:
         return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
     # Verify user access
@@ -2719,17 +2802,18 @@ def run_simulation(request):
         # Build simulation model based on mode
         if mode == "advanced":
             simulation_model = OCProcessAreaSimulationModel.for_advanced_simulation(
-                ocel, process_area
+                ocel, process_area, discovery_params=discovery_params
             )
         else:
             simulation_model = OCProcessAreaSimulationModel.for_simple_simulation(
-                ocel, process_area
+                ocel, process_area, discovery_params=discovery_params
             )
 
         # Override config if provided
         simulation_model.simulation_config = OCProcessAreaSimulationConfiguration(
             resource_constraint_violation_degree=violation_degree,
             constraint_lookback_length=lookback_length,
+            violation_cost_weights=violation_cost_weights,
         )
 
         # Apply the user's details-phase edits (constraints, calendars, cooldowns,
@@ -3149,20 +3233,22 @@ def get_simulation_details(request):
         "object_types": ["Type1", "Type2"],
         "activities": ["Act1", "Act2"],
         "resource_types": ["ResourceType1", "ResourceType2"],
-        "support_threshold": 0.8,
-        "min_variant_frequency": 0.05,
-        "min_variant_executions": 5
+        "discovery_params": {"constraint_support_threshold": 0.8, ...}
     }
+
+    ``discovery_params`` is a partial dict of ``DiscoveryParameters`` fields;
+    missing fields keep their defaults.
     """
     file_id = request.data.get("file_id")
     object_types = request.data.get("object_types", [])
     activities = request.data.get("activities", [])
     resource_types = request.data.get("resource_types", [])
-    support_threshold = request.data.get("support_threshold", 0.8)
-    min_variant_frequency = request.data.get("min_variant_frequency", 0.05)
-    min_variant_executions = request.data.get("min_variant_executions", 5)
     mode = request.data.get("mode", "simple")
     progress_id = request.data.get("progress_id")
+    try:
+        discovery_params = _parse_discovery_params(request.data)
+    except ValueError as e:
+        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
     if not file_id:
         return Response({"error": "Missing file_id"}, status=status.HTTP_400_BAD_REQUEST)
@@ -3220,9 +3306,11 @@ def get_simulation_details(request):
             filtered_ocel,
             variants,
             ocel.obj_type_map,
-            support_threshold,
-            min_variant_frequency=min_variant_frequency,
-            min_variant_executions=min_variant_executions,
+            discovery_params.constraint_support_threshold,
+            min_variant_frequency=discovery_params.constraint_min_variant_frequency,
+            min_variant_executions=discovery_params.constraint_min_variant_executions,
+            min_pair_executions=discovery_params.constraint_min_pair_executions,
+            fallback_min_pair_executions=discovery_params.constraint_fallback_min_pair_executions,
         )
 
         # Serialize variants
@@ -3287,7 +3375,7 @@ def get_simulation_details(request):
         _report_progress(progress_id, _SIM_DETAILS_STEPS, 4)
         serialized_type_calendars, shift_patterns, calendars, cooldown_dist = (
             OCProcessAreaSimulationModel.discover_resource_availability(
-                ocel, resource_types, activities
+                ocel, resource_types, activities, discovery_params
             )
         )
         serialized_cooldowns = serialize_cooldowns(cooldown_dist)
@@ -3315,6 +3403,9 @@ def get_simulation_details(request):
             variants,
             per_variant_constraints,
             fallback_constraints,
+            min_absolute_support=discovery_params.allocation_min_absolute_support,
+            min_relative_support=discovery_params.allocation_min_relative_support,
+            busy_quantile=discovery_params.allocation_busy_quantile,
         )
 
         # Time window of the *filtered* log
@@ -3340,6 +3431,7 @@ def get_simulation_details(request):
             "pa_capacity_shares": pa_capacity_shares,
             "log_start_unix": filtered_start_unix,
             "log_duration_days": filtered_duration_days,
+            "discovery_params": discovery_params.to_dict(),
         }, status=status.HTTP_200_OK)
 
     except Exception as e:

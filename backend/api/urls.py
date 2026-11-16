@@ -2,7 +2,7 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from rest_framework.routers import DefaultRouter
-from .views import EventLogViewSet, greeting, variants, DashboardViewSet, delete_user_data, OCDFGViewSet, NewOCDFGViewSet, health_check, run_simulation, cancel_simulation, simulation_graph_edit_distance, simulation_save_log, simulation_download_log, get_process_areas, get_simulation_details, get_resource_calendars, get_simulation_progress
+from .views import EventLogViewSet, greeting, variants, DashboardViewSet, delete_user_data, OCDFGViewSet, NewOCDFGViewSet, health_check, run_simulation, cancel_simulation, simulation_graph_edit_distance, simulation_save_log, simulation_download_log, get_process_areas, get_simulation_details, get_resource_calendars, get_simulation_progress, get_simulation_parameter_defaults
 
 router = DefaultRouter()
 router.register(r'files', EventLogViewSet, basename="userfile")
@@ -24,5 +24,6 @@ urlpatterns = [
     path("simulation/process-areas/", get_process_areas, name="get_process_areas"),
     path("simulation/details/", get_simulation_details, name="get_simulation_details"),
     path("simulation/resource-calendars/", get_resource_calendars, name="get_resource_calendars"),
+    path("simulation/parameter-defaults/", get_simulation_parameter_defaults, name="get_simulation_parameter_defaults"),
     path("delete-data/", delete_user_data, name="delete_user_data"),
 ]

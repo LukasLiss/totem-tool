@@ -3,7 +3,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Slider } from "@/components/ui/slider";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
@@ -11,7 +10,11 @@ import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import {
   fetchProcessAreas,
   fetchSimulationDetails,
+  fetchSimulationParameterDefaults,
   fetchSimulationProgress,
+  DiscoveryParams,
+  PlayoutParams,
+  SimulationParameterDefaults,
   runSimulation,
   cancelSimulation,
   SimulationCancelledError,
@@ -53,6 +56,10 @@ import {
   ExternalLoadEditor,
   type ExternalLoadSetting,
 } from "@/components/simulation/ExternalLoadEditor";
+import {
+  DiscoveryParametersDialog,
+  PlayoutParametersDialog,
+} from "@/components/simulation/SimulationParameterDialogs";
 import {
   Collapsible,
   CollapsibleContent,
@@ -251,13 +258,24 @@ export const SimulationDashboard: React.FC = () => {
   const [resourcePool, setResourcePool] = useState<Record<string, number>>({});
   const [simDurationDays, setSimDurationDays] = useState(7);
   const [simStartUnix, setSimStartUnix] = useState<number | null>(null);
-  const [violationDegree, setViolationDegree] = useState(0.0);
-  const [lookbackLength, setLookbackLength] = useState<number | null>(null);
+  // Discovery and play-out parameters. Both start from the library defaults
+  // (fetched once); until they arrive the backend applies its own defaults.
+  const [parameterDefaults, setParameterDefaults] = useState<SimulationParameterDefaults | null>(null);
+  const [discoveryParams, setDiscoveryParams] = useState<DiscoveryParams | null>(null);
+  const [playoutParams, setPlayoutParams] = useState<PlayoutParams | null>(null);
 
-  // Constraint mining config
-  const [supportThreshold, setSupportThreshold] = useState(0.8);
-  const [minVariantFrequency, setMinVariantFrequency] = useState(0.05);
-  const [minVariantExecutions, setMinVariantExecutions] = useState(5);
+  useEffect(() => {
+    let cancelled = false;
+    fetchSimulationParameterDefaults()
+      .then((defaults) => {
+        if (cancelled) return;
+        setParameterDefaults(defaults);
+        setDiscoveryParams((prev) => prev ?? defaults.discovery);
+        setPlayoutParams((prev) => prev ?? defaults.playout);
+      })
+      .catch((err) => toast.error(`Could not load the parameter defaults: ${err.message}`));
+    return () => { cancelled = true; };
+  }, []);
 
   // Simulation details (variants, arrivals, constraints)
   const [details, setDetails] = useState<SimulationDetailsResponse | null>(null);
@@ -522,7 +540,7 @@ export const SimulationDashboard: React.FC = () => {
     if (!fileId) return;
 
     const resourceTypes = Object.keys(resourcePool).filter((k) => resourcePool[k] > 0);
-    const cacheKey = `${mode}_${fileId}_${[...selectedObjectTypes].sort().join(",")}_${[...selectedActivities].sort().join(",")}_${resourceTypes.sort().join(",")}_${supportThreshold}_${minVariantFrequency}_${minVariantExecutions}`;
+    const cacheKey = `${mode}_${fileId}_${[...selectedObjectTypes].sort().join(",")}_${[...selectedActivities].sort().join(",")}_${resourceTypes.sort().join(",")}_${JSON.stringify(discoveryParams)}`;
 
     setDetailsLoading(true);
     setDetailsError("");
@@ -540,9 +558,7 @@ export const SimulationDashboard: React.FC = () => {
             object_types: selectedObjectTypes,
             activities: selectedActivities,
             resource_types: resourceTypes.length > 0 ? resourceTypes : undefined,
-            support_threshold: supportThreshold,
-            min_variant_frequency: minVariantFrequency,
-            min_variant_executions: minVariantExecutions,
+            discovery_params: discoveryParams ?? undefined,
             mode,
             progress_id: progressId,
           });
@@ -761,8 +777,10 @@ export const SimulationDashboard: React.FC = () => {
       resource_pool: resourcePool,
       sim_duration_days: simDurationDays,
       sim_start_unix: simStartUnix,
-      resource_constraint_violation_degree: violationDegree,
-      constraint_lookback_length: lookbackLength,
+      ...(playoutParams ?? {}),
+      // The run discovers the model again; it must use the parameters the
+      // reviewed details were discovered with, not later edits in the dialog.
+      discovery_params: details?.discovery_params ?? discoveryParams ?? undefined,
       mode,
       overrides,
       progress_id: progressId,
@@ -789,6 +807,16 @@ export const SimulationDashboard: React.FC = () => {
       setCancelling(false);
     }
   };
+
+  // Button + dialog for γ, ℓ and the violation cost weights, shown next to
+  // every button that starts a run.
+  const playoutParamsButton = (
+    <PlayoutParametersDialog
+      value={playoutParams}
+      defaults={parameterDefaults?.playout ?? null}
+      onChange={setPlayoutParams}
+    />
+  );
 
   // Ask the backend to stop the in-flight run. It aborts between its steps and,
   // while simulating, on the next clock tick, so the button stays in a pending
@@ -1080,78 +1108,32 @@ export const SimulationDashboard: React.FC = () => {
               </CardContent>
             </Card>
 
-            {/* Simulation Parameters */}
-            <Card>
-              <CardHeader><CardTitle>Simulation Parameters</CardTitle></CardHeader>
-              <CardContent className="space-y-4">
-                <div>
-                  <Label>Constraint violation degree: {violationDegree.toFixed(2)}</Label>
-                  <Slider value={[violationDegree]} onValueChange={([v]) => setViolationDegree(v)}
-                    min={0} max={1} step={0.05} className="mt-2" />
-                  <p className="text-xs text-muted-foreground mt-1">0 = strict, 1 = ignore all</p>
-                </div>
-
-                <div>
-                  <Label htmlFor="lookback">Constraint lookback (empty = all events)</Label>
-                  <Input id="lookback" type="number" min={1} placeholder="All events"
-                    value={lookbackLength ?? ""}
-                    onChange={(e) => setLookbackLength(e.target.value ? parseInt(e.target.value) : null)} />
-                </div>
-
-                <Separator />
-
-                {/* Constraint Mining Configuration */}
-                <div>
-                  <Label className="text-sm font-medium">Constraint Mining</Label>
-                  <p className="text-xs text-muted-foreground mt-1 mb-3">
-                    Parameters for discovering resource constraints from the event log.
-                    Variants below either frequency threshold use the pooled fallback pool.
-                  </p>
-                  <div className="grid grid-cols-3 gap-3">
-                    <div>
-                      <Label htmlFor="support-threshold" className="text-xs">Support threshold</Label>
-                      <Input id="support-threshold" type="number" min={0} max={1} step={0.05}
-                        value={supportThreshold}
-                        onChange={(e) => setSupportThreshold(parseFloat(e.target.value) || 0.8)}
-                        className="mt-1" />
-                      <p className="text-[10px] text-muted-foreground mt-0.5">Min relation consistency</p>
-                    </div>
-                    <div>
-                      <Label className="text-xs">Variant frequency: {(minVariantFrequency * 100).toFixed(0)}%</Label>
-                      <Slider value={[minVariantFrequency]} onValueChange={([v]) => setMinVariantFrequency(v)}
-                        min={0} max={1} step={0.01} className="mt-3" />
-                      <p className="text-[10px] text-muted-foreground mt-0.5">Min share of all cases</p>
-                    </div>
-                    <div>
-                      <Label htmlFor="min-variant-exec" className="text-xs">Min executions</Label>
-                      <Input id="min-variant-exec" type="number" min={1} step={1}
-                        value={minVariantExecutions}
-                        onChange={(e) => setMinVariantExecutions(parseInt(e.target.value) || 1)}
-                        className="mt-1" />
-                      <p className="text-[10px] text-muted-foreground mt-0.5">Min cases per variant</p>
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
             {/* Action Buttons */}
             {detailsLoading && (
               <StepProgress steps={detailsProgress.steps} active={detailsProgress.current} />
             )}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                {/* Wrapper span keeps the tooltip firing even when the button is
-                    disabled (a disabled button emits no pointer events). */}
-                <span className="block w-full">
-                  <Button className="w-full" size="lg" disabled={!canLoadDetails || detailsLoading}
-                    onClick={handleLoadDetails}>
-                    {detailsLoading ? "Discovering model..." : "Discover Model"}
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              {loadDetailsHint && <TooltipContent>{loadDetailsHint}</TooltipContent>}
-            </Tooltip>
+            <div className="flex gap-2">
+              <DiscoveryParametersDialog
+                value={discoveryParams}
+                defaults={parameterDefaults?.discovery ?? null}
+                mode={mode}
+                disabled={detailsLoading}
+                onChange={setDiscoveryParams}
+              />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  {/* Wrapper span keeps the tooltip firing even when the button is
+                      disabled (a disabled button emits no pointer events). */}
+                  <span className="block flex-1">
+                    <Button className="w-full" size="lg" disabled={!canLoadDetails || detailsLoading}
+                      onClick={handleLoadDetails}>
+                      {detailsLoading ? "Discovering model..." : "Discover Model"}
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                {loadDetailsHint && <TooltipContent>{loadDetailsHint}</TooltipContent>}
+              </Tooltip>
+            </div>
             {detailsError && <p className="text-destructive text-sm">{detailsError}</p>}
             {simError && <p className="text-destructive text-sm">{simError}</p>}
           </div>
@@ -1165,9 +1147,12 @@ export const SimulationDashboard: React.FC = () => {
             <p className="text-muted-foreground">
               {details.num_variants} variant(s) discovered. Review and adjust parameters below.
             </p>
-            <Button size="lg" disabled={!canRun} onClick={handleRunSimulation}>
-              Run Simulation
-            </Button>
+            <div className="flex gap-2">
+              {playoutParamsButton}
+              <Button size="lg" disabled={!canRun} onClick={handleRunSimulation}>
+                Run Simulation
+              </Button>
+            </div>
           </div>
 
           {/* Configuration Summary */}
@@ -1185,7 +1170,9 @@ export const SimulationDashboard: React.FC = () => {
                   </div>
                   <div>
                     <span className="text-muted-foreground">Violation degree:</span>{" "}
-                    <span className="font-medium">{violationDegree.toFixed(2)}</span>
+                    <span className="font-medium">
+                      {playoutParams ? playoutParams.resource_constraint_violation_degree.toFixed(2) : "default"}
+                    </span>
                   </div>
                   <div className="col-span-2">
                     <span className="text-muted-foreground">Object Types:</span>{" "}
@@ -1407,9 +1394,12 @@ export const SimulationDashboard: React.FC = () => {
           </CollapsibleSection>
 
           {/* Run button at bottom */}
-          <Button className="w-full" size="lg" disabled={!canRun} onClick={handleRunSimulation}>
-            Run Simulation
-          </Button>
+          <div className="flex gap-2">
+            {playoutParamsButton}
+            <Button className="flex-1" size="lg" disabled={!canRun} onClick={handleRunSimulation}>
+              Run Simulation
+            </Button>
+          </div>
           {simError && <p className="text-destructive text-sm">{simError}</p>}
         </div>
       )}
@@ -1454,6 +1444,12 @@ export const SimulationDashboard: React.FC = () => {
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold">Simulation Results</h2>
             <div className="flex gap-2">
+              <PlayoutParametersDialog
+                value={playoutParams}
+                defaults={parameterDefaults?.playout ?? null}
+                size="default"
+                onChange={setPlayoutParams}
+              />
               <Button onClick={handleRunSimulation}>
                 Re-run Simulation
               </Button>
