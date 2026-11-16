@@ -2051,7 +2051,8 @@ class StateSpacePlayoutStrategy:
                         "pending": None,
                         "pending_needed": None,
                         "event_index": 0,
-                        "last_finish": now,
+                        "arrival": now,
+                        "object_last_finish": {},
                         "ready_at": now,
                         "simulated_events": [],
                         "resources_by_activity": {},
@@ -2089,19 +2090,27 @@ class StateSpacePlayoutStrategy:
                         finished_count += 1
                         continue  # instance complete; drop it
                     inst["pending"] = event
-                    # The first event of a case has no predecessor, so it fires at
-                    # the arrival time with no inter-activity delay — mirrors the
-                    # variant playout, where execution-start nodes (no predecessors)
-                    # fire immediately and only successor nodes carry a sampled delay.
+                    # The delay starts at the latest previous event of the event's
+                    # own objects (its EOG predecessors), not at the previous event
+                    # of the instance, which may belong to a concurrent branch. An
+                    # event whose objects have no previous event has no predecessor
+                    # and is ready at the arrival time without a delay, like the
+                    # execution-start nodes of the variant playout.
+                    object_last_finish = inst["object_last_finish"]
+                    pred_times = [
+                        object_last_finish[oid]
+                        for oid in event[1]
+                        if oid in object_last_finish
+                    ]
                     inst["ready_at"] = (
                         _sample_ready_time(
-                            inst["last_finish"],
+                            max(pred_times),
                             event[0],
                             activity_delays,
                             delay_clock,
                         )
-                        if inst["event_index"] > 0
-                        else inst["last_finish"]
+                        if pred_times
+                        else inst["arrival"]
                     )
 
                 activity, participants = inst["pending"]
@@ -2203,7 +2212,8 @@ class StateSpacePlayoutStrategy:
                     }
                 )
                 inst["event_index"] += 1
-                inst["last_finish"] = now
+                for oid in participants:
+                    inst["object_last_finish"][oid] = now
                 inst["pending"] = None
                 inst["pending_needed"] = None
                 inst["next_wake"] = now + MIN_EVENT_SPACING_S
