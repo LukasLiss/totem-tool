@@ -263,7 +263,7 @@ export function AnalysisView() {
   };
 
   return (
-    <div className="flex flex-col md:min-h-screen">
+    <div className="flex flex-col md:min-h-full">
       {/* Keyed by component: the cases share a tree shape, so without this
           React reuses the ReactFlowProvider across a switch and the incoming
           view briefly renders the outgoing view's nodes — which is where the

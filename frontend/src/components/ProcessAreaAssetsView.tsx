@@ -78,7 +78,7 @@ export function ProcessAreaAssetsView() {
   };
 
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className="flex min-h-full flex-col">
       <SidebarTrigger className="m-2" />
       <main className="flex-1 p-4 pt-0">
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
