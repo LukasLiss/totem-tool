@@ -14,8 +14,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFilterVersion } from "@/store/filterStore";
-import { GlobalFilterToggle } from "@/components/ui/GlobalFilterToggle";
-import { LocalFilterDropdown } from "@/components/ui/LocalFilterDropdown";
+import { WidgetHeader } from "@/components/ui/WidgetTitle";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -108,6 +107,8 @@ export interface SqlQueryEditorProps {
   onLinkChange?: (link: LinkedQuery | null) => void;
   /** hide the query-name input (e.g. when a dialog already names the query) */
   hideName?: boolean;
+  /** called after each successful test run with the query text and its first page */
+  onResult?: (result: { query: string; columns: string[]; rows: Record<string, unknown>[] }) => void;
   className?: string;
   /** when false, queries run without the global filter (shows the unfiltered log) */
   filterEnabled?: boolean;
@@ -161,6 +162,7 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
   linkedQuery = null,
   onLinkChange,
   hideName = false,
+  onResult,
   className,
   filterEnabled = true,
   onToggleFilter,
@@ -168,6 +170,11 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
   onLocalFilterChange,
 }) => {
   const rowLimit = value.rowLimit ?? 25;
+  // Kept in a ref so a new callback each render doesn't change the run function.
+  const onResultRef = useRef(onResult);
+  useEffect(() => {
+    onResultRef.current = onResult;
+  }, [onResult]);
   const filterVersion = useFilterVersion();
   const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
 
@@ -304,6 +311,7 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
           hasMore: page.hasMore,
           ms: Math.round(performance.now() - t0),
         });
+        onResultRef.current?.({ query: q, columns: page.columns, rows: page.data });
         setError(null);
         scrollRef.current?.scrollTo({ top: 0 });
       } catch (e) {
@@ -602,17 +610,15 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
 
   if (!isEditMode) {
     return (
-      <Card className={cn("flex h-full w-full flex-col overflow-hidden text-left", className)}>
-        <CardHeader className="flex flex-row items-center gap-2 space-y-0 border-b px-4 py-2 text-left">
-          <CardTitle className="shrink min-w-0 truncate text-sm">
-            {name || linkedQuery?.name || "SQL query"}
-          </CardTitle>
-          {onToggleFilter && (
-            <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggleFilter} stopPropagation />
-          )}
-          {onLocalFilterChange && (
-            <LocalFilterDropdown fileId={fileId} onFilterChange={onLocalFilterChange} value={localFilterParams} />
-          )}
+      <Card className={cn("flex h-full w-full flex-col gap-0 overflow-hidden pt-0 text-left", className)}>
+        <WidgetHeader
+          label={name || linkedQuery?.name || "SQL query"}
+          fileId={fileId}
+          filterEnabled={filterEnabled}
+          onToggleFilter={onToggleFilter}
+          localFilterParams={localFilterParams}
+          onLocalFilterChange={onLocalFilterChange}
+        >
           {linked && (
             <Badge variant="secondary" className="shrink-0 gap-1 text-[10px]" title={`linked to stored query "${linkedQuery?.name}"`}>
               <Link2 className="size-3" /> linked
@@ -624,7 +630,7 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
           >
             {statusCaption}
           </Badge>
-        </CardHeader>
+        </WidgetHeader>
         <CardContent
           ref={scrollRef}
           className="flex-1 overflow-auto p-0 pr-3 pl-3"

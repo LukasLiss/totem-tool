@@ -125,6 +125,34 @@ export const GridProvider: React.FC<GridProviderProps> = ({
     };
   }, []); // Empty dependency: run once on mount
 
+  // Widgets dragged in from the side panel don't go through addWidget with a
+  // minimum size (that only happens on load and when switching edit mode), so
+  // they could be resized below it until edit mode ended and then jumped up
+  // to it. Give a dropped widget its minimum right away.
+  useEffect(() => {
+    if (!grid) return;
+    const onDropped = (_event: Event, _previous: GridStackNode, node: GridStackNode) => {
+      if (!node?.el) return;
+      const min = getMinSize(node.component_name);
+      const minW = Math.min(min.minW, grid.getColumn());
+      const minH = min.minH;
+      try {
+        grid.update(node.el, {
+          minW,
+          minH,
+          w: Math.max(node.w ?? 1, minW),
+          h: Math.max(node.h ?? 1, minH),
+        });
+      } catch (err) {
+        console.warn(`Could not apply min size to ${node.component_name}`, err);
+      }
+    };
+    grid.on("dropped", onDropped);
+    return () => {
+      grid.off("dropped");
+    };
+  }, [grid]);
+
   // Separate effect for setting renderCB and updating grid static state when edit mode changes
   useEffect(() => {
     // Update renderCB with current isEditMode
@@ -419,6 +447,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           value_column: node.value_column ?? "",
           horizontal: node.horizontal ?? false,
           show_values: node.show_values ?? false,
+          chart_style: node.chart_style ?? {},
         };
       } else if (component_name === "ScatterPlotComponent") {
         props = {
@@ -430,6 +459,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           series_column: node.series_column ?? "",
           x_label: node.x_label ?? "",
           y_label: node.y_label ?? "",
+          chart_style: node.chart_style ?? {},
         };
       } else if (component_name === "PieChartComponent") {
         props = {
@@ -442,6 +472,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           value_column: node.value_column ?? '',
           show_legend: node.show_legend ?? true,
           show_tooltip: node.show_tooltip ?? true,
+          chart_style: node.chart_style ?? {},
         };
       } else if (component_name === "OCHandoverComponent") {
         props = {
@@ -472,6 +503,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           min_cluster_size: node.min_cluster_size ?? 2,
           distance_metric: node.distance_metric ?? 'euclidean',
           view_mode: node.view_mode ?? 'graph',
+          point_size: node.point_size ?? 'medium',
+          transparent_points: node.transparent_points ?? false,
         };
       } else if (component_name === "OCAlignmentComponent") {
         props = {
@@ -661,6 +694,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             value_column: item.value_column,
             show_legend: item.show_legend,
             show_tooltip: item.show_tooltip,
+            chart_style: item.chart_style,
             // OCPNFlattenedReplayComponent properties
             ocpn_asset_id: item.ocpn_asset_id,
             // OCCNComponent properties
@@ -707,6 +741,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             n_clusters: item.n_clusters,
             min_cluster_size: item.min_cluster_size,
             distance_metric: item.distance_metric,
+            point_size: item.point_size,
+            transparent_points: item.transparent_points,
             local_filter_params: item.local_filter_params ?? null,
             // OCAlignmentComponent
             model_asset: item.model_asset,
@@ -770,6 +806,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node.value_column = item.value_column;
               node.show_legend = item.show_legend;
               node.show_tooltip = item.show_tooltip;
+              node.chart_style = item.chart_style;
               // NewOCDFGComponent properties
               node.show_controls = item.show_controls;
               node.initial_interaction_locked = item.initial_interaction_locked;
@@ -829,6 +866,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node.n_clusters = item.n_clusters;
               node.min_cluster_size = item.min_cluster_size;
               node.distance_metric = item.distance_metric;
+              node.point_size = item.point_size;
+              node.transparent_points = item.transparent_points;
               node.local_filter_params = item.local_filter_params ?? null;
               // OCAlignmentComponent
               node.model_asset = item.model_asset;

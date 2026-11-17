@@ -24,32 +24,39 @@ import VariantsExplorer from '@/react_component/VariantsExplorer';
 import {
   DEFAULT_PROCESS_AREA_COLUMNS,
   DEFAULT_VARIANTS_MODE,
-  EXTRACTION_OPTIONS,
-  ISO_OPTIONS,
   type Extraction,
   type IsoStrategy,
   type VariantsMode,
 } from '@/react_component/variants/types';
-import { MultiSelectPopover } from '@/react_component/variants/MultiSelectPopover';
 import { fetchActivities, fetchObjectTypes } from '@/react_component/variants/variantsApi';
-import { ProcessAreaSourceSelect } from '@/react_component/variants/ProcessAreaSettingsPanel';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useProcessAreaAssets } from '@/store/processAreaAssetsStore';
 import ProcessArea from '@/react_component/ProcessArea';
 import {
   clampProcessAreaParams,
   DEFAULT_PROCESS_AREA_ALGORITHM,
-  PROCESS_AREA_ALGORITHM_LABELS,
-  PROCESS_AREA_PARAM_RANGES,
   type ProcessAreaAlgorithm,
   type ProcessAreaParams,
 } from '@/react_component/processAreaParams';
 import { ReactFlowProvider } from "@xyflow/react";
 import DottedChart from '@/react_component/DottedChart';
-import {
-  DottedChartControls,
-  type DottedChartConfig,
-} from '@/react_component/dottedChart/DottedChartControls';
+import type { DottedChartConfig } from '@/react_component/dottedChart/DottedChartControls';
+import { axisOptionLabel } from '@/react_component/dottedChart/dottedChartAxisOptions';
+import { useDottedChartOptions } from '@/react_component/dottedChart/useDottedChartOptions';
+import DottedChartSketch from './DottedChartSketch';
+import DottedChartSettingsBody from './DottedChartSettingsDialog';
+import ProcessAreaSketch from './ProcessAreaSketch';
+import TotemModelSketch from './TotemModelSketch';
+import { GRAPH_SKETCH_MAX_WIDTH } from './sketchScale';
+import OcdfgSketch from './OcdfgSketch';
+import OcdfgSettingsBody from './OcdfgSettingsDialog';
+import OcpnSketch from './OcpnSketch';
+import OcpnSettingsBody from './OcpnSettingsDialog';
+import OccnSketch from './OccnSketch';
+import OccnSettingsBody from './OccnSettingsDialog';
+import VariantsSketch from './VariantsSketch';
+import VariantsSettingsBody from './VariantsSettingsDialog';
+import ProcessAreaSettingsBody from './ProcessAreaSettingsDialog';
+import { ChartSettingsDialog } from './sql-widgets/chartSettings';
 import {
   axisOptionToParam,
   type AxisOption,
@@ -65,11 +72,18 @@ import { listAssets, type ProjectAsset } from '@/api/assetsApi';
 import { toast } from "sonner";
 import { saveOcdfgWidgetLayout } from "@/api/dashboardApi";
 import type { SaveLayout } from "@/react_component/ocdfg-layout/useLayoutOptions";
+import type { StoredLayout } from "@/react_component/ocdfg-layout/preferences";
 import OCCNVisualizer from '@/react_component/OCCNVisualizer';
-import { Switch } from '@/components/ui/switch';
-import { Slider } from '@/components/ui/slider';
 import LogStatistics from './LogStatistics';
+import LogStatisticsSketch from './LogStatisticsSketch';
+import LogStatisticsSettingsDialog from './LogStatisticsSettingsDialog';
+import { selectionFromNode, type LogStatisticsSelection } from './logStatisticsUtils';
+import WidgetDraftTile from './WidgetDraftTile';
+import SqlTableSketch from './SqlTableSketch';
+import { discoveryKey, useColumnDiscovery } from './sql-widgets/sqlWidgetUtils';
+import SqlTableSettingsDialog, { type SqlTableSettings } from './SqlTableSettingsDialog';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -86,8 +100,7 @@ import SqlQueryEditor, {
   type SqlQueryConfig,
 } from '@/react_component/SqlQueryEditor';
 import { useFilterVersion } from '@/store/filterStore';
-import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
-import { LocalFilterDropdown } from '@/components/ui/LocalFilterDropdown';
+import { WidgetHeader } from '@/components/ui/WidgetTitle';
 import { useDashboardLocalFilter } from '@/hooks/useDashboardLocalFilter';
 import TextBoxEditor from '@/components/text-box/TextBoxEditor';
 import RichTextRenderer from '@/components/text-box/RichTextRenderer';
@@ -118,25 +131,6 @@ import {
   type TextFontWeight,
   type TextVerticalAlign,
 } from '@/components/text-box/textBoxFormat';
-
-function WidgetFilterHeader({ title, filterEnabled, onToggle, fileId, onLocalFilterChange, localFilterParams }: {
-  title: string;
-  filterEnabled: boolean;
-  onToggle: () => void;
-  fileId?: number | null;
-  onLocalFilterChange?: (params: Record<string, string>) => void;
-  localFilterParams?: Record<string, string>;
-}) {
-  return (
-    <div className="flex items-center gap-2 px-4 py-2 border-b bg-card flex-shrink-0 text-left">
-      <span className="text-sm font-semibold text-card-foreground shrink min-w-0 truncate">{title}</span>
-      <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggle} />
-      {onLocalFilterChange && (
-        <LocalFilterDropdown fileId={fileId} onFilterChange={onLocalFilterChange} value={localFilterParams} />
-      )}
-    </div>
-  );
-}
 
 
 // Define props interface for components (extend as needed)
@@ -480,8 +474,8 @@ export const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile
 
   return (
     <div style={{width: '100%', height: '100%', color: node.color, textAlign: 'center' }}>
-      <Card className="w-full h-full rounded-none flex flex-col">
-        <WidgetFilterHeader title="Number of Events" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
+      <Card className="w-full h-full rounded-none flex flex-col gap-0 pt-0">
+        <WidgetHeader label="Number of Events" filterEnabled={filterEnabled} onToggleFilter={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
         <CardContent className="flex-1 flex items-center justify-center">
           <p className="text-2xl font-bold">{processedResult || 'Loading...'}</p>
         </CardContent>
@@ -788,6 +782,9 @@ export const ImageComponent: React.FC<ComponentProps> = ({
 };
 
 
+const VARIANTS_SKETCH_HINT =
+  "Layout preview: the explorer's toolbar and its variants with their support, the first one expanded into one lane per object with its events in the object type colors. The variants themselves are computed from the log; labels are placeholders.";
+
 // VariantsComponent: Wrapper for VariantsExplorer with configurable settings
 export const VariantsComponent: React.FC<ComponentProps> = ({
   node,
@@ -815,7 +812,6 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
   );
   const [areaAssetId, setAreaAssetId] = useState<number | null>(node.process_area_asset ?? null);
   const storedCompositions = useProcessAreaAssets(selectedFile?.project ?? null);
-  const [showAdvanced, setShowAdvanced] = useState(false);
   const [extraction, setExtraction] = useState<Extraction>(
     (node.extraction as Extraction) ?? 'leading_1hop'
   );
@@ -832,6 +828,7 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
   const [availableTypes, setAvailableTypes] = useState<string[]>([]);
   const [availableActivities, setAvailableActivities] = useState<string[]>([]);
   const [loadingTypes, setLoadingTypes] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Sync with node when it changes (e.g. dashboard reloads with persisted values).
   const nodeBusinessObjectTypes = JSON.stringify(node.business_object_types ?? []);
@@ -931,281 +928,59 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
   };
 
   if (isEditMode) {
-    // EDIT MODE: Configuration form
-    const extractionOpt = EXTRACTION_OPTIONS.find((o) => o.value === extraction);
-    const isoOpt = ISO_OPTIONS.find((o) => o.value === iso);
-    const leadingTypeIgnored = extraction === 'connected' || extraction === 'resource_aware';
-    const resourceAware = extraction === 'resource_aware';
-
+    // EDIT MODE: the tile shows a draft of the explorer; the settings open in a popup.
     return (
-      <Card className="w-full h-full rounded-none">
-        <CardHeader>
-          <CardTitle>Variants Explorer Settings</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4 overflow-auto">
-          {/* Automatic Loading Toggle */}
-          <div className="flex items-center justify-between">
-            <Label htmlFor="auto-loading">Automatic variant computation</Label>
-            <Switch
-              id="auto-loading"
-              checked={automaticLoading}
-              onCheckedChange={handleAutomaticLoadingChange}
-            />
-          </div>
-
-          {variantsMode === 'process_areas' && (
-            <div className="space-y-2">
-              <Label htmlFor="variants-dashboard-area-source">Process areas</Label>
-              <ProcessAreaSourceSelect
-                id="variants-dashboard-area-source"
-                value={areaAssetId}
-                onChange={(id) => {
-                  setAreaAssetId(id);
-                  onUpdate?.({ process_area_asset: id });
-                }}
-                storedCompositions={storedCompositions.assets}
-              />
-              <p className="text-xs text-muted-foreground">
-                Pick a composition stored in the project assets to always use its named areas.
-              </p>
-            </div>
-          )}
-
-          {variantsMode === 'process_areas' && (
-            <p className="text-sm text-muted-foreground">
-              Computes the connected components of every process area and shows one
-              variant list per area. Results are stored in the event log columns
-              "{areaExecutionColumn}" and "{areaVariantColumn}".
-            </p>
-          )}
-
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => setShowAdvanced((open) => !open)}
-            aria-expanded={showAdvanced}
-          >
-            {showAdvanced ? 'Hide advanced options' : 'Advanced options'}
-          </Button>
-
-          {showAdvanced && (
-          <>
-          <div className="space-y-2">
-            <Label>Method</Label>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="w-full justify-between font-normal">
-                  <span className="truncate">
-                    {variantsMode === 'process_areas'
-                      ? 'Connected components per process area'
-                      : 'Custom extraction'}
-                  </span>
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-[320px]">
-                <DropdownMenuRadioGroup value={variantsMode} onValueChange={handleVariantsModeChange}>
-                  <DropdownMenuRadioItem value="process_areas">
-                    Connected components per process area
-                  </DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="custom">Custom extraction</DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-
-          {variantsMode === 'process_areas' && (
-            <>
-              <div className="space-y-2">
-                <Label htmlFor="variants-area-execution-column">Execution column</Label>
-                <Input
-                  id="variants-area-execution-column"
-                  value={areaExecutionColumn}
-                  onChange={(e) => {
-                    setAreaExecutionColumn(e.target.value);
-                    onUpdate?.({ area_execution_column: e.target.value });
-                  }}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="variants-area-variant-column">Variant column</Label>
-                <Input
-                  id="variants-area-variant-column"
-                  value={areaVariantColumn}
-                  onChange={(e) => {
-                    setAreaVariantColumn(e.target.value);
-                    onUpdate?.({ area_variant_column: e.target.value });
-                  }}
-                />
-              </div>
-            </>
-          )}
-
-          {variantsMode === 'custom' && (
-          <>
-          {/* Leading Object Type Dropdown */}
-          <div className="space-y-2">
-            <Label>Leading object type</Label>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="outline"
-                  className="w-full justify-between"
-                  disabled={leadingTypeIgnored}
-                  title={
-                    leadingTypeIgnored
-                      ? 'Ignored when extraction is "Connected components"'
-                      : undefined
-                  }
-                >
-                  {leadingTypeIgnored
-                    ? `— (ignored for ${extractionOpt?.label ?? extraction})`
-                    : (leadingType || 'Select object type (optional)')}
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-56">
-                <DropdownMenuRadioGroup value={leadingType} onValueChange={handleLeadingTypeChange}>
-                  <DropdownMenuRadioItem value="">None (use default)</DropdownMenuRadioItem>
-                  {availableTypes.map((type) => (
-                    <DropdownMenuRadioItem key={type} value={type}>{type}</DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            {loadingTypes && <p className="text-sm text-muted-foreground">Loading types...</p>}
-            {!selectedFile?.id && <p className="text-sm text-muted-foreground">Select a file to see available types</p>}
-          </div>
-
-          {/* Extraction strategy */}
-          <div className="space-y-2">
-            <Label>Extraction strategy</Label>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="w-full justify-between font-normal">
-                  <span className="truncate">
-                    {extractionOpt?.label ?? extraction}
-                  </span>
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-[320px]">
-                <DropdownMenuLabel>Extraction</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuRadioGroup value={extraction} onValueChange={handleExtractionChange}>
-                  {EXTRACTION_OPTIONS.map((opt) => (
-                    <DropdownMenuRadioItem
-                      key={opt.value}
-                      value={opt.value}
-                      className="items-start py-2"
-                    >
-                      <div className="flex flex-col">
-                        <span className="text-sm">{opt.label}</span>
-                        <span className="text-xs text-muted-foreground">{opt.hint}</span>
-                      </div>
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            {extractionOpt && (
-              <p className="text-xs text-muted-foreground">{extractionOpt.hint}</p>
-            )}
-          </div>
-
-          {resourceAware && (
-            <>
-              <div className="space-y-2">
-                <Label>Business object types</Label>
-                <MultiSelectPopover
-                  label="Business object types"
-                  options={availableTypes}
-                  selected={businessObjectTypes}
-                  onChange={handleBusinessObjectTypesChange}
-                  placeholder="Select object types"
-                  allLabel="All object types"
-                  loading={loadingTypes}
-                  disabled={!selectedFile?.id}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Object types left out are treated as resources.
-                </p>
-              </div>
-              <div className="space-y-2">
-                <Label>Business activities</Label>
-                <MultiSelectPopover
-                  label="Business activities"
-                  options={availableActivities}
-                  selected={businessActivities}
-                  onChange={handleBusinessActivitiesChange}
-                  placeholder="All activities"
-                  allLabel="All activities"
-                  loading={loadingTypes}
-                  disabled={!selectedFile?.id}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Leave empty to connect business objects through every activity.
-                </p>
-              </div>
-            </>
-          )}
-
-          </>
-          )}
-
-          {/* Isomorphism strategy */}
-          <div className="space-y-2">
-            <Label>Isomorphism strategy</Label>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="w-full justify-between font-normal">
-                  <span className="truncate">{isoOpt?.label ?? iso}</span>
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-[300px]">
-                <DropdownMenuLabel>Isomorphism</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuRadioGroup value={iso} onValueChange={handleIsoChange}>
-                  {ISO_OPTIONS.map((opt) => (
-                    <DropdownMenuRadioItem
-                      key={opt.value}
-                      value={opt.value}
-                      className="items-start py-2"
-                    >
-                      <div className="flex flex-col">
-                        <span className="text-sm">{opt.label}</span>
-                        <span className="text-xs text-muted-foreground">{opt.hint}</span>
-                      </div>
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            {isoOpt && (
-              <p className="text-xs text-muted-foreground">{isoOpt.hint}</p>
-            )}
-          </div>
-
-          {/* Timeout (seconds) */}
-          <div className="space-y-2">
-            <Label htmlFor="variants-timeout">Timeout (seconds)</Label>
-            <Input
-              id="variants-timeout"
-              type="number"
-              min={1}
-              max={120}
-              step={1}
-              value={timeoutS}
-              onChange={(e) => handleTimeoutChange(e.target.value)}
-              className="w-[120px]"
-            />
-            <p className="text-xs text-muted-foreground">
-              Wall-clock budget per computation. The default of 10 s protects
-              against runaway runs on hard combinations.
-            </p>
-          </div>
-          </>
-          )}
-        </CardContent>
-      </Card>
+      <WidgetDraftTile
+        typeLabel="Variants Explorer"
+        hint={VARIANTS_SKETCH_HINT}
+        onConfigure={() => setSettingsOpen(true)}
+        sketch={<VariantsSketch className="h-full w-full" />}
+      >
+        <ChartSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+          <VariantsSettingsBody
+            id={`variants-${node.component_id}`}
+            initial={{
+              automaticLoading,
+              variantsMode,
+              areaAssetId,
+              areaExecutionColumn,
+              areaVariantColumn,
+              leadingType,
+              extraction,
+              iso,
+              timeoutS,
+              businessObjectTypes,
+              businessActivities,
+            }}
+            availableTypes={availableTypes}
+            availableActivities={availableActivities}
+            loadingTypes={loadingTypes}
+            fileId={selectedFile?.id}
+            storedCompositions={storedCompositions.assets}
+            sketchHint={VARIANTS_SKETCH_HINT}
+            onApply={(next) => {
+              handleAutomaticLoadingChange(next.automaticLoading);
+              handleVariantsModeChange(next.variantsMode);
+              setAreaAssetId(next.areaAssetId);
+              setAreaExecutionColumn(next.areaExecutionColumn);
+              setAreaVariantColumn(next.areaVariantColumn);
+              onUpdate?.({
+                process_area_asset: next.areaAssetId,
+                area_execution_column: next.areaExecutionColumn,
+                area_variant_column: next.areaVariantColumn,
+              });
+              handleLeadingTypeChange(next.leadingType);
+              handleExtractionChange(next.extraction);
+              handleIsoChange(next.iso);
+              handleTimeoutChange(String(next.timeoutS));
+              handleBusinessObjectTypesChange(next.businessObjectTypes);
+              handleBusinessActivitiesChange(next.businessActivities);
+              setSettingsOpen(false);
+            }}
+            onCancel={() => setSettingsOpen(false)}
+          />
+        </ChartSettingsDialog>
+      </WidgetDraftTile>
     );
   }
 
@@ -1213,7 +988,7 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
   const areaColumns = { executionColumn: areaExecutionColumn, variantColumn: areaVariantColumn };
   return (
     <div className="w-full h-full flex flex-col">
-      <WidgetFilterHeader title="Variants Explorer" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
+      <WidgetHeader label="Variants Explorer" filterEnabled={filterEnabled} onToggleFilter={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
       <Card className="w-full flex-1 rounded-none overflow-auto">
         <CardContent className="p-0 h-full">
           <VariantsExplorer
@@ -1271,17 +1046,8 @@ export const VariantsComponent: React.FC<ComponentProps> = ({
 // view mode through the visualizer's own panel, so `onUpdate` is called from
 // there too — otherwise the main interaction this component offers would be
 // lost on every reload.
-const PROCESS_AREA_PARAM_FIELDS: Array<{
-  nodeKey: 'w_temporal' | 'w_cardinality' | 'w_divergence' | 'alpha' | 'beta';
-  paramKey: keyof ProcessAreaParams;
-  label: string;
-}> = [
-  { nodeKey: 'w_temporal', paramKey: 'wTemporal', label: 'Temporal weight' },
-  { nodeKey: 'w_cardinality', paramKey: 'wCardinality', label: 'Cardinality weight' },
-  { nodeKey: 'w_divergence', paramKey: 'wDivergence', label: 'Divergence weight' },
-  { nodeKey: 'alpha', paramKey: 'alpha', label: 'Separation (α)' },
-  { nodeKey: 'beta', paramKey: 'beta', label: 'Cohesion (β)' },
-];
+const PROCESS_AREA_SKETCH_HINT =
+  "Layout preview: object types as colored boxes on their levels, grouped into process areas and linked across levels. The hierarchy itself comes from the log; names and counts are placeholders.";
 
 export const ProcessAreaComponent: React.FC<ComponentProps> = ({
   node,
@@ -1313,6 +1079,7 @@ export const ProcessAreaComponent: React.FC<ComponentProps> = ({
     });
 
   const [params, setParams] = useState<ProcessAreaParams>(paramsFromNode);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [compositionAssetId, setCompositionAssetId] = useState<number | null>(
     node.composition_asset ?? null,
   );
@@ -1359,95 +1126,31 @@ export const ProcessAreaComponent: React.FC<ComponentProps> = ({
   );
 
   if (isEditMode) {
-    // EDIT MODE: Show configuration controls
+    // EDIT MODE: the tile shows a draft of the visualizer; the settings open in a popup.
     return (
-      <Card className="w-full h-full rounded-none overflow-y-auto">
-        <CardHeader>
-          <CardTitle>Process Area Settings</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            The Process Area visualizes the object-type hierarchy of your event log.
-            Select an event log file to see the visualization.
-          </p>
-          <div className="space-y-2">
-            <Label htmlFor="process-area-composition">Shown process areas</Label>
-            <Select
-              value={compositionAssetId === null ? 'discovered' : String(compositionAssetId)}
-              onValueChange={(value) =>
-                handleCompositionAssetChange(value === 'discovered' ? null : Number(value))
-              }
-            >
-              <SelectTrigger id="process-area-composition" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="discovered">Discovered (algorithm below)</SelectItem>
-                {storedCompositions.assets.map((asset) => (
-                  <SelectItem key={asset.id} value={String(asset.id)}>
-                    {asset.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">
-              Compositions are adjusted with “Adjust” in view mode and stored in the project assets.
-            </p>
-          </div>
-          <div className="flex items-center justify-between">
-            <Label>Discovery algorithm</Label>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="w-[240px] justify-between font-normal">
-                  <span className="truncate">{PROCESS_AREA_ALGORITHM_LABELS[algorithm]}</span>
-                  <ChevronDown className="h-4 w-4 opacity-50" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-[240px]">
-                <DropdownMenuRadioGroup
-                  value={algorithm}
-                  onValueChange={(value) =>
-                    handleSettingsChange({
-                      algorithm: value as ProcessAreaAlgorithm,
-                      params,
-                    })
-                  }
-                >
-                  {(Object.keys(PROCESS_AREA_ALGORITHM_LABELS) as ProcessAreaAlgorithm[]).map(
-                    (value) => (
-                      <DropdownMenuRadioItem key={value} value={value}>
-                        {PROCESS_AREA_ALGORITHM_LABELS[value]}
-                      </DropdownMenuRadioItem>
-                    ),
-                  )}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-          {algorithm === 'advanced' &&
-            PROCESS_AREA_PARAM_FIELDS.map(({ nodeKey, paramKey, label }) => (
-              <div className="space-y-2" key={nodeKey}>
-                <div className="flex items-center justify-between">
-                  <Label htmlFor={`process-area-${nodeKey}`}>{label}</Label>
-                  <span className="text-sm text-muted-foreground">
-                    {params[paramKey].toFixed(2)}
-                  </span>
-                </div>
-                <Slider
-                  id={`process-area-${nodeKey}`}
-                  {...PROCESS_AREA_PARAM_RANGES[paramKey]}
-                  value={[params[paramKey]]}
-                  onValueChange={(values) =>
-                    handleSettingsChange({
-                      algorithm,
-                      params: { ...params, [paramKey]: values?.[0] ?? 0 },
-                    })
-                  }
-                />
-              </div>
-            ))}
-        </CardContent>
-      </Card>
+      <WidgetDraftTile
+        typeLabel="Process area"
+        sketchMaxWidth={GRAPH_SKETCH_MAX_WIDTH}
+        hint={PROCESS_AREA_SKETCH_HINT}
+        notice={selectedFile?.id ? undefined : "Select an event log file to see the visualization."}
+        onConfigure={() => setSettingsOpen(true)}
+        sketch={<ProcessAreaSketch className="h-full w-full" />}
+      >
+        <ChartSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+          <ProcessAreaSettingsBody
+            id={`process-area-${node.component_id}`}
+            initial={{ algorithm, params, compositionAssetId }}
+            storedCompositions={storedCompositions.assets}
+            sketchHint={PROCESS_AREA_SKETCH_HINT}
+            onApply={({ compositionAssetId: nextComposition, ...settings }) => {
+              handleSettingsChange(settings);
+              handleCompositionAssetChange(nextComposition);
+              setSettingsOpen(false);
+            }}
+            onCancel={() => setSettingsOpen(false)}
+          />
+        </ChartSettingsDialog>
+      </WidgetDraftTile>
     );
   }
 
@@ -1483,23 +1186,14 @@ export const TotemMinerComponent: React.FC<ComponentProps> = ({
   );
 
   if (isEditMode) {
-    // EDIT MODE: Show configuration placeholder
+    // EDIT MODE: a draft of the model; the miner has no settings to open.
     return (
-      <Card className="w-full h-full rounded-none">
-        <CardHeader>
-          <CardTitle>TOTeM Miner</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            The TOTeM Miner discovers and visualizes the structure of your event log.
-          </p>
-          <p className="text-sm text-muted-foreground">
-            {selectedFile
-              ? `Currently analyzing: ${selectedFile.name || selectedFile.filename || 'Event Log'}`
-              : 'Automatically analyzing the current project\'s event log.'}
-          </p>
-        </CardContent>
-      </Card>
+      <WidgetDraftTile
+        typeLabel="TOTeM Miner"
+        sketchMaxWidth={GRAPH_SKETCH_MAX_WIDTH}
+        hint="Layout preview: object types as colored boxes and the relations between them, with their labels and cardinalities. The model itself is discovered from the log; all labels are placeholders."
+        sketch={<TotemModelSketch className="h-full w-full" />}
+      />
     );
   }
 
@@ -1518,7 +1212,8 @@ export const TotemMinerComponent: React.FC<ComponentProps> = ({
 };
 
 
-// LogStatisticsComponent: Dashboard wrapper for LogStatistics with edit mode
+// LogStatisticsComponent: Dashboard wrapper for LogStatistics. In edit mode
+// the tile shows a draft of the cards and the settings open in a popup.
 export const LogStatisticsComponent: React.FC<ComponentProps> = ({
   node,
   onUpdate,
@@ -1526,125 +1221,71 @@ export const LogStatisticsComponent: React.FC<ComponentProps> = ({
   selectedFile,
   dashboardId,
 }) => {
+  const [selection, setSelection] = useState<LogStatisticsSelection>(() => selectionFromNode(node));
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [filterEnabled, setFilterEnabled] = useState(true);
   const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
     node, dashboardId, onUpdate,
   );
 
-  // Local state for toggle values (synced with node for edit mode)
-  const [showNumEvents, setShowNumEvents] = useState(node.show_num_events ?? true);
-  const [showNumActivities, setShowNumActivities] = useState(node.show_num_activities ?? true);
-  const [showNumObjects, setShowNumObjects] = useState(node.show_num_objects ?? true);
-  const [showNumObjectTypes, setShowNumObjectTypes] = useState(node.show_num_object_types ?? true);
-  const [showEarliestTimestamp, setShowEarliestTimestamp] = useState(node.show_earliest_timestamp ?? false);
-  const [showNewestTimestamp, setShowNewestTimestamp] = useState(node.show_newest_timestamp ?? false);
-  const [showDuration, setShowDuration] = useState(node.show_duration ?? false);
-
   // Sync with node when it changes
   useEffect(() => {
-    setShowNumEvents(node.show_num_events ?? true);
-    setShowNumActivities(node.show_num_activities ?? true);
-    setShowNumObjects(node.show_num_objects ?? true);
-    setShowNumObjectTypes(node.show_num_object_types ?? true);
-    setShowEarliestTimestamp(node.show_earliest_timestamp ?? false);
-    setShowNewestTimestamp(node.show_newest_timestamp ?? false);
-    setShowDuration(node.show_duration ?? false);
+    setSelection(selectionFromNode(node));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only the selection fields matter
   }, [node.show_num_events, node.show_num_activities, node.show_num_objects, node.show_num_object_types, node.show_earliest_timestamp, node.show_newest_timestamp, node.show_duration]);
 
-  // Handlers for toggle changes
-  const handleShowNumEventsChange = (checked: boolean) => {
-    setShowNumEvents(checked);
-    onUpdate?.({ show_num_events: checked });
-  };
-  const handleShowNumActivitiesChange = (checked: boolean) => {
-    setShowNumActivities(checked);
-    onUpdate?.({ show_num_activities: checked });
-  };
-  const handleShowNumObjectsChange = (checked: boolean) => {
-    setShowNumObjects(checked);
-    onUpdate?.({ show_num_objects: checked });
-  };
-  const handleShowNumObjectTypesChange = (checked: boolean) => {
-    setShowNumObjectTypes(checked);
-    onUpdate?.({ show_num_object_types: checked });
-  };
-  const handleShowEarliestTimestampChange = (checked: boolean) => {
-    setShowEarliestTimestamp(checked);
-    onUpdate?.({ show_earliest_timestamp: checked });
-  };
-  const handleShowNewestTimestampChange = (checked: boolean) => {
-    setShowNewestTimestamp(checked);
-    onUpdate?.({ show_newest_timestamp: checked });
-  };
-  const handleShowDurationChange = (checked: boolean) => {
-    setShowDuration(checked);
-    onUpdate?.({ show_duration: checked });
+  const applySelection = (next: LogStatisticsSelection) => {
+    setSelection(next);
+    onUpdate?.(next);
   };
 
   if (isEditMode) {
-    // EDIT MODE: Configuration form with toggles
     return (
-      <Card className="w-full h-full rounded-none overflow-auto">
-        <CardHeader>
-          <CardTitle>Log Statistics Settings</CardTitle>
-          <CardDescription>Select which statistics to display</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex items-center justify-between">
-            <Label htmlFor="show-events">Number of Events</Label>
-            <Switch id="show-events" checked={showNumEvents} onCheckedChange={handleShowNumEventsChange} />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="show-activities">Number of Activities</Label>
-            <Switch id="show-activities" checked={showNumActivities} onCheckedChange={handleShowNumActivitiesChange} />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="show-objects">Number of Objects</Label>
-            <Switch id="show-objects" checked={showNumObjects} onCheckedChange={handleShowNumObjectsChange} />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="show-object-types">Number of Object Types</Label>
-            <Switch id="show-object-types" checked={showNumObjectTypes} onCheckedChange={handleShowNumObjectTypesChange} />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="show-earliest">Earliest Timestamp</Label>
-            <Switch id="show-earliest" checked={showEarliestTimestamp} onCheckedChange={handleShowEarliestTimestampChange} />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="show-newest">Newest Timestamp</Label>
-            <Switch id="show-newest" checked={showNewestTimestamp} onCheckedChange={handleShowNewestTimestampChange} />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="show-duration">Duration</Label>
-            <Switch id="show-duration" checked={showDuration} onCheckedChange={handleShowDurationChange} />
-          </div>
-        </CardContent>
-      </Card>
+      <WidgetDraftTile
+        typeLabel="Log statistics"
+        // A row of cards is wide; let it use more of a wide tile than the other drafts.
+        sketchMaxWidth="max-w-3xl"
+        hint="Layout preview: one card per selected statistic. Grey bars stand in for the values; the real statistics are shown when you leave edit mode."
+        onConfigure={() => setSettingsOpen(true)}
+        sketch={<LogStatisticsSketch selection={selection} className="h-full w-full" />}
+      >
+        <LogStatisticsSettingsDialog
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          widgetId={node.component_id}
+          selection={selection}
+          onApply={applySelection}
+        />
+      </WidgetDraftTile>
     );
   }
 
   // VIEW MODE: Delegate to reusable LogStatistics component
   return (
     <div className="w-full h-full flex flex-col">
-      <WidgetFilterHeader title="Log Statistics" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
+      <WidgetHeader label="Log Statistics" filterEnabled={filterEnabled} onToggleFilter={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
       <LogStatistics
         fileId={selectedFile?.id}
         filterEnabled={filterEnabled}
         localFilterParams={Object.keys(localFilterParams).length > 0 ? localFilterParams : undefined}
-        showNumEvents={showNumEvents}
-        showNumActivities={showNumActivities}
-        showNumObjects={showNumObjects}
-        showNumObjectTypes={showNumObjectTypes}
-        showEarliestTimestamp={showEarliestTimestamp}
-        showNewestTimestamp={showNewestTimestamp}
-        showDuration={showDuration}
+        showNumEvents={selection.show_num_events}
+        showNumActivities={selection.show_num_activities}
+        showNumObjects={selection.show_num_objects}
+        showNumObjectTypes={selection.show_num_object_types}
+        showEarliestTimestamp={selection.show_earliest_timestamp}
+        showNewestTimestamp={selection.show_newest_timestamp}
+        showDuration={selection.show_duration}
         className="w-full flex-1"
+        fitHeight
       />
     </div>
   );
 };
 
 
+
+const DOTTED_CHART_SKETCH_HINT =
+  "Layout preview: events as dots along the x axis, one row per y value in the chosen order, colored and shaped as selected. Positions and labels are placeholders.";
 
 const DOTTED_CHART_DEFAULT_CONFIG: DottedChartConfig = {
   xAxis: { type: "time" },
@@ -1672,6 +1313,17 @@ export const OCDottedChartComponent: React.FC<ComponentProps> = ({
   const effectiveFileId = selectedFile?.id;
   const config = nodeToDottedChartConfig(node);
 
+  // Edit mode: the settings as last applied, for the draft (onUpdate changes
+  // the node without re-rendering), synced when the saved settings change.
+  const configJson = JSON.stringify(config);
+  const [editConfig, setEditConfig] = useState<DottedChartConfig>(config);
+  useEffect(() => { setEditConfig(JSON.parse(configJson)); }, [configJson]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // The column options (for the popup's dropdowns and the draft's axis captions), only loaded in edit mode.
+  const { options, loading: loadingOptions, error: optionsError } = useDottedChartOptions(
+    isEditMode ? effectiveFileId : undefined,
+  );
+
   const handleConfigChange = (nextConfig: DottedChartConfig) => {
     onUpdate?.({
       x_axis: axisOptionToPersistedValue(nextConfig.xAxis),
@@ -1685,31 +1337,46 @@ export const OCDottedChartComponent: React.FC<ComponentProps> = ({
   };
 
   if (isEditMode) {
+    // The tile shows a draft of the chart; the settings open in a popup.
     return (
-      <Card className="w-full h-full rounded-none">
-        <CardHeader>
-          <CardTitle>OC Dotted Chart Settings</CardTitle>
-          <CardDescription>Configure the dashboard widget.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4 overflow-auto">
-          <DottedChartControls
-            fileId={effectiveFileId}
-            config={config}
-            onConfigChange={handleConfigChange}
+      <WidgetDraftTile
+        typeLabel="OC dotted chart"
+        hint={DOTTED_CHART_SKETCH_HINT}
+        notice={effectiveFileId ? undefined : "Select an event log in the application sidebar to render this widget."}
+        onConfigure={() => setSettingsOpen(true)}
+        sketch={
+          <DottedChartSketch
+            config={editConfig}
+            xLabel={axisOptionLabel(options.x_axis, editConfig.xAxis)}
+            yLabel={axisOptionLabel(options.y_axis, editConfig.yAxis)}
+            className="h-full w-full"
           />
-          {!effectiveFileId && (
-            <p className="text-sm text-muted-foreground">
-              Select an event log in the application sidebar to render this widget.
-            </p>
-          )}
-        </CardContent>
-      </Card>
+        }
+      >
+        <ChartSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+          <DottedChartSettingsBody
+            id={`dotted-chart-${node.component_id}`}
+            initial={editConfig}
+            options={options}
+            loadingOptions={loadingOptions}
+            optionsError={optionsError}
+            fileId={effectiveFileId}
+            sketchHint={DOTTED_CHART_SKETCH_HINT}
+            onApply={(next) => {
+              setEditConfig(next);
+              handleConfigChange(next);
+              setSettingsOpen(false);
+            }}
+            onCancel={() => setSettingsOpen(false)}
+          />
+        </ChartSettingsDialog>
+      </WidgetDraftTile>
     );
   }
 
   return (
     <div className="w-full h-full flex flex-col">
-      <WidgetFilterHeader title="OC Dotted Chart" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={effectiveFileId} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
+      <WidgetHeader label="OC Dotted Chart" filterEnabled={filterEnabled} onToggleFilter={() => setFilterEnabled(p => !p)} fileId={effectiveFileId} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
       <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
         <DottedChart
           fileId={effectiveFileId}
@@ -1760,12 +1427,30 @@ function isBuiltinDottedChartAxis(
 }
 
 
+const OCDFG_SKETCH_HINT =
+  "Layout preview: a colored start and end per object type, activities with their type dots, and one colored arc per object type. The graph itself comes from the log; names are placeholders.";
+
 /**
  * Layout panel settings of an OC-DFG widget, stored with the widget. While
  * the dashboard is viewed they are saved right away (by grid position, see
  * `saveOcdfgWidgetLayout`); the node is updated too, so a later save of the
  * dashboard in edit mode keeps them.
+ *
+ * The flow direction is the exception: the widget's own setting
+ * (`layout_direction`, set in edit mode) is the direction it opens with. A
+ * direction picked in the layout panel is never stored, so it lasts while
+ * the view stays open (filter changes keep it) and the view opens with the
+ * widget's setting again after edit mode or a reload.
  */
+function withoutDirection(entry: unknown): unknown {
+  if (typeof entry !== "object" || entry === null) return entry;
+  const options = (entry as StoredLayout).options;
+  if (typeof options !== "object" || options === null || !("direction" in options)) return entry;
+  const rest: Partial<StoredLayout["options"]> = { ...options };
+  delete rest.direction;
+  return Object.keys(rest).length > 0 ? { ...(entry as StoredLayout), options: rest } : null;
+}
+
 function useDashboardOcdfgLayout(
   node: ComponentProps["node"],
   dashboardId: number | undefined,
@@ -1773,10 +1458,11 @@ function useDashboardOcdfgLayout(
 ) {
   const save = useCallback<SaveLayout>(
     async (entry) => {
-      onUpdate?.({ layout_options: entry });
+      const persisted = withoutDirection(entry) as StoredLayout | null;
+      onUpdate?.({ layout_options: persisted });
       if (!dashboardId || node.x == null || node.y == null) return;
       try {
-        await saveOcdfgWidgetLayout(dashboardId, node.x, node.y, entry);
+        await saveOcdfgWidgetLayout(dashboardId, node.x, node.y, persisted);
       } catch {
         toast.error("The OC-DFG layout could not be saved");
       }
@@ -1784,54 +1470,11 @@ function useDashboardOcdfgLayout(
     [dashboardId, node, onUpdate],
   );
   return {
-    storedLayout: node.layout_options ?? null,
+    // A direction stored before it stopped being stored is ignored too.
+    storedLayout: withoutDirection(node.layout_options ?? null),
     onLayoutChange: save,
     layoutScope: `dashboard:${dashboardId ?? ""}:${node.x ?? ""}:${node.y ?? ""}`,
   };
-}
-
-function OcdfgWidgetSettings({
-  title,
-  description,
-  idPrefix,
-  showControls,
-  initialInteractionLocked,
-  onShowControlsChange,
-  onInitialInteractionLockedChange,
-}: {
-  title: string;
-  description: string;
-  idPrefix: string;
-  showControls: boolean;
-  initialInteractionLocked: boolean;
-  onShowControlsChange: (checked: boolean) => void;
-  onInitialInteractionLockedChange: (checked: boolean) => void;
-}) {
-  return (
-    <Card className="w-full h-full rounded-none">
-      <CardHeader>
-        <CardTitle>{title}</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <p className="text-sm text-muted-foreground">{description}</p>
-        <div className="flex items-center justify-between">
-          <Label htmlFor={`${idPrefix}-show-controls`}>Show Controls Panel</Label>
-          <Switch id={`${idPrefix}-show-controls`} checked={showControls} onCheckedChange={onShowControlsChange} />
-        </div>
-        <div className="flex items-center justify-between">
-          <Label htmlFor={`${idPrefix}-initial-locked`}>Lock Interactions Initially</Label>
-          <Switch
-            id={`${idPrefix}-initial-locked`}
-            checked={initialInteractionLocked}
-            onCheckedChange={onInitialInteractionLockedChange}
-          />
-        </div>
-        <p className="text-xs text-muted-foreground">
-          The layout is changed with the layout button in the widget&apos;s toolbar and stored with this widget.
-        </p>
-      </CardContent>
-    </Card>
-  );
 }
 
 // NewOCDFGComponent: Dashboard wrapper for the Object-Centric DFG (arc weight)
@@ -1849,48 +1492,73 @@ export const NewOCDFGComponent: React.FC<ComponentProps> = ({
 
   const [showControls, setShowControls] = useState(node.show_controls ?? true);
   const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
+  const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>(node.layout_direction ?? 'TB');
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const layout = useDashboardOcdfgLayout(node, dashboardId, onUpdate);
 
   useEffect(() => {
     setShowControls(node.show_controls ?? true);
     setInitialInteractionLocked(node.initial_interaction_locked ?? true);
-  }, [node.show_controls, node.initial_interaction_locked]);
+    setLayoutDirection(node.layout_direction ?? 'TB');
+  }, [node.show_controls, node.initial_interaction_locked, node.layout_direction]);
 
   if (isEditMode) {
+    // EDIT MODE: the tile shows a draft of the graph; the settings open in a popup.
     return (
-      <OcdfgWidgetSettings
-        title="Object-Centric DFG (Arc Weight) Settings"
-        description="Object-Centric Directly Follows Graph with a minimum arc weight per object type."
-        idPrefix="new"
-        showControls={showControls}
-        initialInteractionLocked={initialInteractionLocked}
-        onShowControlsChange={(checked) => {
-          setShowControls(checked);
-          onUpdate?.({ show_controls: checked });
-        }}
-        onInitialInteractionLockedChange={(checked) => {
-          setInitialInteractionLocked(checked);
-          onUpdate?.({ initial_interaction_locked: checked });
-        }}
-      />
+      <WidgetDraftTile
+        typeLabel="OCDFG"
+        sketchMaxWidth={GRAPH_SKETCH_MAX_WIDTH}
+        hint={OCDFG_SKETCH_HINT}
+        onConfigure={() => setSettingsOpen(true)}
+        sketch={
+          <OcdfgSketch
+            layoutDirection={layoutDirection}
+            showControls={showControls}
+            interactionLocked={initialInteractionLocked}
+            className="h-full w-full"
+          />
+        }
+      >
+        <ChartSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+          <OcdfgSettingsBody
+            id={`ocdfg-${node.component_id}`}
+            heading="Object-Centric DFG (Arc Weight) settings"
+            description="Object-Centric Directly Follows Graph with a minimum arc weight per object type."
+            initial={{ showControls, initialInteractionLocked, layoutDirection }}
+            sketchHint={OCDFG_SKETCH_HINT}
+            onApply={(next) => {
+              setShowControls(next.showControls);
+              setInitialInteractionLocked(next.initialInteractionLocked);
+              setLayoutDirection(next.layoutDirection);
+              onUpdate?.({
+                show_controls: next.showControls,
+                initial_interaction_locked: next.initialInteractionLocked,
+                layout_direction: next.layoutDirection,
+              });
+              setSettingsOpen(false);
+            }}
+            onCancel={() => setSettingsOpen(false)}
+          />
+        </ChartSettingsDialog>
+      </WidgetDraftTile>
     );
   }
 
+  // The title and the filter controls sit on the canvas (top left), no header bar.
   return (
-    <div className="w-full h-full flex flex-col">
-      <WidgetFilterHeader title="Object-Centric DFG (Arc Weight)" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
-      <div style={{ flex: 1, minHeight: 0, background: '#fff' }}>
-        <NewOCDFGVisualizer
-          height="100%"
-          fileId={selectedFile?.id}
-          showControls={showControls}
-          initialInteractionLocked={initialInteractionLocked}
-          layoutDirection={node.layout_direction ?? 'TB'}
-          filterEnabled={filterEnabled}
-          localFilterParams={localFilterParams}
-          {...layout}
-        />
-      </div>
+    <div className="w-full h-full">
+      <NewOCDFGVisualizer
+        height="100%"
+        fileId={selectedFile?.id}
+        showControls={showControls}
+        initialInteractionLocked={initialInteractionLocked}
+        layoutDirection={layoutDirection}
+        filterEnabled={filterEnabled}
+        onToggleFilter={() => setFilterEnabled(p => !p)}
+        localFilterParams={localFilterParams}
+        onLocalFilterChange={handleLocalFilterChange}
+        {...layout}
+      />
     </div>
   );
 };
@@ -1904,32 +1572,60 @@ export const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
   dashboardId,
 }) => {
   const [filterEnabled, setFilterEnabled] = useState(true);
+  const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
+    node, dashboardId, onUpdate,
+  );
   const [showControls, setShowControls] = useState(node.show_controls ?? true);
   const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
+  const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>(node.layout_direction ?? 'TB');
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const layout = useDashboardOcdfgLayout(node, dashboardId, onUpdate);
 
   useEffect(() => {
     setShowControls(node.show_controls ?? true);
     setInitialInteractionLocked(node.initial_interaction_locked ?? true);
-  }, [node.show_controls, node.initial_interaction_locked]);
+    setLayoutDirection(node.layout_direction ?? 'TB');
+  }, [node.show_controls, node.initial_interaction_locked, node.layout_direction]);
 
   if (isEditMode) {
+    // EDIT MODE: the tile shows a draft of the graph; the settings open in a popup.
     return (
-      <OcdfgWidgetSettings
-        title="OCDFG (Variants) Settings"
-        description="Object-Centric Directly Follows Graph (OCDFG) visualization with Variant/Trace filtering."
-        idPrefix="variants"
-        showControls={showControls}
-        initialInteractionLocked={initialInteractionLocked}
-        onShowControlsChange={(checked) => {
-          setShowControls(checked);
-          onUpdate?.({ show_controls: checked });
-        }}
-        onInitialInteractionLockedChange={(checked) => {
-          setInitialInteractionLocked(checked);
-          onUpdate?.({ initial_interaction_locked: checked });
-        }}
-      />
+      <WidgetDraftTile
+        typeLabel="OCDFG (variants)"
+        sketchMaxWidth={GRAPH_SKETCH_MAX_WIDTH}
+        hint={OCDFG_SKETCH_HINT}
+        onConfigure={() => setSettingsOpen(true)}
+        sketch={
+          <OcdfgSketch
+            layoutDirection={layoutDirection}
+            showControls={showControls}
+            interactionLocked={initialInteractionLocked}
+            className="h-full w-full"
+          />
+        }
+      >
+        <ChartSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+          <OcdfgSettingsBody
+            id={`ocdfg-variants-${node.component_id}`}
+            heading="OCDFG (variants) settings"
+            description="Object-Centric Directly Follows Graph (OCDFG) visualization with Variant/Trace filtering."
+            initial={{ showControls, initialInteractionLocked, layoutDirection }}
+            sketchHint={OCDFG_SKETCH_HINT}
+            onApply={(next) => {
+              setShowControls(next.showControls);
+              setInitialInteractionLocked(next.initialInteractionLocked);
+              setLayoutDirection(next.layoutDirection);
+              onUpdate?.({
+                show_controls: next.showControls,
+                initial_interaction_locked: next.initialInteractionLocked,
+                layout_direction: next.layoutDirection,
+              });
+              setSettingsOpen(false);
+            }}
+            onCancel={() => setSettingsOpen(false)}
+          />
+        </ChartSettingsDialog>
+      </WidgetDraftTile>
     );
   }
 
@@ -1940,15 +1636,20 @@ export const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
         fileId={selectedFile?.id}
         showControls={showControls}
         initialInteractionLocked={initialInteractionLocked}
-        layoutDirection={node.layout_direction ?? 'TB'}
+        layoutDirection={layoutDirection}
         filterEnabled={filterEnabled}
         onToggleFilter={() => setFilterEnabled(p => !p)}
+        localFilterParams={localFilterParams}
+        onLocalFilterChange={handleLocalFilterChange}
         {...layout}
       />
     </div>
   );
 };
 
+
+const OCCN_SKETCH_HINT =
+  "Layout preview: start and end per object type, activities striped in their object types' colors, colored arcs and the binding markers next to the activities, in the chosen direction. The net itself is discovered from the log; names are placeholders.";
 
 // OCCNComponent: Dashboard wrapper for the Object-Centric Causal Net (ELK layout)
 export const OCCNComponent: React.FC<ComponentProps> = ({
@@ -1968,6 +1669,7 @@ export const OCCNComponent: React.FC<ComponentProps> = ({
   const [showControls, setShowControls] = useState(node.show_controls ?? true);
   const [initialInteractionLocked, setInitialInteractionLocked] = useState(node.initial_interaction_locked ?? true);
   const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>(node.layout_direction ?? 'LR');
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
     setThreshold(node.relative_occurrence_threshold ?? 0);
@@ -2010,92 +1712,55 @@ export const OCCNComponent: React.FC<ComponentProps> = ({
   };
 
   if (isEditMode) {
-    // EDIT MODE: Show configuration controls
+    // EDIT MODE: the tile shows a draft of the net; the settings open in a popup.
     return (
-      <Card className="w-full h-full rounded-none overflow-y-auto">
-        <CardHeader>
-          <CardTitle>OCCN Settings</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            Object-Centric Causal Net (OCCN) with activity bindings and automatic ELK layout.
-          </p>
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label htmlFor="occn-threshold">Frequency Threshold</Label>
-              <span className="text-sm text-muted-foreground">{threshold.toFixed(2)}</span>
-            </div>
-            <Slider
-              id="occn-threshold"
-              min={0}
-              max={1}
-              step={0.05}
-              value={[threshold]}
-              onValueChange={handleThresholdChange}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="occn-object-types">Object Type Filter</Label>
-            <Input
-              id="occn-object-types"
-              value={objectTypes}
-              onChange={(e) => handleObjectTypesChange(e.target.value)}
-              placeholder="e.g. orders, items (empty = all types)"
-            />
-            <p className="text-xs text-muted-foreground">
-              Comma-separated object types to include; leave empty to use all.
-            </p>
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="occn-show-controls">Show Controls Panel</Label>
-            <Switch
-              id="occn-show-controls"
-              checked={showControls}
-              onCheckedChange={handleShowControlsChange}
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="occn-initial-locked">Lock Interactions Initially</Label>
-            <Switch
-              id="occn-initial-locked"
-              checked={initialInteractionLocked}
-              onCheckedChange={handleInitialInteractionLockedChange}
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label>Layout Direction</Label>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="w-[180px] justify-between font-normal">
-                  <span>{layoutDirection === 'TB' ? 'Top to Bottom' : 'Left to Right'}</span>
-                  <ChevronDown className="h-4 w-4 opacity-50" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-[180px]">
-                <DropdownMenuRadioGroup value={layoutDirection} onValueChange={handleLayoutDirectionChange}>
-                  <DropdownMenuRadioItem value="TB">Top to Bottom</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="LR">Left to Right</DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        </CardContent>
-      </Card>
+      <WidgetDraftTile
+        typeLabel="OC causal net"
+        sketchMaxWidth={GRAPH_SKETCH_MAX_WIDTH}
+        hint={OCCN_SKETCH_HINT}
+        onConfigure={() => setSettingsOpen(true)}
+        sketch={
+          <OccnSketch
+            layoutDirection={layoutDirection}
+            showControls={showControls}
+            interactionLocked={initialInteractionLocked}
+            threshold={threshold}
+            className="h-full w-full"
+          />
+        }
+      >
+        <ChartSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+          <OccnSettingsBody
+            id={`occn-${node.component_id}`}
+            initial={{ threshold, objectTypes, showControls, initialInteractionLocked, layoutDirection }}
+            sketchHint={OCCN_SKETCH_HINT}
+            onApply={(next) => {
+              handleThresholdChange([next.threshold]);
+              handleObjectTypesChange(next.objectTypes);
+              handleShowControlsChange(next.showControls);
+              handleInitialInteractionLockedChange(next.initialInteractionLocked);
+              handleLayoutDirectionChange(next.layoutDirection);
+              setSettingsOpen(false);
+            }}
+            onCancel={() => setSettingsOpen(false)}
+          />
+        </ChartSettingsDialog>
+      </WidgetDraftTile>
     );
   }
 
-  // VIEW MODE: Render OCCNVisualizer
+  // VIEW MODE: the title and the filter controls sit on the canvas (top left), no header bar.
   return (
     <div className="w-full h-full flex flex-col">
-      <WidgetFilterHeader title="OC Causal Net" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
       <div style={{ flex: 1, minHeight: 0 }}>
         <ReactFlowProvider>
           <OCCNVisualizer
             height="100%"
             fileId={selectedFile?.id}
             localFilterParams={localFilterParams}
+            onLocalFilterChange={handleLocalFilterChange}
+            onToggleFilter={() => setFilterEnabled(p => !p)}
             showControls={showControls}
-            showTitle={false}
             initialInteractionLocked={initialInteractionLocked}
             initialLayoutDirection={layoutDirection}
             initialThreshold={threshold}
@@ -2109,6 +1774,9 @@ export const OCCNComponent: React.FC<ComponentProps> = ({
 };
 
 
+const OCPN_SKETCH_HINT =
+  "Layout preview: places in their object type's color (start and end filled), transitions with their type dots, a silent transition, and variable arcs as double lines. The net itself is discovered from the log; names are placeholders.";
+
 // OCPNComponent: Dashboard wrapper for the OC Petri Net discovery view.
 // Settings: automatic loading (start discovery when the dashboard opens)
 // and the discovery timeout in seconds.
@@ -2121,6 +1789,7 @@ export const OCPNComponent: React.FC<ComponentProps> = ({
 }) => {
   const [automaticLoading, setAutomaticLoading] = useState(node.automatic_loading ?? false);
   const [timeoutS, setTimeoutS] = useState<number>(node.timeout_s ?? 30);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [filterEnabled, setFilterEnabled] = useState(true);
   const [localFilterParams, handleLocalFilterChange] = useDashboardLocalFilter(
     node, dashboardId, onUpdate,
@@ -2145,57 +1814,36 @@ export const OCPNComponent: React.FC<ComponentProps> = ({
   };
 
   if (isEditMode) {
-    // EDIT MODE: Configuration form
+    // EDIT MODE: the tile shows a draft of the net; the settings open in a popup.
     return (
-      <Card className="w-full h-full rounded-none overflow-auto">
-        <CardHeader>
-          <CardTitle>OC Petri Net Settings</CardTitle>
-          <CardDescription>
-            Discovers an Object-Centric Petri Net from the selected event log.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {/* Automatic loading */}
-          <div className="flex items-center justify-between">
-            <div className="space-y-0.5">
-              <Label htmlFor="ocpn-auto-loading">Start discovery automatically</Label>
-              <p className="text-xs text-muted-foreground">
-                Run OCPN discovery as soon as the dashboard loads.
-              </p>
-            </div>
-            <Switch
-              id="ocpn-auto-loading"
-              checked={automaticLoading}
-              onCheckedChange={handleAutomaticLoadingChange}
-            />
-          </div>
-
-          {/* Timeout (seconds) */}
-          <div className="space-y-2">
-            <Label htmlFor="ocpn-timeout-setting">Timeout (seconds)</Label>
-            <Input
-              id="ocpn-timeout-setting"
-              type="number"
-              min={1}
-              max={600}
-              step={1}
-              value={timeoutS}
-              onChange={(e) => handleTimeoutChange(e.target.value)}
-              className="w-[120px]"
-            />
-            <p className="text-xs text-muted-foreground">
-              Wall-clock budget for the discovery. Increase it for large logs.
-            </p>
-          </div>
-        </CardContent>
-      </Card>
+      <WidgetDraftTile
+        typeLabel="OC Petri net"
+        sketchMaxWidth={GRAPH_SKETCH_MAX_WIDTH}
+        hint={OCPN_SKETCH_HINT}
+        onConfigure={() => setSettingsOpen(true)}
+        sketch={<OcpnSketch className="h-full w-full" />}
+      >
+        <ChartSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+          <OcpnSettingsBody
+            id={`ocpn-${node.component_id}`}
+            initial={{ automaticLoading, timeoutS }}
+            sketchHint={OCPN_SKETCH_HINT}
+            onApply={(next) => {
+              handleAutomaticLoadingChange(next.automaticLoading);
+              handleTimeoutChange(String(next.timeoutS));
+              setSettingsOpen(false);
+            }}
+            onCancel={() => setSettingsOpen(false)}
+          />
+        </ChartSettingsDialog>
+      </WidgetDraftTile>
     );
   }
 
   // VIEW MODE: Render the OCPN visualizer with stored settings
   return (
     <div className="w-full h-full flex flex-col bg-white">
-      <WidgetFilterHeader title="OC Petri Net" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
+      <WidgetHeader label="OC Petri Net" filterEnabled={filterEnabled} onToggleFilter={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
       <div style={{ flex: 1, minHeight: 0 }}>
         <OCPNVisualizer
           height="100%"
@@ -2319,7 +1967,7 @@ export const OCPNFlattenedReplayComponent: React.FC<ComponentProps> = ({
 
   return (
     <div className="w-full h-full flex flex-col bg-white">
-      <WidgetFilterHeader title="OCPN Flattened Replay" filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={setLocalFilterParams} />
+      <WidgetHeader label="OCPN Flattened Replay" filterEnabled={filterEnabled} onToggleFilter={() => setFilterEnabled(p => !p)} fileId={selectedFile?.id} onLocalFilterChange={setLocalFilterParams} />
       <div style={{ flex: 1, minHeight: 0 }}>
         <OcpnFlattenedReplay
           height="100%"
@@ -2386,6 +2034,65 @@ export const SqlQueryComponent: React.FC<ComponentProps> = ({
     setLinkedQuery(link);
     onUpdate?.({ query_asset: link?.id ?? null, query_asset_name: link?.name ?? null });
   };
+
+  // Edit mode: a draft of the result table, the settings in a popup. The
+  // applied values are mirrored in local state for the draft, like the link.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [applied, setApplied] = useState({ name: value.name, query: value.query, rowLimit: value.rowLimit });
+  useEffect(() => {
+    setApplied({ name: value.name, query: value.query, rowLimit: value.rowLimit });
+  }, [value.name, value.query, value.rowLimit]);
+
+  // The draft's column names: looked up with a one-row query in edit mode,
+  // again whenever the query or the link changes.
+  const discovery = useColumnDiscovery(selectedFile?.id, applied.query, linkedQuery?.id);
+  const { discover } = discovery;
+  useEffect(() => {
+    if (isEditMode && selectedFile?.id && (applied.query.trim() || linkedQuery)) void discover();
+  }, [isEditMode, discover, selectedFile?.id, applied.query, linkedQuery]);
+  const draftColumns =
+    discovery.resultFor === discoveryKey(applied.query, linkedQuery?.id) ? discovery.columns : undefined;
+
+  const applySettings = (next: SqlTableSettings) => {
+    setApplied({ name: next.name, query: next.query, rowLimit: next.rowLimit });
+    setLinkedQuery(next.linked);
+    onUpdate?.({
+      name: next.name,
+      query: next.query,
+      row_limit: next.rowLimit,
+      query_asset: next.linked?.id ?? null,
+      query_asset_name: next.linked?.name ?? null,
+    });
+  };
+
+  if (isEditMode) {
+    return (
+      <WidgetDraftTile
+        typeLabel="SQL editor"
+        hint="Layout preview of the result table: grey bars for the values, and the paging with your rows per page. The real result is shown when you leave edit mode."
+        onConfigure={() => setSettingsOpen(true)}
+        sketch={
+          <SqlTableSketch
+            name={applied.name}
+            linked={Boolean(linkedQuery)}
+            columns={draftColumns}
+            rowsPerPage={applied.rowLimit}
+            className="h-full w-full"
+          />
+        }
+      >
+        <SqlTableSettingsDialog
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          widgetId={node.component_id}
+          settings={{ ...applied, linked: linkedQuery }}
+          onApply={applySettings}
+          fileId={selectedFile?.id}
+          projectId={selectedFile?.project}
+        />
+      </WidgetDraftTile>
+    );
+  }
 
   return (
     <SqlQueryEditor

@@ -4,11 +4,10 @@ import {
   CardContent,
 } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Slider } from '@/components/ui/slider';
 import { RefreshCcw } from 'lucide-react';
 import TotemMinerVisualizer from './TotemMinerVisualizer';
-import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
-import { LocalFilterDropdown } from '@/components/ui/LocalFilterDropdown';
+import { WidgetTitle } from '@/components/ui/WidgetTitle';
+import { PillSlider } from '@/components/canvas/PillSlider';
 import SaveModelAssetButton from '@/components/SaveModelAssetDialog';
 
 export type TotemMinerProps = {
@@ -36,7 +35,6 @@ export default function TotemMiner({
 }: TotemMinerProps) {
   const [relayoutSignal, setRelayoutSignal] = useState(0);
   const [tau, setTau] = useState(0.8);
-  const [sliderTau, setSliderTau] = useState(0.8);
   const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>(initialLocalFilterParams ?? {});
 
   // Follow the host's filter when it changes from outside (loaded
@@ -55,6 +53,57 @@ export default function TotemMiner({
   const heightStyle = typeof height === 'number' ? `${height}px` : height;
   const fillContainer = height === '100%';
 
+  // The title (with the filters) on the canvas, top left, and the card's own
+  // controls in the canvas' control pill: τ (applied on release), relayout, save.
+  const title = (
+    <WidgetTitle
+      label="TOTeM Model"
+      fileId={fileId}
+      filterEnabled={filterEnabled}
+      onToggleFilter={onToggleFilter}
+      localFilterParams={localFilterParams}
+      onLocalFilterChange={(params) => {
+        setLocalFilterParams(params);
+        onLocalFilterChange?.(params);
+      }}
+    />
+  );
+  const pillExtras = (
+    <>
+      <PillSlider
+        label="τ"
+        ariaLabel="τ"
+        title="τ: the share a relation needs to be shown — applied on release"
+        value={tau}
+        min={0}
+        max={1}
+        step={0.01}
+        onCommit={setTau}
+      />
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        onClick={handleRelayout}
+        disabled={!fileId}
+        className="rounded-full h-9 w-9"
+        title="Relayout"
+        aria-label="Relayout"
+      >
+        <RefreshCcw className="h-4 w-4" />
+      </Button>
+      <SaveModelAssetButton
+        fileId={fileId ?? undefined}
+        filterEnabled={filterEnabled}
+        modelType="TOTEM"
+        params={{ tau }}
+        disabled={!fileId}
+        iconOnly
+        className="rounded-full h-9 w-9"
+      />
+    </>
+  );
+
   const visualizerContent = (
     <TotemMinerVisualizer
       eventLogId={fileId}
@@ -65,6 +114,8 @@ export default function TotemMiner({
       tau={tau}
       filterEnabled={filterEnabled}
       localFilterParams={localFilterParams}
+      title={title}
+      pillExtras={pillExtras}
     />
   );
 
@@ -78,61 +129,8 @@ export default function TotemMiner({
 
   return (
     <Card
-      className={`@container/card w-full flex flex-col ${fillContainer ? 'h-full rounded-none' : ''}`}
+      className={`@container/card w-full flex flex-col gap-0 py-0 overflow-hidden ${fillContainer ? 'h-full rounded-none' : ''}`}
     >
-      {/* Custom inline header matching thesis layout */}
-      <div className="flex flex-row flex-wrap items-center justify-between gap-x-4 gap-y-2 relative z-10 flex-shrink-0 w-full px-4 py-2 border-b bg-card text-left">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold text-card-foreground">
-            TOTeM Model
-          </span>
-          {onToggleFilter && (
-            <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={onToggleFilter} />
-          )}
-          <LocalFilterDropdown fileId={fileId} value={localFilterParams} onFilterChange={(params) => {
-            setLocalFilterParams(params);
-            onLocalFilterChange?.(params);
-          }} />
-        </div>
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-          {/* τ slider */}
-          <div className="flex items-center gap-3">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider min-w-[50px] text-right">
-              τ: {sliderTau.toFixed(2)}
-            </span>
-            <Slider
-              min={0.0}
-              max={1.0}
-              step={0.01}
-              value={[sliderTau]}
-              onValueChange={(values) => setSliderTau(values?.[0] ?? 0.5)}
-              onValueCommit={(values) => setTau(values?.[0] ?? 0.5)}
-              className="w-[120px]"
-            />
-          </div>
-
-          <div className="hidden sm:block w-px h-6 bg-border" />
-
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleRelayout}
-            disabled={!fileId}
-            className="flex items-center gap-2"
-          >
-            <RefreshCcw className="h-4 w-4" />
-            Relayout
-          </Button>
-
-          <SaveModelAssetButton
-            fileId={fileId ?? undefined}
-            filterEnabled={filterEnabled}
-            modelType="TOTEM"
-            params={{ tau }}
-            disabled={!fileId}
-          />
-        </div>
-      </div>
       <CardContent
         className={`p-0 ${fillContainer ? 'flex-1 min-h-0' : ''}`}
         style={fillContainer ? undefined : { height: heightStyle }}

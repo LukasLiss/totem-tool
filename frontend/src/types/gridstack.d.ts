@@ -6,6 +6,7 @@ import type {
   TextVerticalAlign,
 } from '@/components/text-box/textBoxFormat';
 import type { RichTextDoc } from '@/components/text-box/richText';
+import type { ChartStyle } from '@/components/sql-widgets/chartLegendUtils';
 
 declare module 'gridstack' {
   interface GridStackWidget {
@@ -97,6 +98,8 @@ declare module 'gridstack' {
     title?: string;
     show_legend?: boolean;
     show_tooltip?: boolean;
+    // PieChartComponent display options (legend, colors, …), stored as JSON
+    chart_style?: ChartStyle;
     label_column?: string;
     value_column?: string;
     // FilterStackComponent
@@ -128,6 +131,8 @@ declare module 'gridstack' {
     n_clusters?: number;
     min_cluster_size?: number;
     distance_metric?: 'euclidean' | 'hellinger';
+    point_size?: 'small' | 'medium' | 'large';
+    transparent_points?: boolean;
     // ProcessAreaComponent
     algorithm?: 'mlpa' | 'advanced';
     w_temporal?: number;

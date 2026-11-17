@@ -454,6 +454,10 @@ class PieChartComponent(DashboardComponent):
     value_column = models.CharField(max_length=100, blank=True, default="")
     show_legend = models.BooleanField(default=True)
     show_tooltip = models.BooleanField(default=True)
+    # Display options edited in the frontend's settings popup: legend style
+    # and values, category count footer, max categories, colors. Validated
+    # on save (see _validated_chart_style in views/dashboards.py).
+    chart_style = models.JSONField(default=dict, blank=True)
 
 
 class KpiComponent(DashboardComponent):
@@ -482,6 +486,10 @@ class BarChartComponent(DashboardComponent):
     value_column = models.CharField(max_length=100, blank=True, default="")
     horizontal = models.BooleanField(default=False)
     show_values = models.BooleanField(default=False)
+    # Display options edited in the frontend's settings popup: max categories
+    # and colors. Validated on save (see _validated_chart_style in
+    # views/dashboards.py).
+    chart_style = models.JSONField(default=dict, blank=True)
 
 
 class ScatterPlotComponent(DashboardComponent):
@@ -497,6 +505,10 @@ class ScatterPlotComponent(DashboardComponent):
     series_column = models.CharField(max_length=100, blank=True, default="")
     x_label = models.CharField(max_length=100, blank=True, default="")
     y_label = models.CharField(max_length=100, blank=True, default="")
+    # Display options edited in the frontend's settings popup: legend, max
+    # series and colors. Validated on save (see _validated_chart_style in
+    # views/dashboards.py).
+    chart_style = models.JSONField(default=dict, blank=True)
 
 
 class OCPNComponent(DashboardComponent):
@@ -614,6 +626,13 @@ class ResourceProfilingComponent(DashboardComponent):
         choices=[("graph", "Graph"), ("table", "Table")],
         default="graph",
     )
+    # Look of the resources in the graph (style settings of the dashboard widget).
+    point_size = models.CharField(
+        max_length=8,
+        choices=[("small", "Small"), ("medium", "Medium"), ("large", "Large")],
+        default="medium",
+    )
+    transparent_points = models.BooleanField(default=False)
 
 
 class ProjectComponentFilter(models.Model):

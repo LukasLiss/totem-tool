@@ -1,21 +1,91 @@
 "use client"
 
 import React, { useState, useEffect } from 'react';
-import { Label as PieLabel, Pie, PieChart } from "recharts";
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Label as PieLabel, Pie, PieChart, type PieLabelRenderProps } from "recharts";
+import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { GridStackNode } from 'gridstack';
 import type { LinkedQuery } from "@/react_component/sql/linkedQuery";
 import { useSqlQueryData } from "@/react_component/sql/useSqlQueryData";
-import { ColumnInput, QuerySection, WidgetMessage } from "@/components/sql-widgets/shared";
-import { linkedQueryOf, useColumnDiscovery } from "@/components/sql-widgets/sqlWidgetUtils";
-import { PIE_CHART_EXPECTED_RESULT } from "@/components/sql-widgets/constants";
+import { linkedQueryOf } from "@/components/sql-widgets/sqlWidgetUtils";
+import { WidgetMessage } from "@/components/sql-widgets/shared";
+import { WidgetHeader } from "@/components/ui/WidgetTitle";
+import { ChartValueLegend, PieCallout } from "@/components/sql-widgets/chartLegend";
+import { limitCategories, rowsToCategories } from "@/components/sql-widgets/chartData";
+import { CHART_SKETCH_HINT } from "@/components/sql-widgets/constants";
+import {
+  fitPieCallouts,
+  type ChartStyle,
+  type LegendPosition,
+  type LegendValues,
+} from "@/components/sql-widgets/chartLegendUtils";
+import { categoryFills, previewColors, type ChartColors } from "@/components/sql-widgets/chartColors";
+import PieChartSketch from "./PieChartSketch";
+import WidgetDraftTile from "./WidgetDraftTile";
+import PieChartSettingsDialog, { type PieChartSettings } from "./PieChartSettingsDialog";
 import { SelectedFile } from '@/contexts/SelectedFileContext';
-import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
-import { LocalFilterDropdown } from '@/components/ui/LocalFilterDropdown';
 import { useDashboardLocalFilter } from '@/hooks/useDashboardLocalFilter';
+
+// Matches the `max-h-[450px]` of the chart container below.
+const CHART_MAX_HEIGHT = 450;
+// Donut hole size relative to the outer radius (recharts' 50% / 80% defaults).
+const DONUT_INNER_SHARE = 0.625;
+// Recharts keeps a 5px margin on every side of a pie chart.
+const RECHARTS_MARGIN = 5;
+// Font size limits (px) for the donut center: the total and the center text below it.
+const CENTER_VALUE_MAX = 30;
+const CENTER_VALUE_MIN = 10;
+const CENTER_TEXT_MAX = 14;
+const CENTER_TEXT_MIN = 8;
+const CENTER_LINE_GAP = 4;
+// Rough average glyph width as a share of the font size, for sizing without measuring.
+const GLYPH_WIDTH = 0.6;
+
+/**
+ * Sizes the donut center (total plus center text) to fit inside the hole of
+ * radius `innerRadius`: both lines shrink with the hole, and center text that
+ * is still too long is cut off with an ellipsis. Positions are offsets from
+ * the chart center.
+ */
+function fitDonutCenter(value: string, ring: string, innerRadius: number) {
+  if (innerRadius <= 0) {
+    // Hole size not known yet: the full-size layout, nothing shortened.
+    return {
+      value,
+      valueSize: CENTER_VALUE_MAX,
+      valueY: -CENTER_TEXT_MAX / 2,
+      ring,
+      ringSize: CENTER_TEXT_MAX,
+      ringY: CENTER_VALUE_MAX / 2 + CENTER_LINE_GAP,
+    };
+  }
+  // Usable box inside the hole, keeping clear of the ring.
+  const box = innerRadius * 2 * 0.75;
+  const clamp = (size: number, min: number, max: number) => Math.max(min, Math.min(max, size));
+  let valueSize = clamp(box / (Math.max(value.length, 1) * GLYPH_WIDTH), CENTER_VALUE_MIN, CENTER_VALUE_MAX);
+  let ringSize = clamp(box / (Math.max(ring.length, 1) * GLYPH_WIDTH), CENTER_TEXT_MIN, CENTER_TEXT_MAX);
+  ringSize = Math.min(ringSize, valueSize * 0.6);
+
+  // Shrink both together if the two lines are taller than the box.
+  const height = valueSize + CENTER_LINE_GAP + ringSize;
+  if (height > box && box > 0) {
+    const scale = box / height;
+    valueSize = Math.max(CENTER_VALUE_MIN, valueSize * scale);
+    ringSize = Math.max(CENTER_TEXT_MIN, ringSize * scale);
+  }
+
+  const maxChars = Math.max(1, Math.floor(box / (ringSize * GLYPH_WIDTH)));
+  const shortRing = ring.length > maxChars ? `${ring.slice(0, Math.max(1, maxChars - 1))}…` : ring;
+  const blockTop = -(valueSize + CENTER_LINE_GAP + ringSize) / 2;
+  return {
+    value,
+    valueSize,
+    valueY: blockTop + valueSize / 2,
+    ring: shortRing,
+    ringSize,
+    ringY: blockTop + valueSize + CENTER_LINE_GAP + ringSize / 2,
+  };
+}
 
 
 // Define props interface for components (extend as needed)
@@ -33,6 +103,7 @@ interface ComponentProps {
     show_tooltip?: boolean;
     label_column?: string;
     value_column?: string;
+    chart_style?: ChartStyle;
   };
   onUpdate?: (updates: Partial<GridStackNode>) => void;
   isEditMode?: boolean;
@@ -60,6 +131,12 @@ const PieChartComponent: React.FC<ComponentProps> = ({
   const [title, setTitle] = useState(node.title || '');
   const [labelColumn, setLabelColumn] = useState(node.label_column || '');
   const [valueColumn, setValueColumn] = useState(node.value_column || '');
+  const [showLegend, setShowLegend] = useState(node.show_legend ?? true);
+  const [legendPosition, setLegendPosition] = useState<LegendPosition>(node.chart_style?.legend?.position ?? 'bottom');
+  const [legendValues, setLegendValues] = useState<LegendValues>(node.chart_style?.legend?.values ?? 'none');
+  const [showCategoryCount, setShowCategoryCount] = useState(node.chart_style?.show_category_count ?? true);
+  const [colors, setColors] = useState<ChartColors>(node.chart_style?.colors ?? {});
+  const [maxCategories, setMaxCategories] = useState<number | null>(node.chart_style?.max_categories ?? null);
 
   // Sync with node when it changes
   useEffect(() => {
@@ -70,12 +147,18 @@ const PieChartComponent: React.FC<ComponentProps> = ({
     setTitle(node.title || '');
     setLabelColumn(node.label_column || '');
     setValueColumn(node.value_column || '');
+    setShowLegend(node.show_legend ?? true);
+    setLegendPosition(node.chart_style?.legend?.position ?? 'bottom');
+    setLegendValues(node.chart_style?.legend?.values ?? 'none');
+    setShowCategoryCount(node.chart_style?.show_category_count ?? true);
+    setColors(node.chart_style?.colors ?? {});
+    setMaxCategories(node.chart_style?.max_categories ?? null);
   }, [node]);
+
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const fileId = selectedFile?.id;
   const projectId = selectedFile?.project;
-  const discovery = useColumnDiscovery(fileId, query, linked?.id);
-  const availableColumns = discovery.columns;
 
   // View mode: run the (local or linked) query and shape rows for recharts.
   const data = useSqlQueryData({
@@ -89,53 +172,73 @@ const PieChartComponent: React.FC<ComponentProps> = ({
   });
   const isLoading = data.loading;
   const error = data.error;
-  const chartData = React.useMemo(
-    () =>
-      labelColumn && valueColumn
-        ? data.rows.map((row, index): Record<string, unknown> => ({
-            [labelColumn]: row[labelColumn],
-            [valueColumn]: parseFloat(String(row[valueColumn])) || 0,
-            fill: `var(--chart-${(index % 5) + 1})`,
-          }))
-        : [],
-    [data.rows, labelColumn, valueColumn]
-  );
+  const chartData = React.useMemo(() => {
+    if (!labelColumn || !valueColumn) return [];
+    const slices = limitCategories(rowsToCategories(data.rows, labelColumn, valueColumn), maxCategories);
+    // A pie chart always colors per category.
+    const fills = categoryFills(slices, { ...colors, mode: "category" });
+    return slices.map((slice, index): Record<string, unknown> => ({
+      [labelColumn]: slice.label,
+      [valueColumn]: slice.value,
+      fill: fills[index],
+    }));
+  }, [data.rows, labelColumn, valueColumn, colors, maxCategories]);
+  // Categories in the query result, before grouping into "Other".
+  const categoryCount = labelColumn && valueColumn ? data.rows.length : 0;
 
-  // Handlers for edit mode changes
-  const handleQueryChange = (value: string) => {
-    setQuery(value);
-    onUpdate?.({ query: value });
+  // The applied settings, edited as a draft in the settings popup.
+  const settings: PieChartSettings = {
+    title,
+    query,
+    linked,
+    labelColumn,
+    valueColumn,
+    chartType,
+    ringText,
+    showLegend,
+    legendPosition,
+    legendValues,
+    showCategoryCount,
+    colors,
+    maxCategories,
   };
 
-  const handleLinkChange = (link: LinkedQuery | null) => {
-    setLinked(link);
-    onUpdate?.({ query_asset: link?.id ?? null, query_asset_name: link?.name ?? null });
-  };
-
-  const handleRingTextChange = (value: string) => {
-    setRingText(value);
-    onUpdate?.({ ring_text: value });
-  };
-
-  const handleChartTypeChange = (value: 'pie' | 'donut') => {
-    setChartType(value);
-    onUpdate?.({ chart_type: value });
-  };
-
-  const handleTitleChange = (value: string) => {
-    setTitle(value);
-    onUpdate?.({ title: value });
-  };
-
-
-  const handleLabelColumnChange = (value: string) => {
-    setLabelColumn(value);
-    onUpdate?.({ label_column: value });
-  };
-
-  const handleValueColumnChange = (value: string) => {
-    setValueColumn(value);
-    onUpdate?.({ value_column: value });
+  const applySettings = (next: PieChartSettings) => {
+    setTitle(next.title);
+    setQuery(next.query);
+    setLinked(next.linked);
+    setLabelColumn(next.labelColumn);
+    setValueColumn(next.valueColumn);
+    setChartType(next.chartType);
+    setRingText(next.ringText);
+    setShowLegend(next.showLegend);
+    setLegendPosition(next.legendPosition);
+    setLegendValues(next.legendValues);
+    setShowCategoryCount(next.showCategoryCount);
+    setColors(next.colors);
+    setMaxCategories(next.maxCategories);
+    onUpdate?.({
+      title: next.title,
+      query: next.query,
+      query_asset: next.linked?.id ?? null,
+      query_asset_name: next.linked?.name ?? null,
+      label_column: next.labelColumn,
+      value_column: next.valueColumn,
+      chart_type: next.chartType,
+      ring_text: next.ringText,
+      show_legend: next.showLegend,
+      chart_style: {
+        ...node.chart_style,
+        show_category_count: next.showCategoryCount,
+        colors: next.colors,
+        max_categories: next.maxCategories ?? undefined,
+        legend: {
+          ...node.chart_style?.legend,
+          position: next.legendPosition,
+          values: next.legendValues,
+        },
+      },
+    });
   };
 
   // Generate chart config dynamically
@@ -146,11 +249,11 @@ const PieChartComponent: React.FC<ComponentProps> = ({
       }
     };
 
-    chartData.forEach((item, index) => {
+    chartData.forEach((item) => {
       const key = String(item[labelColumn]);
       config[key] = {
         label: key,
-        color: `var(--chart-${(index % 5) + 1})`,
+        color: String(item.fill),
       };
     });
 
@@ -161,95 +264,103 @@ const PieChartComponent: React.FC<ComponentProps> = ({
     return chartData.reduce((acc, curr) => acc + (Number(curr[valueColumn]) || 0), 0);
   }, [chartData, valueColumn]);
 
+  const legendItems = React.useMemo(
+    () =>
+      chartData.map((item) => ({
+        label: String(item[labelColumn]),
+        value: Number(item[valueColumn]) || 0,
+        color: String(item.fill),
+      })),
+    [chartData, labelColumn, valueColumn]
+  );
+
+  // Callouts need the chart's pixel size to shrink the pie until they fit.
+  const [chartArea, setChartArea] = useState<HTMLDivElement | null>(null);
+  const [chartSize, setChartSize] = useState<{ width: number; height: number } | null>(null);
+  useEffect(() => {
+    if (!chartArea) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      setChartSize({ width, height: Math.min(height, CHART_MAX_HEIGHT) });
+    });
+    observer.observe(chartArea);
+    return () => observer.disconnect();
+  }, [chartArea]);
+
+  const showCallouts = showLegend && legendPosition === 'callouts';
+  const calloutFit = React.useMemo(
+    () =>
+      showCallouts && chartSize && chartSize.width > 0 && chartSize.height > 0
+        ? fitPieCallouts(legendItems, legendValues, chartSize.width, chartSize.height)
+        : null,
+    [showCallouts, chartSize, legendItems, legendValues]
+  );
+  // Radius of the donut hole in px, for sizing the center text: the fitted
+  // callout radius, or else recharts' default 50% of half the smaller chart side.
+  const donutHoleRadius = calloutFit
+    ? calloutFit.radius * DONUT_INNER_SHARE
+    : chartSize
+      ? ((Math.min(chartSize.width, chartSize.height) - 2 * RECHARTS_MARGIN) / 2) * 0.5
+      : 0;
+
+  const calloutShares = React.useMemo(
+    () => legendItems.map((item) => (totalValue ? item.value / totalValue : 0)),
+    [legendItems, totalValue]
+  );
+  const calloutLabel = React.useCallback(
+    (props: PieLabelRenderProps) => (
+      <PieCallout {...props} values={legendValues} shares={calloutShares} twoLines={calloutFit?.twoLines} />
+    ),
+    [legendValues, calloutShares, calloutFit]
+  );
+
   if (isEditMode) {
+    // In edit mode the tile shows a layout sketch; the settings open in a popup.
     return (
-      <Card className="w-full h-full rounded-none overflow-auto">
-        <CardHeader>
-          <CardTitle>Pie Chart Component</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium mb-2">Chart Title</label>
-            <Input
-            value={title}
-            onChange={(e) => handleTitleChange(e.target.value)}
-            placeholder="Enter chart title"
-            />
-          </div>
-          <QuerySection
-            widgetId={node.component_id}
-            query={query}
-            onQueryChange={handleQueryChange}
-            linkedQuery={linked}
-            onLinkChange={handleLinkChange}
-            fileId={fileId}
-            projectId={projectId}
-            expectedResult={PIE_CHART_EXPECTED_RESULT}
-            editorTitle="Pie chart query"
-            discovery={discovery}
+      <WidgetDraftTile
+        typeLabel="Pie chart"
+        hint={CHART_SKETCH_HINT}
+        notice={labelColumn && valueColumn ? undefined : "No query and columns set yet."}
+        onConfigure={() => setSettingsOpen(true)}
+        sketch={
+          <PieChartSketch
+            title={title}
+            chartType={chartType}
+            showCenterText={Boolean(ringText)}
+            showLegend={showLegend}
+            legendPosition={legendPosition}
+            legendValues={legendValues}
+            showCategoryCount={showCategoryCount}
+            colors={previewColors(colors)}
+            className="h-full w-full"
           />
-          <div className="grid grid-cols-2 gap-4">
-            <ColumnInput
-              id={`pie-label-${node.component_id}`}
-              label="Label column"
-              value={labelColumn}
-              onChange={handleLabelColumnChange}
-              columns={availableColumns}
-              placeholder={availableColumns[0] ? `e.g. ${availableColumns[0]}` : "detect columns first"}
-            />
-            <ColumnInput
-              id={`pie-value-${node.component_id}`}
-              label="Value column"
-              value={valueColumn}
-              onChange={handleValueColumnChange}
-              columns={availableColumns}
-              placeholder={availableColumns[1] ? `e.g. ${availableColumns[1]}` : "detect columns first"}
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Chart Type</label>
-            <div className="flex justify-center gap-2">
-              <Button
-                variant={chartType === 'pie' ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => handleChartTypeChange('pie')}
-              >
-                Pie Chart
-              </Button>
-              <Button
-                variant={chartType === 'donut' ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => handleChartTypeChange('donut')}
-              >
-                Donut Chart
-              </Button>
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Center Text (Donut)</label>
-            <Input
-              value={ringText}
-              onChange={(e) => handleRingTextChange(e.target.value)}
-              placeholder="Center text for donut chart"
-            />
-          </div>
-
-        </CardContent>
-      </Card>
-
-      
+        }
+      >
+        <PieChartSettingsDialog
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          widgetId={node.component_id}
+          settings={settings}
+          onApply={applySettings}
+          fileId={fileId}
+          projectId={projectId}
+        />
+      </WidgetDraftTile>
     );
   }
 
   // VIEW MODE
   return (
-    <Card className="w-full h-full rounded-none flex flex-col overflow-hidden">
-      <CardHeader className="flex flex-row items-center gap-2 space-y-0 px-4 py-2 border-b text-left">
-        <CardTitle className="shrink min-w-0 truncate text-sm">{title}</CardTitle>
-        <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(p => !p)} />
-        <LocalFilterDropdown fileId={fileId} onFilterChange={handleLocalFilterChange} value={localFilterParams} />
-      </CardHeader>
-      <CardContent className="flex-1 flex justify-center items-center pb-0 min-h-0">
+    <Card className="w-full h-full rounded-none flex flex-col gap-0 overflow-hidden pt-0">
+      <WidgetHeader
+        label={title}
+        fileId={fileId}
+        filterEnabled={filterEnabled}
+        onToggleFilter={() => setFilterEnabled((p) => !p)}
+        localFilterParams={localFilterParams}
+        onLocalFilterChange={handleLocalFilterChange}
+      />
+      <CardContent className="flex-1 flex flex-col items-center gap-3 pt-2 pb-0 min-h-0">
         {!selectedFile ? (
           <WidgetMessage>Select an event log to display the pie chart.</WidgetMessage>
         ) : error ? (
@@ -260,9 +371,10 @@ const PieChartComponent: React.FC<ComponentProps> = ({
           <WidgetMessage>No data to display. Configure the query and columns in edit mode.</WidgetMessage>
         ) : (
           <>
+        <div ref={setChartArea} className="w-full min-h-0 flex-1 flex items-center justify-center">
         <ChartContainer
           config={chartConfig}
-          className="w-full h-full max-h-[450px]"
+          className="w-full h-full aspect-auto max-h-[450px]"
         >
           <PieChart>
               <ChartTooltip
@@ -273,35 +385,45 @@ const PieChartComponent: React.FC<ComponentProps> = ({
               data={chartData}
               dataKey={valueColumn}
               nameKey={labelColumn}
-              innerRadius={chartType === 'donut' ? "50%" : 0}
+              // With callouts the pie shrinks to leave room for their lines and text
+              outerRadius={calloutFit ? calloutFit.radius : "80%"}
+              innerRadius={chartType === 'donut' ? (calloutFit ? calloutFit.radius * DONUT_INNER_SHARE : "50%") : 0}
+              label={showCallouts ? calloutLabel : false}
+              labelLine={false}
               strokeWidth={5}
             >
               {chartType === 'donut' && ringText && (
                 <PieLabel
                   content={({ viewBox }) => {
                     if (viewBox && "cx" in viewBox && "cy" in viewBox) {
+                      const cx = Number(viewBox.cx) || 0;
+                      const cy = Number(viewBox.cy) || 0;
+                      const center = fitDonutCenter(totalValue.toLocaleString(), ringText, donutHoleRadius);
+                      // dy instead of dominant-baseline, which not every browser applies to SVG text
                       return (
-                        <text
-                          x={viewBox.cx}
-                          y={viewBox.cy}
-                          textAnchor="middle"
-                          dominantBaseline="middle"
-                        >
-                          <tspan
-                            x={viewBox.cx}
-                            y={viewBox.cy}
-                            className="fill-foreground text-3xl font-bold"
+                        <g>
+                          <text
+                            x={cx}
+                            y={cy + center.valueY}
+                            dy="0.35em"
+                            textAnchor="middle"
+                            fontSize={center.valueSize}
+                            className="fill-foreground font-bold"
                           >
-                            {totalValue.toLocaleString()}
-                          </tspan>
-                          <tspan
-                            x={viewBox.cx}
-                            y={(viewBox.cy || 0) + 24}
-                            className="fill-muted-foreground break-normal"
+                            {center.value}
+                          </text>
+                          <text
+                            x={cx}
+                            y={cy + center.ringY}
+                            dy="0.35em"
+                            textAnchor="middle"
+                            fontSize={center.ringSize}
+                            className="fill-muted-foreground"
                           >
-                            {ringText}
-                          </tspan>
-                        </text>
+                            <title>{ringText}</title>
+                            {center.ring}
+                          </text>
+                        </g>
                       );
                     }
                   }}
@@ -309,14 +431,24 @@ const PieChartComponent: React.FC<ComponentProps> = ({
               )}
             </Pie>
           </PieChart>
-          </ChartContainer>
-        </>
+        </ChartContainer>
+        </div>
+        {showLegend && (legendPosition === 'bottom' || legendPosition === 'columns') && (
+          <ChartValueLegend
+            items={legendItems}
+            layout={legendPosition}
+            values={legendValues}
+            className="w-full max-h-[40%] shrink-0 overflow-y-auto"
+          />
+        )}
+          </>
         )}
       </CardContent>
-      {chartData.length > 0 && (
+      {showCategoryCount && chartData.length > 0 && (
         <CardFooter className="flex-col gap-2 text-sm">
           <div className="leading-none text-muted-foreground">
-            {chartData.length} categories
+            {categoryCount} categories
+            {maxCategories && categoryCount > maxCategories ? `, largest ${maxCategories} shown` : ""}
           </div>
         </CardFooter>
       )}

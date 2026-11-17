@@ -88,4 +88,37 @@ describe("OCCN visualization stopping-point focus", () => {
       screen.queryByRole("button", { name: /Focus stopping point/ })
     ).toBeNull();
   });
+
+  it("shows the object types in the shared legend, collapsed under the title", async () => {
+    render(
+      <div style={{ width: 900, height: 500 }}>
+        <ReactFlowProvider>
+          <OCCNVisualizer data={{ ...net, object_types: ["order", "item"] }} />
+        </ReactFlowProvider>
+      </div>
+    );
+
+    const chip = await screen.findByRole("button", { name: "Show object types" });
+    expect(chip.textContent).toContain("2 object types");
+    fireEvent.click(chip);
+    expect(screen.getByTestId("occn-legend").textContent).toContain("order");
+  });
+
+  it("is fitted at first and leaves the fit mode when zooming, until fit is pressed", async () => {
+    render(
+      <div style={{ width: 900, height: 500 }}>
+        <ReactFlowProvider>
+          <OCCNVisualizer data={net} />
+        </ReactFlowProvider>
+      </div>
+    );
+
+    const fit = () => screen.getByRole("button", { name: "Fit to view" });
+    await waitFor(() => expect(screen.getByText("approve order")).toBeTruthy());
+    expect(fit().getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(screen.getByTitle("Zoom in"));
+    expect(fit().getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(fit());
+    expect(fit().getAttribute("aria-pressed")).toBe("true");
+  });
 });

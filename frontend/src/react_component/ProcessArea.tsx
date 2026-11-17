@@ -1,16 +1,8 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-
-import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
-import { LocalFilterDropdown } from '@/components/ui/LocalFilterDropdown';
+import { WidgetHeader } from '@/components/ui/WidgetTitle';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import {
@@ -332,18 +324,19 @@ export default function ProcessArea({
 
   return (
     <Card
-      className={`@container/card w-full flex flex-col ${fillContainer ? 'h-full rounded-none' : ''}`}
+      className={`@container/card w-full flex flex-col gap-0 py-0 overflow-hidden ${fillContainer ? 'h-full rounded-none' : ''}`}
     >
-      <CardHeader className="items-center relative z-10 justify-between flex-shrink-0 px-4 py-2 text-left border-b">
-        <div className="flex flex-wrap items-center gap-2">
-          <CardTitle className="text-sm">Process Area Visualizer</CardTitle>
-          <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(prev => !prev)} />
-          <LocalFilterDropdown fileId={fileId} value={localFilterParams} onFilterChange={(params) => {
-            setLocalFilterParams(params);
-            onLocalFilterChange?.(params);
-          }} />
-        </div>
-        <CardAction className="flex flex-wrap items-center justify-end gap-2">
+      <WidgetHeader
+        label="Process Area Visualizer"
+        fileId={fileId}
+        filterEnabled={filterEnabled}
+        onToggleFilter={() => setFilterEnabled(prev => !prev)}
+        localFilterParams={localFilterParams}
+        onLocalFilterChange={(params) => {
+          setLocalFilterParams(params);
+          onLocalFilterChange?.(params);
+        }}
+      >
           <Select value={sourceValue} onValueChange={handleSourceChange}>
             <SelectTrigger
               className="h-8 w-[220px]"
@@ -488,8 +481,7 @@ export default function ProcessArea({
             <RefreshCcw className="h-4 w-4" />
             Reload
           </Button>
-        </CardAction>
-      </CardHeader>
+      </WidgetHeader>
       <CardContent
         className={`p-0 ${fillContainer ? 'flex-1 min-h-0' : ''}`}
         style={fillContainer ? undefined : { height: heightStyle }}
