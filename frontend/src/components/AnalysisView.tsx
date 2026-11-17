@@ -171,7 +171,7 @@ export function AnalysisView() {
                 </div>
                 <CardDescription>Object-centric event distribution</CardDescription>
               </CardHeader>
-              <CardContent>
+              <CardContent className={`${CANVAS_HEIGHT_CLASS} p-0`}>
                 <DottedChart
                   fileId={selectedFile?.id}
                   xAxis={{ type: "time" }}
@@ -184,7 +184,7 @@ export function AnalysisView() {
                   showControls={true}
                   filterEnabled={filterEnabled}
                   localFilterParams={dottedChartFilter}
-                  className="md:min-h-[700px]"
+                  className="h-full"
                 />
               </CardContent>
             </Card>

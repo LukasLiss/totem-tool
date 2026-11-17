@@ -45,10 +45,14 @@ export interface ObjectTypePanelEntry {
   highlightable?: boolean;
 }
 
-/** A group of colour entries below the types (e.g. clusters); `dashed`: an outlined, dashed dot (e.g. outliers). */
+/**
+ * A group of colour entries below the types (e.g. clusters); `dashed`: an
+ * outlined, dashed dot (e.g. outliers); `marker`: drawn instead of the dot
+ * (e.g. a point shape).
+ */
 export interface ObjectTypePanelSection {
   title: string;
-  entries: { key: string; label: string; color: string; dashed?: boolean }[];
+  entries: { key: string; label: string; color: string; dashed?: boolean; marker?: React.ReactNode }[];
 }
 
 export interface ObjectTypePanelProps {
@@ -78,8 +82,14 @@ export interface ObjectTypePanelProps {
   searchFrom?: number;
   /** More groups listed below the types, with a small heading each. */
   sections?: ObjectTypePanelSection[];
+  /** What the listed entries are, for the chip and the search ("12 activities"); object types by default. */
+  noun?: { one: string; other: string };
   testId?: string;
 }
+
+const OBJECT_TYPE_NOUN = { one: 'object type', other: 'object types' };
+
+const withArticle = (word: string) => `${/^[aeiou]/i.test(word) ? 'an' : 'a'} ${word}`;
 
 const PANEL_SHELL = CANVAS_PANEL_SHELL;
 
@@ -100,6 +110,7 @@ export function ObjectTypePanel({
   onCollapsedChange,
   searchFrom = 10,
   sections = [],
+  noun = OBJECT_TYPE_NOUN,
   testId,
 }: ObjectTypePanelProps) {
   const toggles = visibility != null && onVisibilityChange != null;
@@ -138,7 +149,7 @@ export function ObjectTypePanel({
 
   if (collapsed) {
     const label =
-      `${types.length} object type${types.length === 1 ? '' : 's'}` +
+      `${types.length} ${types.length === 1 ? noun.one : noun.other}` +
       (hiddenCount > 0 ? ` · ${hiddenCount} hidden` : '') +
       (pins && pinned ? ` · ${pinned} highlighted` : '');
     return (
@@ -223,8 +234,8 @@ export function ObjectTypePanel({
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Find a type…"
-            aria-label="Find an object type"
+            placeholder={noun === OBJECT_TYPE_NOUN ? 'Find a type…' : `Find ${withArticle(noun.one)}…`}
+            aria-label={`Find ${withArticle(noun.one)}`}
             className="h-7 w-full rounded-md border border-slate-200 bg-white/70 px-2 text-xs outline-none focus:border-slate-400"
           />
         </div>
@@ -325,7 +336,11 @@ export function ObjectTypePanel({
             </div>
           );
         })}
-        {listed.length === 0 && <div className="px-2 py-1.5 text-xs text-slate-400">No type matches.</div>}
+        {listed.length === 0 && (
+          <div className="px-2 py-1.5 text-xs text-slate-400">
+            {noun === OBJECT_TYPE_NOUN ? 'No type matches.' : `No ${noun.one} matches.`}
+          </div>
+        )}
         {sections
           .filter((section) => section.entries.length > 0)
           .map((section) => (
@@ -333,15 +348,21 @@ export function ObjectTypePanel({
               <div className="px-2 pb-0.5 pt-1 text-[11px] font-medium text-slate-500">{section.title}</div>
               {section.entries.map((entry) => (
                 <div key={entry.key} className="flex min-h-8 items-center gap-2.5 pl-2 pr-1">
-                  <span
-                    aria-hidden
-                    className="h-3 w-3 shrink-0 rounded-full"
-                    style={
-                      entry.dashed
-                        ? { border: `2px dashed ${entry.color}` }
-                        : { background: entry.color, border: `2px solid ${entry.color}` }
-                    }
-                  />
+                  {entry.marker ? (
+                    <span aria-hidden className="flex h-3 w-3 shrink-0 items-center justify-center">
+                      {entry.marker}
+                    </span>
+                  ) : (
+                    <span
+                      aria-hidden
+                      className="h-3 w-3 shrink-0 rounded-full"
+                      style={
+                        entry.dashed
+                          ? { border: `2px dashed ${entry.color}` }
+                          : { background: entry.color, border: `2px solid ${entry.color}` }
+                      }
+                    />
+                  )}
                   <span className="truncate text-[13px] text-slate-700">{entry.label}</span>
                 </div>
               ))}

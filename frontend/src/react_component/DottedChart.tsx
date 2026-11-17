@@ -15,10 +15,16 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Skeleton } from "@/components/ui/skeleton";
 import { VisualizerEmptyState } from "@/components/ui/VisualizerEmptyState";
+import { WidgetTitle, type WidgetTitleProps } from "@/components/ui/WidgetTitle";
 import { cn } from "@/lib/utils";
-import { X } from "lucide-react";
-import { Map as MapIcon } from "lucide-react";
+import { Crop, Map as MapIcon, Scan, Settings2, Shuffle, X } from "lucide-react";
 import { useFilterVersion } from "@/store/filterStore";
+import { CanvasPanel } from "@/components/canvas/CanvasPanel";
+import { ControlPill } from "@/components/canvas/ControlPill";
+import { ObjectTypePanel, type ObjectTypePanelSection } from "@/components/canvas/ObjectTypePanel";
+import { PillToggle } from "@/components/canvas/PillToggle";
+import { CANVAS_PANEL_SHELL } from "@/components/canvas/panelHeader";
+import { panelAtPill, roomBelowForPill, type PillRegion, type PillSpot } from "@/components/canvas/pillSpots";
 import {
   colorGroupKey,
   formatAxisTick,
@@ -35,7 +41,7 @@ import {
   type RowOrderOption,
 } from "./dottedChart/dottedChartUtils";
 import {
-  DottedChartControls,
+  DottedChartViewForm,
   type DottedChartConfig,
 } from "./dottedChart/DottedChartControls";
 import { DottedChartMinimap } from "./dottedChart/DottedChartMinimap";
@@ -57,6 +63,8 @@ interface DottedChartProps {
   onEventClick?: (event: OCEvent) => void;
   filterEnabled?: boolean;
   localFilterParams?: Record<string, string>;
+  /** The card's title with its filters, drawn on the canvas like the other canvas cards'. */
+  title?: WidgetTitleProps;
 }
 
 const DEFAULT_X_AXIS: AxisOption = { type: "time" };
@@ -67,9 +75,28 @@ const DEFAULT_ROW_ORDER: RowOrderOption = "first_occurrence";
 const DEFAULT_ROW_ORDER_DIRECTION: RowOrderDirection = "asc";
 const MIN_BRUSH_POINTS = 10;
 const MIN_VISIBLE_ROWS = 1;
-const CHART_MARGIN = { top: 72, right: 8, bottom: 18, left: 0 };
-const Y_AXIS_WIDTH = 118;
-const CHART_HEIGHT = 560;
+/** Distance of the legend, minimap and pill from the canvas edges (as on the other canvases). */
+const CHROME_INSET = 16;
+/** Height of a collapsed panel chip (the legend's). */
+const CHIP_HEIGHT = 30;
+/**
+ * Room kept free below the plot for the pill (16 px margin + 50 px pill)
+ * and above it for the legend chip, so neither covers points or the x axis.
+ * Fixed, whatever spot the pill takes: the plot never moves with it.
+ */
+const PILL_BAND = CHROME_INSET + 50 + 4;
+/** Gap between the title and the legend chip, and below them to the plot. */
+const CHROME_GAP = 8;
+/** Font size (px) of the axes' tick labels: the x axis' (the chart's text-xs) and the y axis' own. */
+const X_TICK_FONT_PX = 12;
+const Y_TICK_FONT_PX = 11;
+/** The y axis takes the width of its longest label, between these. */
+const Y_AXIS_MIN_WIDTH = 36;
+const Y_AXIS_MAX_WIDTH = 170;
+/** Room between a y label and the plot (the axis' tickMargin) plus a little air. */
+const Y_AXIS_LABEL_ROOM = 8 + 6;
+const DOTTED_PILL_SPOTS: readonly PillSpot[] = ["bottom-right", "bottom-left", "left", "right"];
+type DottedChartPanel = "view" | "range" | "sample";
 const MAX_Y_TICK_LABEL_LENGTH = 24;
 const MAX_VISIBLE_Y_AXIS_LABELS = 20;
 const MINIMAP_MAX_POINTS = 2_000;
@@ -91,6 +118,7 @@ export default function DottedChart({
   onEventClick,
   filterEnabled = true,
   localFilterParams,
+  title,
 }: DottedChartProps) {
   const defaultConfig = useMemo<DottedChartConfig>(
     () => ({
@@ -175,6 +203,15 @@ export default function DottedChart({
   const pressStartRef = useRef<{ clientX: number; clientY: number } | null>(null);
   const pressedPointRef = useRef<ChartPoint | null>(null);
   const [pinnedEvent, setPinnedEvent] = useState<PinnedEvent | null>(null);
+  // Canvas chrome: the panel open from the pill, where the pill sits, the legend and the minimap.
+  const [openPanel, setOpenPanel] = useState<DottedChartPanel | null>(null);
+  const [pillRegion, setPillRegion] = useState<PillRegion | null>(null);
+  const [legendCollapsed, setLegendCollapsed] = useState(true);
+  const [minimapShown, setMinimapShown] = useState(true);
+  const togglePanel = useCallback(
+    (panel: DottedChartPanel) => setOpenPanel((current) => (current === panel ? null : panel)),
+    []
+  );
   const effectiveBrushRange = useMemo(
     () => clampBrushRange(brushRange, points.length),
     [brushRange, points.length]
@@ -235,7 +272,25 @@ export default function DottedChart({
     () => sampleAxisTicks(displayedYAxisTicks, MAX_VISIBLE_Y_AXIS_LABELS),
     [displayedYAxisTicks]
   );
+  // As wide as the longest label shown, so short labels leave no empty strip on the left.
+  const yAxisWidth = useMemo(() => {
+    const widest = displayedYAxisLabelTicks.reduce((max, tick) => {
+      const label = displayedYLabels.get(tick) ?? formatAxisTick(tick);
+      return Math.max(max, measureTickLabel(truncateAxisLabel(label), Y_TICK_FONT_PX));
+    }, 0);
+    return Math.round(clampNumber(widest + Y_AXIS_LABEL_ROOM, Y_AXIS_MIN_WIDTH, Y_AXIS_MAX_WIDTH));
+  }, [displayedYAxisLabelTicks, displayedYLabels]);
   const xDomain = useMemo(() => getDataDomain(displayedPoints.map((point) => point.chartX)), [displayedPoints]);
+  // The last x tick (often the domain's end) is centred on the plot's right
+  // edge: half of its label reaches past it, and the canvas' 16 px inset follows.
+  const chartRightMargin = useMemo(
+    () =>
+      Math.round(
+        CHROME_INSET +
+          measureTickLabel(formatXAxisTick(xDomain[1], effectiveConfig.xAxis, xLabels), X_TICK_FONT_PX) / 2
+      ),
+    [effectiveConfig.xAxis, xDomain, xLabels]
+  );
   const yDomain = useMemo(() => getRowDomain(displayedYAxisTicks), [displayedYAxisTicks]);
   const datasetTotalCount = data?.dataset_total_count ?? data?.total_count ?? 0;
   const effectiveFramePoints = framePoints.length ? framePoints : points;
@@ -256,6 +311,22 @@ export default function DottedChart({
     () => buildColorLegendEntries(effectiveFramePoints, colorScale, colorKeys),
     [colorKeys, colorScale, effectiveFramePoints]
   );
+  // The point shapes, listed below the colours (only when a shape is chosen).
+  const shapeLegendSections = useMemo<ObjectTypePanelSection[]>(() => {
+    if (effectiveConfig.shapeBy.type === "none") return [];
+    const color = "var(--muted-foreground)";
+    return [
+      {
+        title: `Shape: ${formatAxisLabel(effectiveConfig.shapeBy)}`,
+        entries: Array.from(shapeScale.entries()).map(([key, shape]) => ({
+          key,
+          label: key,
+          color,
+          marker: <ShapeMarker shape={shape} color={color} />,
+        })),
+      },
+    ];
+  }, [effectiveConfig.shapeBy, shapeScale]);
 
   useEffect(() => {
     if (
@@ -579,8 +650,21 @@ export default function DottedChart({
     [effectiveConfig, resetZoomFrame]
   );
 
+  // Without a plot the title (it holds the filters) stays above the message, where the canvas draws it.
+  const withTitle = (content: React.ReactNode) =>
+    title ? (
+      <div className="flex h-full flex-col">
+        <div className="shrink-0 px-4 pb-2 pt-4">
+          <WidgetTitle {...title} />
+        </div>
+        <div className="min-h-0 flex-1">{content}</div>
+      </div>
+    ) : (
+      content
+    );
+
   if (!fileId) {
-    return (
+    return withTitle(
       <div className={cn("h-[320px]", className)}>
         <VisualizerEmptyState
           label="OC Dotted Chart"
@@ -592,7 +676,7 @@ export default function DottedChart({
   }
 
   if (loading && !data) {
-    return (
+    return withTitle(
       <div className={cn("flex h-[420px] flex-col gap-3 p-4", className)}>
         <Skeleton className="h-5 w-48" />
         <Skeleton className="min-h-0 flex-1" />
@@ -601,75 +685,56 @@ export default function DottedChart({
   }
 
   if (error) {
-    return <DottedChartState className={className} message={error} />;
+    return withTitle(<DottedChartState className={className} message={error} />);
   }
 
   if (!points.length) {
-    return <DottedChartState className={className} message="No dotted chart events for this selection" />;
+    return withTitle(<DottedChartState className={className} message="No dotted chart events for this selection" />);
   }
 
+  // The title and the legend chip stack in the top-left corner (as on the
+  // other canvases); the plot starts below them.
+  const hasLegend = effectiveConfig.colorBy.type !== "none" && colorLegendEntries.length > 0;
+  const chartMargin = {
+    top:
+      CHROME_INSET +
+      (title ? CHIP_HEIGHT + CHROME_GAP : 0) +
+      (hasLegend ? CHIP_HEIGHT + CHROME_GAP : 0),
+    right: chartRightMargin,
+    bottom: 4,
+    // The y labels start where the title and legend do.
+    left: CHROME_INSET,
+  };
+
+  const panelPlace = panelAtPill(pillRegion);
+  const statusOnLeft = pillRegion?.spot !== "bottom-left";
+  const sampledText =
+    `${displayedPoints.length.toLocaleString()} of ${datasetTotalCount.toLocaleString()} events` +
+    (data?.sampled ? " · sampled" : "");
+
   return (
-    <div className={cn("relative flex min-h-[500px] flex-col gap-3", className)}>
-      <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-muted-foreground">
-        <div className="flex flex-wrap items-center gap-2">
-          <span>
-            Showing {displayedPoints.length.toLocaleString()} of {datasetTotalCount.toLocaleString()} events
-            {data?.sampled ? " (sampled)" : ""}
-          </span>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={handleResample}
-            disabled={loading || effectiveFramePoints.length === 0}
-            className="h-7 px-2 text-xs"
-          >
-            Resample
-          </Button>
-        </div>
-        <div className="flex items-center gap-2">
-          <span>{data?.outlier_count.toLocaleString() ?? 0} outliers preserved</span>
-        </div>
-      </div>
-
-      {showControls && (
-        <DottedChartControls
-          fileId={fileId}
-          config={effectiveConfig}
-          onConfigChange={handleConfigChange}
-        />
-      )}
-
-      <DottedChartZoomControls
-        xRange={effectiveControlBrushRange}
-        yRange={effectiveControlYBrushRange}
-        points={effectiveFramePoints}
-        yTicks={effectiveFrameYTicks}
-        xAxis={effectiveConfig.xAxis}
-        yAxis={effectiveConfig.yAxis}
-        xLabels={frameXLabels}
-        yLabels={frameYLabels}
-        isApplying={isZoomApplying}
-        isZoomed={isViewportZoomed}
-        onReset={handleResetViewport}
-        onApply={handleRangeApply}
-      />
-
+    <div className={cn("relative h-full min-h-[320px] overflow-hidden", className)}>
+      {/* The plot fills the canvas, above the pill's band. */}
       <div
         ref={chartWrapperRef}
-        className="relative shrink-0 select-none"
+        className="absolute inset-x-0 top-0 select-none"
+        style={{ bottom: PILL_BAND }}
+        // The plot's insets, for finding it when its grid lines can't be read (getChartPlotBounds).
+        data-plot-left={yAxisWidth + chartMargin.left}
+        data-plot-right={chartMargin.right}
+        data-plot-top={chartMargin.top}
+        data-plot-bottom={chartMargin.bottom}
         onMouseDown={handleWrapperMouseDown}
         onMouseMove={handleChartMouseMove}
         onMouseUp={handleWrapperMouseUp}
         onMouseLeave={handleChartMouseLeave}
       >
-        <div ref={chartInteractionRef}>
+        <div ref={chartInteractionRef} className="h-full">
           <ChartContainer
             config={{ events: { label: "Events", color: "var(--chart-1)" } }}
-            className="aspect-auto shrink-0 rounded-md border bg-background p-1"
-            style={{ height: CHART_HEIGHT }}
+            className="aspect-auto h-full w-full"
           >
-            <ScatterChart data={displayedPoints} margin={CHART_MARGIN}>
+            <ScatterChart data={displayedPoints} margin={chartMargin}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis
                 dataKey="chartX"
@@ -690,7 +755,7 @@ export default function DottedChart({
                 allowDecimals={false}
                 tick={(props) => <DottedChartYAxisTick {...props} labels={displayedYLabels} />}
                 tickMargin={8}
-                width={Y_AXIS_WIDTH}
+                width={yAxisWidth}
               />
               <Tooltip
                 cursor={{ strokeDasharray: "3 3" }}
@@ -749,29 +814,175 @@ export default function DottedChart({
           ref={dragOverlayRef}
           className="pointer-events-none fixed z-20 hidden border border-ring bg-ring/10"
         />
-        {showMinimap && (
-          <DottedChartMinimapOverlay
-            points={minimapPoints}
-            framePoints={effectiveFramePoints}
-            yTicks={effectiveFrameYTicks}
-            colorScale={colorScale}
-            colorKeys={colorKeys}
-            xRange={effectiveControlBrushRange}
-            yRange={effectiveControlYBrushRange}
-            onRangeChange={handleRangeApply}
-          />
+        {isZoomApplying && (
+          // A new range (minimap, drag, Range panel) takes a moment to draw:
+          // say so over the plot. The spinner turns on the compositor, so it
+          // keeps turning while the points are being drawn.
+          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
+            <div
+              role="status"
+              className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-slate-700"
+              style={{ ...CANVAS_PANEL_SHELL, borderRadius: 9999 }}
+            >
+              <ZoomApplyingSpinner />
+              Updating view…
+            </div>
+          </div>
         )}
       </div>
 
-      {effectiveConfig.colorBy.type !== "none" && colorLegendEntries.length > 0 && (
-        <DottedChartColorLegend
-          label={formatAxisLabel(effectiveConfig.colorBy)}
-          entries={colorLegendEntries}
+      {showMinimap && minimapShown && (
+        <DottedChartMinimapOverlay
+          points={minimapPoints}
+          framePoints={effectiveFramePoints}
+          yTicks={effectiveFrameYTicks}
+          colorScale={colorScale}
+          colorKeys={colorKeys}
+          xRange={effectiveControlBrushRange}
+          yRange={effectiveControlYBrushRange}
+          onRangeChange={handleRangeApply}
         />
       )}
 
+      {(title || hasLegend) && (
+        // As on the other canvases: the title in the top-left corner, the
+        // shared legend close under it, down to just above the pill.
+        <div
+          style={{
+            position: "absolute",
+            top: CHROME_INSET,
+            left: CHROME_INSET,
+            right: CHROME_INSET,
+            zIndex: 12,
+            display: "flex",
+            flexDirection: "column",
+            gap: CHROME_GAP,
+            pointerEvents: "none",
+            maxHeight: `calc(100% - ${CHROME_INSET + roomBelowForPill(pillRegion, true, { reach: 280 })}px)`,
+          }}
+        >
+          {title && (
+            <div style={{ alignSelf: "flex-start", maxWidth: "100%", pointerEvents: "auto" }}>
+              <WidgetTitle {...title} />
+            </div>
+          )}
+          {hasLegend && (
+          <div style={{ display: "flex", flexDirection: "column", minHeight: 0, alignSelf: "flex-start", pointerEvents: "auto" }}>
+          <ObjectTypePanel
+            testId="dotted-chart-legend"
+            title={`Color: ${formatAxisLabel(effectiveConfig.colorBy)}`}
+            noun={
+              effectiveConfig.colorBy.type === "activity"
+                ? { one: "activity", other: "activities" }
+                : { one: "value", other: "values" }
+            }
+            types={colorLegendEntries.map((entry) => ({ type: entry.value, color: entry.color }))}
+            sections={shapeLegendSections}
+            collapsed={legendCollapsed}
+            onCollapsedChange={setLegendCollapsed}
+          />
+          </div>
+          )}
+        </div>
+      )}
+
+      {/* What the plot shows, on the side of the pill's band the pill leaves free. */}
+      <div
+        className="pointer-events-none absolute flex items-center text-[11px] tabular-nums text-muted-foreground"
+        style={{
+          bottom: CHROME_INSET,
+          height: 50,
+          ...(statusOnLeft ? { left: CHROME_INSET } : { right: CHROME_INSET }),
+        }}
+      >
+        {sampledText}
+      </div>
+
+      <ControlPill
+        spots={DOTTED_PILL_SPOTS}
+        storageKey="dottedChart"
+        onRegionChange={setPillRegion}
+      >
+        <Button
+          type="button"
+          // Grey while the whole range is shown, like the other canvases' fit button.
+          variant={isViewportZoomed ? "outline" : "secondary"}
+          size="icon"
+          onClick={handleResetViewport}
+          disabled={!isViewportZoomed}
+          className="h-9 w-9 rounded-full"
+          title={isViewportZoomed ? "Show the whole range" : "The whole range is shown"}
+          aria-label="Show the whole range"
+          aria-pressed={!isViewportZoomed}
+        >
+          <Scan className="h-4 w-4" />
+        </Button>
+        {showControls && (
+          <PillToggle label="View" open={openPanel === "view"} onToggle={() => togglePanel("view")}>
+            <Settings2 className="h-4 w-4" />
+          </PillToggle>
+        )}
+        <PillToggle label="Range" open={openPanel === "range"} onToggle={() => togglePanel("range")}>
+          <Crop className="h-4 w-4" />
+        </PillToggle>
+        <PillToggle label="Sample" open={openPanel === "sample"} onToggle={() => togglePanel("sample")}>
+          <Shuffle className="h-4 w-4" />
+        </PillToggle>
+        {showMinimap && (
+          <Button
+            type="button"
+            variant={minimapShown ? "secondary" : "outline"}
+            size="icon"
+            onClick={() => setMinimapShown((current) => !current)}
+            className="h-9 w-9 rounded-full"
+            title={minimapShown ? "Hide minimap" : "Show minimap"}
+            aria-label="Minimap"
+            aria-pressed={minimapShown}
+          >
+            <MapIcon className="h-4 w-4" />
+          </Button>
+        )}
+      </ControlPill>
+
+      {openPanel === "view" && showControls && (
+        <CanvasPanel title="View" onClose={() => setOpenPanel(null)} style={{ position: "absolute", ...panelPlace, zIndex: 30 }}>
+          <DottedChartViewForm fileId={fileId} config={effectiveConfig} onConfigChange={handleConfigChange} />
+        </CanvasPanel>
+      )}
+      {openPanel === "range" && (
+        <CanvasPanel title="Range" onClose={() => setOpenPanel(null)} style={{ position: "absolute", ...panelPlace, zIndex: 30 }}>
+          <DottedChartZoomControls
+            xRange={effectiveControlBrushRange}
+            yRange={effectiveControlYBrushRange}
+            points={effectiveFramePoints}
+            yTicks={effectiveFrameYTicks}
+            xAxis={effectiveConfig.xAxis}
+            yAxis={effectiveConfig.yAxis}
+            xLabels={frameXLabels}
+            yLabels={frameYLabels}
+            isApplying={isZoomApplying}
+            onApply={handleRangeApply}
+          />
+        </CanvasPanel>
+      )}
+      {openPanel === "sample" && (
+        <CanvasPanel title="Sample" onClose={() => setOpenPanel(null)} style={{ position: "absolute", ...panelPlace, zIndex: 30 }}>
+          <DottedChartSampleForm
+            shownCount={displayedPoints.length}
+            totalCount={datasetTotalCount}
+            sampled={Boolean(data?.sampled)}
+            outlierCount={data?.outlier_count ?? 0}
+            maxPoints={effectiveConfig.maxPoints}
+            canChangeMaxPoints={showControls}
+            onMaxPointsChange={(maxPoints) => handleConfigChange({ ...effectiveConfig, maxPoints })}
+            onResample={handleResample}
+            resampleDisabled={loading || effectiveFramePoints.length === 0}
+          />
+        </CanvasPanel>
+      )}
+
       {loading && (
-        <div className="absolute inset-0 flex items-center justify-center rounded-md bg-background/60 text-sm text-muted-foreground">
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-background/60 text-sm text-muted-foreground">
           Loading dotted chart...
         </div>
       )}
@@ -798,42 +1009,25 @@ const DottedChartMinimapOverlay = React.memo(function DottedChartMinimapOverlay(
   yRange: BrushRange;
   onRangeChange: (xRange: BrushRange, yRange: BrushRange) => void;
 }) {
-  const [showMinimap, setShowMinimap] = useState(true);
-
+  // Top right, opposite the legend; shown and hidden from the pill.
   return (
     <div
-      className="absolute right-3 top-3 z-20 flex flex-col items-end gap-1.5"
+      className="absolute z-20"
+      style={{ top: CHROME_INSET, right: CHROME_INSET }}
       onMouseDown={(event) => event.stopPropagation()}
       onMouseMove={(event) => event.stopPropagation()}
       onMouseUp={(event) => event.stopPropagation()}
     >
-      <Button
-        type="button"
-        variant="outline"
-        size="icon"
-        className="h-8 w-8 rounded-full bg-background/90 shadow-sm"
-        onClick={() => setShowMinimap((current) => !current)}
-        title={showMinimap ? "Hide minimap" : "Show minimap"}
-      >
-        <span className="relative flex h-4 w-4 items-center justify-center">
-          <MapIcon className="h-4 w-4" />
-          {showMinimap && (
-            <span className="absolute h-0.5 w-5 rotate-45 rounded-full bg-current" />
-          )}
-        </span>
-      </Button>
-      <div className={cn(!showMinimap && "hidden")}>
-        <DottedChartMinimap
-          points={points}
-          framePoints={framePoints}
-          yTicks={yTicks}
-          colorScale={colorScale}
-          colorKeys={colorKeys}
-          xRange={xRange}
-          yRange={yRange}
-          onRangeChange={onRangeChange}
-        />
-      </div>
+      <DottedChartMinimap
+        points={points}
+        framePoints={framePoints}
+        yTicks={yTicks}
+        colorScale={colorScale}
+        colorKeys={colorKeys}
+        xRange={xRange}
+        yRange={yRange}
+        onRangeChange={onRangeChange}
+      />
     </div>
   );
 });
@@ -848,8 +1042,6 @@ function DottedChartZoomControls({
   xLabels,
   yLabels,
   isApplying,
-  isZoomed,
-  onReset,
   onApply,
 }: {
   xRange: BrushRange;
@@ -861,8 +1053,6 @@ function DottedChartZoomControls({
   xLabels: Map<number, string>;
   yLabels: Map<number, string>;
   isApplying: boolean;
-  isZoomed: boolean;
-  onReset: () => void;
   onApply: (xRange: BrushRange, yRange: BrushRange) => void;
 }) {
   const pointCount = points.length;
@@ -891,10 +1081,6 @@ function DottedChartZoomControls({
   const yEndPercent = indexToPercent(effectiveDraftYRange.endIndex, rowCount);
   const yStartLabelPlacement = getRangeLabelPlacement(yStartPercent);
   const yEndLabelPlacement = getRangeLabelPlacement(yEndPercent);
-  const isDraftZoomed =
-    !isFullRange(effectiveDraftXRange, pointCount) ||
-    !isFullRange(effectiveDraftYRange, rowCount);
-  const canReset = isZoomed || isDraftZoomed;
 
   useEffect(() => {
     const lastIdx = Math.max(0, points.length - 1);
@@ -999,22 +1185,12 @@ function DottedChartZoomControls({
     []
   );
 
-  const handleResetZoom = useCallback(() => {
-    const nextXRange = fullBrushRange(pointCount);
-    const nextYRange = fullBrushRange(rowCount);
-    setDraftXRange(nextXRange);
-    setDraftYRange(nextYRange);
-    setStartDateInput(formatRangeDateInput(points[nextXRange.startIndex], xAxis));
-    setEndDateInput(formatRangeDateInput(points[nextXRange.endIndex], xAxis));
-    setDateError(null);
-    onReset();
-  }, [onReset, pointCount, points, rowCount, xAxis]);
-
+  // The Range panel's body; the whole range comes back with the pill's first button.
   return (
-    <div className="rounded-md border bg-background px-3 py-3">
-      <div className="flex items-start gap-3">
-        <div className="relative min-w-0 flex-1 px-1">
-          <Label className="mb-2 block text-xs text-muted-foreground">{formatAxisLabel(yAxis)}</Label>
+    <div className="w-[300px]">
+      <div>
+        <div className="relative min-w-0 px-1">
+          <Label className="mb-2 block text-[11px] text-muted-foreground">{formatAxisLabel(yAxis)}</Label>
           <Slider
             min={0}
             max={Math.max(0, rowCount - 1)}
@@ -1047,21 +1223,11 @@ function DottedChartZoomControls({
             </span>
           </div>
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={handleResetZoom}
-          disabled={!canReset || (pointCount <= 1 && rowCount <= 1)}
-          className="mt-5 h-8 shrink-0"
-        >
-          Reset
-        </Button>
       </div>
 
-      <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(280px,1fr)_auto] lg:items-start">
+      <div className="mt-3 grid gap-3">
         <div className="relative w-full px-1">
-          <Label className="mb-2 block text-xs text-muted-foreground">{formatAxisLabel(xAxis)}</Label>
+          <Label className="mb-2 block text-[11px] text-muted-foreground">{formatAxisLabel(xAxis)}</Label>
           <Slider
             min={0}
             max={Math.max(0, pointCount - 1)}
@@ -1093,13 +1259,13 @@ function DottedChartZoomControls({
           </div>
         </div>
 
-        <form className="flex flex-wrap items-start gap-2" onSubmit={handleApplySubmit}>
+        <form className="flex flex-wrap items-center gap-2" onSubmit={handleApplySubmit}>
           <Input
             value={startDateInput}
             onChange={handleDateInputChange(setStartDateInput)}
             placeholder="dd/mm/yyyy"
             disabled={!supportsDateBounds || pointCount <= 1}
-            className="h-8 w-[116px] text-xs"
+            className="h-7 w-[96px] px-2 text-xs"
             aria-label="Start date"
           />
           <Input
@@ -1107,15 +1273,14 @@ function DottedChartZoomControls({
             onChange={handleDateInputChange(setEndDateInput)}
             placeholder="dd/mm/yyyy"
             disabled={!supportsDateBounds || pointCount <= 1}
-            className="h-8 w-[116px] text-xs"
+            className="h-7 w-[96px] px-2 text-xs"
             aria-label="End date"
           />
           <Button
             type="submit"
-            variant="outline"
             size="sm"
             disabled={pointCount <= 1 && rowCount <= 1}
-            className="h-8"
+            className="ml-auto h-7 px-2.5 text-xs"
           >
             Apply
           </Button>
@@ -1136,31 +1301,98 @@ function ZoomApplyingSpinner() {
   );
 }
 
-function DottedChartColorLegend({
-  label,
-  entries,
-}: {
-  label: string;
-  entries: ColorLegendEntry[];
-}) {
+/** A point shape for the legend, drawn like the plot draws it (12 px). */
+function ShapeMarker({ shape, color }: { shape: string; color: string }) {
+  const common = { fill: color, stroke: color, strokeWidth: 1.5 };
   return (
-    <div className="rounded-md border bg-background px-3 py-2">
-      <div className="mb-2 text-xs font-medium text-muted-foreground">
-        Color: {label}
+    <svg width={12} height={12} viewBox="0 0 12 12" aria-hidden>
+      {shape === "square" ? (
+        <rect x={2.5} y={2.5} width={7} height={7} rx={1} {...common} />
+      ) : shape === "triangle" ? (
+        <polygon points="6,1.5 10.5,10 1.5,10" {...common} />
+      ) : shape === "diamond" ? (
+        <polygon points="6,1 11,6 6,11 1,6" {...common} />
+      ) : shape === "cross" ? (
+        <path d="M2 2 L10 10 M10 2 L2 10" fill="none" stroke={color} strokeWidth={2} />
+      ) : (
+        <circle cx={6} cy={6} r={3.5} fill="transparent" stroke={color} strokeWidth={1.75} />
+      )}
+    </svg>
+  );
+}
+
+/** The Sample panel's body: what is shown, how many points to load, and a new sample. */
+function DottedChartSampleForm({
+  shownCount,
+  totalCount,
+  sampled,
+  outlierCount,
+  maxPoints,
+  canChangeMaxPoints,
+  onMaxPointsChange,
+  onResample,
+  resampleDisabled,
+}: {
+  shownCount: number;
+  totalCount: number;
+  sampled: boolean;
+  outlierCount: number;
+  maxPoints: number;
+  canChangeMaxPoints: boolean;
+  onMaxPointsChange: (maxPoints: number) => void;
+  onResample: () => void;
+  resampleDisabled: boolean;
+}) {
+  const [draft, setDraft] = useState(maxPoints);
+  useEffect(() => setDraft(maxPoints), [maxPoints]);
+
+  return (
+    <div className="grid w-[260px] gap-3 text-xs">
+      <div className="grid gap-1 text-muted-foreground">
+        <span className="tabular-nums">
+          Showing {shownCount.toLocaleString()} of {totalCount.toLocaleString()} events
+          {sampled ? " (sampled)" : ""}
+        </span>
+        <span className="tabular-nums">{outlierCount.toLocaleString()} outliers preserved</span>
       </div>
-      <div className="flex max-h-24 flex-wrap gap-x-4 gap-y-2 overflow-y-auto pr-1">
-        {entries.map((entry) => (
-          <div key={entry.value} className="flex min-w-0 items-center gap-2 text-xs">
-            <span
-              className="h-2.5 w-2.5 shrink-0 rounded-full border bg-transparent"
-              style={{ borderColor: entry.color }}
-              aria-hidden="true"
-            />
-            <span className="max-w-[180px] truncate text-muted-foreground" title={entry.value}>
-              {entry.value}
-            </span>
+      {canChangeMaxPoints && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <Label className="text-[11px] text-muted-foreground">Max points</Label>
+            <span className="text-[11px] tabular-nums text-muted-foreground">{draft.toLocaleString()}</span>
           </div>
-        ))}
+          <Slider
+            min={1000}
+            max={50000}
+            step={1000}
+            value={[draft]}
+            onValueChange={(values) => setDraft(values[0] ?? draft)}
+          />
+        </div>
+      )}
+      <div className="flex justify-end gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={onResample}
+          disabled={resampleDisabled}
+          className="h-7 px-2.5 text-xs"
+          title="Draw a new sample of the range shown"
+        >
+          Resample
+        </Button>
+        {canChangeMaxPoints && (
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => onMaxPointsChange(draft)}
+            disabled={draft === maxPoints}
+            className="h-7 px-2.5 text-xs"
+          >
+            Apply
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -1295,12 +1527,14 @@ function getChartPlotBounds(wrapper: HTMLDivElement | null): PlotBounds | null {
   const gridBounds = getRenderedGridBounds(wrapper, svg);
   if (gridBounds) return gridBounds;
 
+  // The plot's insets as the chart was last laid out (set on the wrapper).
+  const inset = (name: string) => Number(wrapper.dataset[name] ?? 0);
   const wrapperRect = wrapper.getBoundingClientRect();
   const svgRect = svg.getBoundingClientRect();
-  const left = svgRect.left + Y_AXIS_WIDTH + CHART_MARGIN.left;
-  const right = svgRect.right - CHART_MARGIN.right;
-  const top = svgRect.top + CHART_MARGIN.top;
-  const bottom = svgRect.bottom - CHART_MARGIN.bottom;
+  const left = svgRect.left + inset("plotLeft");
+  const right = svgRect.right - inset("plotRight");
+  const top = svgRect.top + inset("plotTop");
+  const bottom = svgRect.bottom - inset("plotBottom");
 
   if (right <= left || bottom <= top) return null;
   return {
@@ -1602,6 +1836,23 @@ function formatXAxisTick(
   }
 
   return labels.get(numericValue) ?? formatAxisTick(numericValue);
+}
+
+let tickMeasure: CanvasRenderingContext2D | null | undefined;
+
+/** Width (px) of a tick label as an axis draws it (`fontPx`, the page's font). */
+function measureTickLabel(text: string, fontPx: number): number {
+  if (tickMeasure === undefined) {
+    try {
+      tickMeasure = document.createElement("canvas").getContext("2d");
+    } catch {
+      tickMeasure = null;
+    }
+  }
+  // Without a canvas: about the width of an average character.
+  if (!tickMeasure) return text.length * fontPx * 0.6;
+  tickMeasure.font = `${fontPx}px ${getComputedStyle(document.body).fontFamily || "sans-serif"}`;
+  return tickMeasure.measureText(text).width;
 }
 
 function truncateAxisLabel(label: string): string {

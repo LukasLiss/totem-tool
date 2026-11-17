@@ -1,7 +1,7 @@
 /**
  * Translating between the dotted chart's axis settings and the values of its
- * option dropdowns, shared by DottedChartControls and the dashboard widget's
- * settings popup. (Moved here unchanged from DottedChartControls.)
+ * option dropdowns, shared by the chart's View panel (DottedChartControls) and
+ * the dashboard widget's settings popup.
  */
 import type { AxisOption, RowOrderOption } from "./dottedChartUtils";
 import { DEFAULT_DOTTED_CHART_OPTIONS, type DottedChartOption } from "./useDottedChartOptions";
