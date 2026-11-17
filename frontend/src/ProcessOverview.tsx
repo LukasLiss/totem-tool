@@ -80,10 +80,13 @@ export function ProcessOverview() {
     <SidebarProvider>
       <AppSidebar />
       <CloseMobileSidebarOnNavigate />
-      <SidebarInset>
+      {/* Exactly as tall as the window (less the inset sidebar's 8 px margin
+          above and below from md up): the page itself never scrolls; the top
+          bar stays and only the content below it scrolls. */}
+      <SidebarInset className="h-dvh md:h-[calc(100dvh-1rem)] overflow-hidden">
         <FilterStackProvider>
           {viewMode.type !== 'dashboard' && (
-            <header className="flex items-center gap-3 px-4 border-b bg-background" style={{ minHeight: 60 }}>
+            <header className="flex shrink-0 items-center gap-3 px-4 border-b bg-background" style={{ minHeight: 60 }}>
               <SidebarTrigger className="shrink-0" style={{ width: 36, height: 36 }} />
               <div className="w-px h-7 bg-border shrink-0" />
               <div className="flex-1 overflow-x-auto">
@@ -91,7 +94,7 @@ export function ProcessOverview() {
               </div>
             </header>
           )}
-          <div className="flex-1">
+          <div className="min-h-0 flex-1 overflow-auto">
             {renderContent()}
           </div>
           <ComputationPanel />
