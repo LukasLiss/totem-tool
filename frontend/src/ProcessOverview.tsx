@@ -94,7 +94,16 @@ export function ProcessOverview() {
               </div>
             </header>
           )}
-          <div className="min-h-0 flex-1 overflow-auto">
+          {/* The content below the bar scrolls. The dashboard brings its own
+              bar and scroll area: it gets the whole height as a flex child
+              (a percentage height would not resolve in every browser). */}
+          <div
+            className={
+              viewMode.type === 'dashboard'
+                ? 'flex min-h-0 flex-1 flex-col overflow-hidden'
+                : 'min-h-0 flex-1 overflow-auto'
+            }
+          >
             {renderContent()}
           </div>
           <ComputationPanel />
