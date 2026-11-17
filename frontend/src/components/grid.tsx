@@ -231,8 +231,9 @@ const GridContent: React.FC = () => {
 
   return (
     // Fills the page's content area (as tall as the window, see
-    // ProcessOverview): the top bar stays, only the grid below it scrolls.
-    <div className="flex flex-col h-full overflow-hidden">
+    // ProcessOverview) as its flex child: the top bar stays, only the grid
+    // below it scrolls.
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="flex items-center gap-3 px-4 p-2 border-b bg-background" style={{ minHeight: 60 }}>
         <SidebarTrigger className="shrink-0" style={{ width: 36, height: 36 }} />
         <div className="w-px h-7 bg-border shrink-0" />
@@ -273,9 +274,8 @@ const GridContent: React.FC = () => {
         )}
 
       </div>
-      <div className="flex flex-row flex-grow overflow-hidden">
-        
-        <div className="flex-grow overflow-auto">
+      <div className="flex min-h-0 flex-row flex-grow overflow-hidden">
+        <div className="min-h-0 flex-grow overflow-auto">
           <GridContainer>
             <DashboardGrid />
           </GridContainer>
@@ -316,7 +316,10 @@ const Grid: React.FC = () => {
   const { viewMode } = useContext(DashboardContext);
   const dashboardId = viewMode.type === 'dashboard' ? viewMode.id : null;
   return (
-  <SidebarInset>
+  // Limited to the page's content area (min-h-0): by default a flex child
+  // grows to its content, and the whole dashboard would be taller than the
+  // window — then the bar scrolls away with it instead of the grid scrolling.
+  <SidebarInset className="min-h-0 overflow-hidden">
     <GridProvider selectedFile={selectedFile} dashboardId={dashboardId}>
       <GridContent />
     </GridProvider>
