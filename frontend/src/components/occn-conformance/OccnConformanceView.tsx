@@ -138,7 +138,7 @@ export function OccnConformanceView({
   }
 
   return (
-    <div className="flex flex-col md:min-h-screen">
+    <div className="flex flex-col md:min-h-full">
       <SidebarTrigger className="m-2 max-md:hidden" />
       <main className="flex-1 p-4 md:pt-0">
         <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-6">
