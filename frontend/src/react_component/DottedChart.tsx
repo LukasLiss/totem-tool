@@ -85,8 +85,10 @@ const CHIP_HEIGHT = 30;
  * Fixed, whatever spot the pill takes: the plot never moves with it.
  */
 const PILL_BAND = CHROME_INSET + 50 + 4;
-/** Gap between the title and the legend chip, and below them to the plot. */
+/** Gap between the title and the legend chip. */
 const CHROME_GAP = 8;
+/** Gap between the collapsed legend chip and the plot's top (its top y label reaches above it). */
+const LEGEND_PLOT_GAP = 16;
 /** Font size (px) of the axes' tick labels: the x axis' (the chart's text-xs) and the y axis' own. */
 const X_TICK_FONT_PX = 12;
 const Y_TICK_FONT_PX = 11;
@@ -699,7 +701,7 @@ export default function DottedChart({
     top:
       CHROME_INSET +
       (title ? CHIP_HEIGHT + CHROME_GAP : 0) +
-      (hasLegend ? CHIP_HEIGHT + CHROME_GAP : 0),
+      (hasLegend ? CHIP_HEIGHT + LEGEND_PLOT_GAP : 0),
     right: chartRightMargin,
     bottom: 4,
     // The y labels start where the title and legend do.
