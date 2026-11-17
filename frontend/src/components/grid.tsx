@@ -230,7 +230,10 @@ const GridContent: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-dvh overflow-hidden">
+    // As tall as the window less the inset sidebar's 8 px margin above and
+    // below the content (md and up, SidebarInset): otherwise the page is 16 px
+    // taller than the window and scrolls, top bar included.
+    <div className="flex flex-col h-dvh md:h-[calc(100dvh-1rem)] overflow-hidden">
       <div className="flex items-center gap-3 px-4 p-2 border-b bg-background" style={{ minHeight: 60 }}>
         <SidebarTrigger className="shrink-0" style={{ width: 36, height: 36 }} />
         <div className="w-px h-7 bg-border shrink-0" />
