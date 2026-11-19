@@ -1311,11 +1311,14 @@ export const OCDottedChartComponent: React.FC<ComponentProps> = ({
   );
 
   const effectiveFileId = selectedFile?.id;
-  const config = nodeToDottedChartConfig(node);
+  // Kept the same object while the saved settings stay the same: the chart
+  // starts over from these whenever they change, dropping what was picked in
+  // its View panel (which is only for the moment, not saved).
+  const configJson = JSON.stringify(nodeToDottedChartConfig(node));
+  const config = React.useMemo<DottedChartConfig>(() => JSON.parse(configJson), [configJson]);
 
   // Edit mode: the settings as last applied, for the draft (onUpdate changes
   // the node without re-rendering), synced when the saved settings change.
-  const configJson = JSON.stringify(config);
   const [editConfig, setEditConfig] = useState<DottedChartConfig>(config);
   useEffect(() => { setEditConfig(JSON.parse(configJson)); }, [configJson]);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1376,9 +1379,17 @@ export const OCDottedChartComponent: React.FC<ComponentProps> = ({
 
   return (
     <div className="w-full h-full flex flex-col">
-      <WidgetHeader label="OC Dotted Chart" filterEnabled={filterEnabled} onToggleFilter={() => setFilterEnabled(p => !p)} fileId={effectiveFileId} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
-      <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
         <DottedChart
+          // Drawn on the canvas, 16 px from its corner, like the other canvas cards' titles.
+          title={{
+            label: "OC Dotted Chart",
+            fileId: effectiveFileId,
+            filterEnabled,
+            onToggleFilter: () => setFilterEnabled(p => !p),
+            localFilterParams,
+            onLocalFilterChange: handleLocalFilterChange,
+          }}
           fileId={effectiveFileId}
           xAxis={config.xAxis}
           yAxis={config.yAxis}
@@ -1387,7 +1398,8 @@ export const OCDottedChartComponent: React.FC<ComponentProps> = ({
           rowOrder={config.rowOrder}
           rowOrderDirection={config.rowOrderDirection}
           maxPoints={config.maxPoints}
-          showControls={false}
+          // The View panel: changes for the moment; saved ones come from the edit-mode settings.
+          showControls={true}
           showMinimap={true}
           filterEnabled={filterEnabled}
           localFilterParams={localFilterParams}

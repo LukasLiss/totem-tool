@@ -481,7 +481,6 @@ export default function OrgaMiningExplorer({
               embedded
               topRight={viewSelect}
               legendTop={title ? UNDER_TITLE : CHROME_INSET}
-              topInset={title ? UNDER_TITLE : 0}
               nodeSize={initial.pointSize}
               transparentNodes={initial.transparentPoints}
             />
@@ -1006,7 +1005,6 @@ function ResourceGraph({
   nodeSize,
   transparentNodes = false,
   legendTop = CHROME_INSET,
-  topInset = 0,
 }: {
   data: ProfileMatrixData;
   typeColorMap: Record<string, string>;
@@ -1023,17 +1021,8 @@ function ResourceGraph({
   transparentNodes?: boolean;
   /** Embedded: where the legend starts (under the card's title, when there is one). */
   legendTop?: number;
-  /**
-   * Embedded: the graph starts this far down (below the card's title row),
-   * as it did below the former header bar. It gets the canvas less this strip
-   * as its size; its fitting and zoom are the same as for any tile size.
-   */
-  topInset?: number;
 }) {
-  const size = useMemo<Size>(
-    () => ({ width: canvasSize.width, height: Math.max(0, canvasSize.height - topInset) }),
-    [canvasSize.width, canvasSize.height, topInset],
-  );
+  const size: Size = canvasSize;
   const containerRef = useRef<HTMLDivElement>(null);
   // The shared legend (collapsed at first, as before) and where the movable pill sits.
   const [legendCollapsed, setLegendCollapsed] = useState(true);
@@ -1412,7 +1401,7 @@ function ResourceGraph({
           width={size.width}
           height={size.height}
           viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`}
-          style={{ cursor: "crosshair", userSelect: "none", display: "block", marginTop: topInset }}
+          style={{ cursor: "crosshair", userSelect: "none", display: "block" }}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}

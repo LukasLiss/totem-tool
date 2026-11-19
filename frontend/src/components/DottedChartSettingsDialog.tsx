@@ -1,6 +1,6 @@
 /**
  * The OC dotted chart widget's settings popup body: the settings of the
- * chart's configuration panel (DottedChartControls) beside a draft of the
+ * chart's View and Sample panels (DottedChartControls, DottedChart) beside a draft of the
  * chart. Axes, row order and max points are data; color and shape are style.
  * It works on a draft of the settings, mounted on every open, and only hands
  * it over on Apply.

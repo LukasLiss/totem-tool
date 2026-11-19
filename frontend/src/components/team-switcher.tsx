@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useContext, useCallback } from "react";
 import { BookOpen, ChevronsUpDown, Pencil, Plus, Trash2 } from "lucide-react"
+import { TotemLogo } from "@/components/TotemLogo"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -150,8 +151,9 @@ export function Switcher() {
               size="lg"
               className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
             >
-              <div className="bg-sidebar-primary text-sidebar-primary-foreground flex aspect-square size-8 items-center justify-center rounded-lg">
-                <BookOpen className="size-4" />
+              {/* The TOTeM logo, plain in the text colour, where the app's icon goes (same 32 px spot). */}
+              <div className="text-sidebar-foreground flex aspect-square size-8 shrink-0 items-center justify-center">
+                <TotemLogo className="size-8" />
               </div>
               <div className="grid flex-1 text-left text-sm leading-tight">
                 <span className="truncate font-medium">{displayName}</span>
