@@ -514,6 +514,7 @@ def resolve_bundle_components(
     project,
     user,
     event_log_id=None,
+    event_log_is_original=False,
     self_dashboard=None,
     self_name=None,
 ):
@@ -524,6 +525,11 @@ def resolve_bundle_components(
     already reads, so no change to that chain is needed. Warnings describe
     everything that did not survive the move, because the existing write path
     degrades silently by design and the user needs to know what to fix.
+
+    ``event_log_is_original`` says the log being bound to is the very one the
+    bundle was exported from — true for a project import, which restores the
+    log alongside the dashboards. The re-point then needs no warning: the
+    axis and colour settings name columns of a log that has not changed.
 
     ``self_dashboard`` is the dashboard being filled and ``self_name`` the name
     it had *in the file*. A link naming the bundle's own dashboard resolves to
@@ -696,17 +702,18 @@ def resolve_bundle_components(
         if name == "OCDottedChartComponent":
             if event_log_id:
                 resolved["file_id"] = event_log_id
-                warnings.append(
-                    {
-                        "code": WARN_EVENT_LOG_REBOUND,
-                        "component_name": name,
-                        "detail": (
-                            "The dotted chart was re-pointed at this project's event "
-                            "log. Its axis and colour settings name columns from the "
-                            "old log, so check them."
-                        ),
-                    }
-                )
+                if not event_log_is_original:
+                    warnings.append(
+                        {
+                            "code": WARN_EVENT_LOG_REBOUND,
+                            "component_name": name,
+                            "detail": (
+                                "The dotted chart was re-pointed at this project's "
+                                "event log. Its axis and colour settings name columns "
+                                "from the old log, so check them."
+                            ),
+                        }
+                    )
             else:
                 resolved.pop("file_id", None)
                 warnings.append(
