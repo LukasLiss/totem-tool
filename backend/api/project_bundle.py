@@ -64,6 +64,15 @@ from .dashboard_bundle import (
 )
 from .models import Dashboard, EventLog, ImageAsset, Project, ProjectAsset
 
+# The project's global filter, stored in `Project.view_settings` under this
+# key. A dict rather than a bare list because `preferences_error` refuses
+# anything that is not an object, and because it leaves room to add fields
+# later without breaking the format: {"rules": [...]}.
+GLOBAL_FILTER_KEY = "global-filter"
+
+# What an import reports when it had to drop the filter.
+WARN_GLOBAL_FILTER_DROPPED = "global_filter_dropped"
+
 PROJECT_BUNDLE_SCHEMA = "totem-project"
 PROJECT_BUNDLE_VERSION = 1
 
@@ -418,6 +427,94 @@ def read_bundle(zf):
 # ---------------------------------------------------------------------------
 # Import
 # ---------------------------------------------------------------------------
+
+
+def clean_view_settings(raw):
+    """``view_settings`` from a bundle, with anything unusable removed.
+
+    Returns ``(settings, warnings)``. A bundle is a file, so the blob is not
+    stored verbatim the way the view-settings endpoint's own writes are:
+
+    * the whole thing is held to ``preferences_error``, the same size and shape
+      rule ``PUT /api/projects/<id>/view-settings/<key>/`` enforces;
+    * the global filter is parsed with ``FilterStack.from_dict`` — the very
+      call ``apply_filters`` makes — because unlike every other entry here it
+      decides which events a user is shown.
+
+      That check is deliberately no stricter than the live endpoint's: it
+      catches structurally broken rules (not an object, no ``type``) but
+      tolerates an unknown ``type`` or odd params, exactly as applying the same
+      filter through the API would. The bar is "a file cannot put something
+      here the API would refuse", not "the file is more trusted than the UI".
+
+    A bad filter costs the file its filter, not the import: the dashboards,
+    assets and log are still worth having.
+    """
+    # Local imports: `view_preferences` is cheap, but `totem_lib.ocel` pulls in
+    # duckdb, and this module is imported by the viewset at startup.
+    from totem_lib.ocel import FilterStack
+
+    from .view_preferences import preferences_error
+
+    warnings = []
+    if not isinstance(raw, dict):
+        return {}, warnings
+
+    if preferences_error(raw) is not None:
+        # Too large, or not JSON-serialisable. Keep the import, drop the lot:
+        # view settings are preferences, not content.
+        return {}, [
+            {
+                "code": WARN_GLOBAL_FILTER_DROPPED,
+                "component_name": None,
+                "detail": (
+                    "The project's saved view settings were too large to store "
+                    "and were left out. Everything else was imported."
+                ),
+            }
+        ]
+
+    settings = dict(raw)
+    stored = settings.get(GLOBAL_FILTER_KEY)
+    if stored is None:
+        return settings, warnings
+
+    rules = stored.get("rules") if isinstance(stored, dict) else None
+    if not isinstance(rules, list):
+        settings.pop(GLOBAL_FILTER_KEY, None)
+        warnings.append(
+            {
+                "code": WARN_GLOBAL_FILTER_DROPPED,
+                "component_name": None,
+                "detail": (
+                    "The filter saved with this project could not be read, so it "
+                    "was left out. The project imported without it."
+                ),
+            }
+        )
+        return settings, warnings
+
+    if not rules:
+        # An empty stack means "no filter"; keeping the key would be noise.
+        settings.pop(GLOBAL_FILTER_KEY, None)
+        return settings, warnings
+
+    try:
+        FilterStack.from_dict({"filters": rules})
+    except Exception as exc:
+        settings.pop(GLOBAL_FILTER_KEY, None)
+        warnings.append(
+            {
+                "code": WARN_GLOBAL_FILTER_DROPPED,
+                "component_name": None,
+                "detail": (
+                    f"The filter saved with this project is not one this build "
+                    f"can apply, so it was left out ({exc}). The project "
+                    f"imported without it."
+                ),
+            }
+        )
+    return settings, warnings
 
 
 def unique_project_name(desired):

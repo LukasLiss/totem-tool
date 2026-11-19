@@ -26,6 +26,23 @@ Because a project file carries its own event log, models, queries and images, th
 inside it find everything they reference — unlike importing a single dashboard, which has to
 reconnect to whatever the project you import it into already has.
 
+## Filters travel with the project
+
+A filter applied to the **whole project** — the chip stack above the overview — is saved with
+the project and travels in the `.totem` file. Open a project on another machine, or import a
+sample, and it arrives with that filter already applied. Clearing the filter removes it.
+
+Two consequences worth knowing:
+
+- The filter is **shared**, not personal. Applying one changes what everybody who opens that
+  project sees, the same way renaming it does.
+- A project that saves its own filter does **not** get the automatic "large event log" time
+  window, since that would quietly replace the filter it was published with.
+
+Filters inside a **dashboard** (the Filter Stack widget) belong to that dashboard and travel
+with it, whether you export one dashboard or the whole project. The small per-widget filters on
+the overview and analysis pages are personal to you and do not travel.
+
 ## Sample projects
 
 The sample projects on [totem-tool.com](https://totem-tool.com) are ordinary `.totem` files.

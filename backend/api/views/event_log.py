@@ -72,6 +72,7 @@ from ..limits import ProjectLimitReached, check_project_limit, create_project
 from ..project_bundle import (
     ProjectBundleError,
     build_project_bundle,
+    clean_view_settings,
     bundle_filename,
     check_archive_safety,
     read_bundle,
@@ -591,9 +592,13 @@ class EventLogViewSet(OCAlignmentActionsMixin, viewsets.ModelViewSet):
                     # Suffixed when the user already has a project by that
                     # name, so the switcher does not show two identical rows.
                     project.display_name = unique_display_name(user, display_name)
-                view_settings = bundle["project"].get("view_settings")
-                if isinstance(view_settings, dict):
-                    project.view_settings = view_settings
+                # Not stored verbatim: the blob carries the project's global
+                # filter, which decides which events every view shows.
+                view_settings, settings_warnings = clean_view_settings(
+                    bundle["project"].get("view_settings")
+                )
+                warnings.extend(settings_warnings)
+                project.view_settings = view_settings
                 project.save(update_fields=["display_name", "view_settings"])
 
                 event_log = None

@@ -30,6 +30,7 @@ from .models import (
     TextBoxComponent,
 )
 from .project_bundle import (
+    GLOBAL_FILTER_KEY,
     MANIFEST_NAME,
     MAX_COMPRESSION_RATIO,
     PROJECT_BUNDLE_SCHEMA,
@@ -37,6 +38,7 @@ from .project_bundle import (
     ProjectBundleError,
     check_archive_safety,
     safe_member_path,
+    clean_view_settings,
     unique_display_name,
     unique_project_name,
     validate_project_manifest,
@@ -45,6 +47,13 @@ from .project_bundle import (
 _MEDIA_ROOT = tempfile.mkdtemp(prefix="totem-project-bundle-")
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+
+FILTER_RULE = {
+    "id": "r1",
+    "type": "time_range",
+    "enabled": True,
+    "params": {"after": 1_600_000_000, "before": 1_700_000_000},
+}
 
 
 class SafeMemberPathTests(SimpleTestCase):
@@ -479,6 +488,52 @@ class ProjectExportImportApiTests(TestCase):
         self._import(payload, expect=400)
         self.assertEqual(Project.objects.count(), before)
 
+    def test_the_projects_global_filter_survives_a_round_trip(self):
+        """A published sample must open with the filter its author applied."""
+        self.project.view_settings = {
+            GLOBAL_FILTER_KEY: {"rules": [FILTER_RULE]},
+            "ocdfg-variants": {"layout": "elk"},
+        }
+        self.project.save(update_fields=["view_settings"])
+
+        result = self._import(self._export())
+        self.assertEqual(result["warnings"], [])
+        imported = Project.objects.get(pk=result["project"]["id"])
+        self.assertEqual(
+            imported.view_settings[GLOBAL_FILTER_KEY], {"rules": [FILTER_RULE]}
+        )
+        # The other view settings are untouched by the filter handling.
+        self.assertEqual(imported.view_settings["ocdfg-variants"], {"layout": "elk"})
+
+    def test_an_unreadable_filter_is_dropped_and_the_project_still_imports(self):
+        """The dashboards and the log are worth having without the filter."""
+        for broken, why in (
+            ({"rules": "not-a-list"}, "rules is not a list"),
+            ({"rules": ["just a string"]}, "a rule is not an object"),
+            ({"rules": [{"enabled": True}]}, "a rule has no type"),
+            ("not-even-an-object", "the entry is not an object"),
+        ):
+            with self.subTest(why=why):
+                self.project.view_settings = {
+                    GLOBAL_FILTER_KEY: broken,
+                    "ocdfg-variants": {"layout": "elk"},
+                }
+                self.project.save(update_fields=["view_settings"])
+
+                result = self._import(self._export())
+                imported = Project.objects.get(pk=result["project"]["id"])
+                self.assertNotIn(GLOBAL_FILTER_KEY, imported.view_settings)
+                # Everything else survived, and the user was told.
+                self.assertEqual(
+                    imported.view_settings["ocdfg-variants"], {"layout": "elk"}
+                )
+                self.assertIn(
+                    "global_filter_dropped", [w["code"] for w in result["warnings"]]
+                )
+                self.assertEqual(
+                    Dashboard.objects.filter(project=imported).count(), 2
+                )
+
     def test_no_file_is_a_four_hundred(self):
         response = self.client.post("/api/files/import-project/", {}, format="multipart")
         self.assertEqual(response.status_code, 400)
@@ -567,3 +622,42 @@ class UniqueDisplayNameTests(TestCase):
         result = unique_display_name(self.user, base)
         self.assertLessEqual(len(result), limit)
         self.assertTrue(result.endswith("(imported)"))
+
+
+class CleanViewSettingsTests(SimpleTestCase):
+    """What a bundle may put in `Project.view_settings`."""
+
+    def test_keeps_a_valid_filter_untouched(self):
+        raw = {GLOBAL_FILTER_KEY: {"rules": [FILTER_RULE]}, "other": {"a": 1}}
+        settings, warnings = clean_view_settings(raw)
+        self.assertEqual(settings, raw)
+        self.assertEqual(warnings, [])
+
+    def test_a_non_dict_becomes_empty_settings(self):
+        self.assertEqual(clean_view_settings("nonsense"), ({}, []))
+        self.assertEqual(clean_view_settings(None), ({}, []))
+
+    def test_an_empty_rule_list_is_not_stored(self):
+        # "No filter" is the absence of the key, not an empty stack.
+        settings, warnings = clean_view_settings({GLOBAL_FILTER_KEY: {"rules": []}})
+        self.assertEqual(settings, {})
+        self.assertEqual(warnings, [])
+
+    def test_an_oversized_blob_is_refused_whole(self):
+        from .view_preferences import MAX_PREFERENCES_BYTES
+
+        settings, warnings = clean_view_settings({"big": "x" * (MAX_PREFERENCES_BYTES + 1)})
+        self.assertEqual(settings, {})
+        self.assertEqual([w["code"] for w in warnings], ["global_filter_dropped"])
+
+    def test_tolerates_what_the_apply_endpoint_tolerates(self):
+        """Deliberately no stricter than applying the same filter live.
+
+        `FilterStack.from_dict` accepts an unknown `type`, so a bundle carrying
+        one is kept rather than refused — the import must not be fussier than
+        the API the user could have used instead.
+        """
+        odd = {"id": "x", "type": "not-a-known-type", "enabled": True, "params": {}}
+        settings, warnings = clean_view_settings({GLOBAL_FILTER_KEY: {"rules": [odd]}})
+        self.assertEqual(settings[GLOBAL_FILTER_KEY], {"rules": [odd]})
+        self.assertEqual(warnings, [])
