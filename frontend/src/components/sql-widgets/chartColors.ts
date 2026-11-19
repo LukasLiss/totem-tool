@@ -126,6 +126,15 @@ export function previewColors(colors: ChartColors | undefined, labels: string[] 
   return resolveChartColors(five, colors);
 }
 
+/**
+ * Whether the colors depend on the category names (a per-category override,
+ * or stable name-based colors), so a preview needs the real categories to
+ * match the chart; otherwise placeholder labels give the same colors.
+ */
+export function colorsDependOnLabels(colors: ChartColors | undefined): boolean {
+  return Boolean(colors?.stable) || Object.keys(colors?.overrides ?? {}).length > 0;
+}
+
 // The grouped "Other" slice: a faint neutral grey, lighter than any greyscale step.
 export const OTHER_COLOR = "color-mix(in oklab, var(--foreground) 10%, var(--background))";
 

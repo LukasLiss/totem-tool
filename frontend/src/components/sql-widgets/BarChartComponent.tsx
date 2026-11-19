@@ -37,8 +37,9 @@ import {
   type SqlWidgetNodeFields,
   type SqlWidgetProps,
 } from "./sqlWidgetUtils";
-import { categoryFills, previewColors, type ChartColors } from "./chartColors";
+import { categoryFills, colorsDependOnLabels, previewColors, type ChartColors } from "./chartColors";
 import { limitCategories } from "./chartData";
+import { useCategoryList } from "./chartSettingsUtils";
 import type { ChartStyle } from "./chartLegendUtils";
 import BarChartSketch from "./BarChartSketch";
 import BarChartSettingsDialog, { type BarChartSettings } from "./BarChartSettingsDialog";
@@ -94,6 +95,20 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
 
   // Bar charts default to a single color.
   const barColors: ChartColors = useMemo(() => ({ mode: "single", ...colors }), [colors]);
+
+  // The real categories for the edit-mode sketch, loaded like the settings
+  // popup does, so per-category colors show on the tile too. Only needed
+  // when the colors depend on the category names.
+  const sketchCategories = useCategoryList({
+    fileId,
+    query,
+    linked,
+    labelColumn,
+    valueColumn,
+    enabled: isEditMode && colorsDependOnLabels(barColors),
+    maxCategories,
+    groupRest: false,
+  });
 
   const settings: BarChartSettings = {
     title,
@@ -177,7 +192,7 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
             title={title}
             horizontal={horizontal}
             showValues={showValues}
-            colors={previewColors(barColors)}
+            colors={previewColors(barColors, sketchCategories.slices.map((slice) => slice.label))}
             className="h-full w-full"
           />
         }

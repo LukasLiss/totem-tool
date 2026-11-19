@@ -21,7 +21,7 @@ import { useSqlQueryData } from "@/react_component/sql/useSqlQueryData";
 import { WidgetMessage } from "./shared";
 import { WidgetHeader } from "@/components/ui/WidgetTitle";
 import { linkedQueryOf, type SqlWidgetNodeFields, type SqlWidgetProps } from "./sqlWidgetUtils";
-import { categoryFills, previewColors, type ChartColors } from "./chartColors";
+import { categoryFills, colorsDependOnLabels, previewColors, type ChartColors } from "./chartColors";
 import { ChartValueLegend } from "./chartLegend";
 import type { ChartStyle, LegendPosition, PointSize } from "./chartLegendUtils";
 import { POINT_RADIUS_PX, TRANSPARENT_POINT_OPACITY, buildScatterSeries, scatterColors } from "./scatterUtils";
@@ -158,6 +158,27 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
     return { ...built, series, config, legendItems };
   }, [data.rows, data.columns, xColumn, yColumn, seriesColumn, maxSeries, colors]);
 
+  // The real series for the edit-mode sketch, loaded like the settings popup
+  // does, so per-series colors show on the tile too. Only needed when the
+  // colors depend on the series names.
+  const hasSeries = seriesColumn !== "";
+  const sketchColors = scatterColors(colors, hasSeries);
+  const sketchData = useSqlQueryData({
+    fileId,
+    query,
+    queryAssetId: linked?.id,
+    enabled: isEditMode && hasSeries && colorsDependOnLabels(sketchColors),
+    limit: 5000,
+  });
+  const sketchLabels = useMemo(
+    () =>
+      hasSeries
+        ? buildScatterSeries(sketchData.rows, sketchData.columns, { xColumn, yColumn, seriesColumn, maxSeries })
+            .slices.map((slice) => slice.label)
+        : [],
+    [hasSeries, sketchData.rows, sketchData.columns, xColumn, yColumn, seriesColumn, maxSeries]
+  );
+
   if (isEditMode) {
     return (
       <WidgetDraftTile
@@ -173,7 +194,7 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
             legendPosition={legendPosition}
             pointSize={pointSize}
             transparentPoints={transparentPoints}
-            colors={previewColors(scatterColors(colors, seriesColumn !== ""))}
+            colors={previewColors(sketchColors, sketchLabels)}
             className="h-full w-full"
           />
         }

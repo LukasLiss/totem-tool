@@ -19,7 +19,8 @@ import {
   type LegendPosition,
   type LegendValues,
 } from "@/components/sql-widgets/chartLegendUtils";
-import { categoryFills, previewColors, type ChartColors } from "@/components/sql-widgets/chartColors";
+import { categoryFills, colorsDependOnLabels, previewColors, type ChartColors } from "@/components/sql-widgets/chartColors";
+import { useCategoryList } from "@/components/sql-widgets/chartSettingsUtils";
 import PieChartSketch from "./PieChartSketch";
 import WidgetDraftTile from "./WidgetDraftTile";
 import PieChartSettingsDialog, { type PieChartSettings } from "./PieChartSettingsDialog";
@@ -171,6 +172,20 @@ const PieChartComponent: React.FC<ComponentProps> = ({
     localFilterParams: Object.keys(localFilterParams).length > 0 ? localFilterParams : undefined,
   });
   const isLoading = data.loading;
+
+  // The real categories for the edit-mode sketch, loaded like the settings
+  // popup does, so per-category colors show on the tile too. Only needed
+  // when the colors depend on the category names.
+  const sketchCategories = useCategoryList({
+    fileId,
+    query,
+    linked,
+    labelColumn,
+    valueColumn,
+    enabled: isEditMode && colorsDependOnLabels(colors),
+    maxCategories,
+    groupRest: true,
+  });
   const error = data.error;
   const chartData = React.useMemo(() => {
     if (!labelColumn || !valueColumn) return [];
@@ -331,7 +346,7 @@ const PieChartComponent: React.FC<ComponentProps> = ({
             legendPosition={legendPosition}
             legendValues={legendValues}
             showCategoryCount={showCategoryCount}
-            colors={previewColors(colors)}
+            colors={previewColors(colors, sketchCategories.slices.map((slice) => slice.label))}
             className="h-full w-full"
           />
         }
