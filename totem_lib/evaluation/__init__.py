@@ -1,6 +1,8 @@
 from .algorithms import (
     ALGORITHM_NAMES,
     ALGORITHMS,
+    DEFAULT_ALGORITHMS,
+    OPT_IN_ALGORITHMS,
     Algorithm,
     LogContext,
     MissingInput,
@@ -26,6 +28,13 @@ from .datasets import (
     get_log,
     import_args,
 )
+from .runs import (
+    DEFAULT_RUNS_DIR,
+    BenchmarkRow,
+    RunDirectory,
+    SettingsMismatch,
+    latest_per_pair,
+)
 from .plots import (
     FIGURES_DIR,
     plot_all,
@@ -33,16 +42,20 @@ from .plots import (
     rows_from_csv,
     series_for,
 )
+from .environment import collect_environment
 from .harness import (
     DEFAULT_REPEATS,
+    DEFAULT_WARMUP,
     BenchmarkResult,
     Measurement,
     benchmark,
+    confidence_half_width,
     measure_once,
+    peak_rss_mb,
 )
 
 # Should be kept alphabetically sorted.
-# The runnable scripts (download_logs, log_stats) are not re-exported.
+# The runnable scripts (download_logs, log_stats, worker) are not re-exported.
 __all__ = [
     "Algorithm",
     "ALGORITHM_NAMES",
@@ -50,9 +63,15 @@ __all__ = [
     "available_logs",
     "benchmark",
     "BenchmarkResult",
+    "BenchmarkRow",
+    "collect_environment",
+    "confidence_half_width",
     "CSV_FIELDS",
     "DEFAULT_OUT_DIR",
+    "DEFAULT_ALGORITHMS",
     "DEFAULT_REPEATS",
+    "DEFAULT_RUNS_DIR",
+    "DEFAULT_WARMUP",
     "downloadable_logs",
     "EvaluationLog",
     "export",
@@ -63,14 +82,19 @@ __all__ = [
     "import_args",
     "LogContext",
     "LOGS",
+    "latest_per_pair",
     "LogStatistics",
     "measure_once",
     "Measurement",
     "MissingInput",
+    "OPT_IN_ALGORITHMS",
+    "peak_rss_mb",
     "plot_all",
     "plot_metric",
     "rows_from_csv",
+    "RunDirectory",
     "series_for",
+    "SettingsMismatch",
     "SIZE_METRICS",
     "STATISTIC_FIELDS",
     "write_csv",

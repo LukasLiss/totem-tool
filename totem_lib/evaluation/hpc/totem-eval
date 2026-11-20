@@ -1,0 +1,36 @@
+#!/bin/sh
+# One entry point for the evaluation, inside the container or out of it.
+#
+#   totem-eval download [--logs a,b]     fetch the large logs into $TOTEM_EVAL_DATA
+#   totem-eval logs                      names of the logs on disk, one per line
+#   totem-eval run [options]             measure (python evaluation/run_benchmarks.py)
+#   totem-eval status <folder> [--watch 30]
+#   totem-eval figures <folder>...       tables + figures, combining several runs
+#   totem-eval stats                     re-measure log statistics (log_stats.py)
+set -e
+
+EVAL="${TOTEM_EVAL_HOME:-$(cd "$(dirname "$0")/.." && pwd)}"
+# Inside the image the defaults point at a mount on /data; outside it, the repo folders.
+if [ -z "$TOTEM_EVAL_DATA" ] && [ -d /data ]; then export TOTEM_EVAL_DATA=/data/logs; fi
+if [ -z "$TOTEM_EVAL_RUNS" ] && [ -d /data ]; then export TOTEM_EVAL_RUNS=/data/runs; fi
+PYTHON="${PYTHON:-python}"
+
+command="${1:-help}"
+[ $# -gt 0 ] && shift
+case "$command" in
+    run)      exec "$PYTHON" "$EVAL/run_benchmarks.py" "$@" ;;
+    status)   exec "$PYTHON" "$EVAL/status.py" "$@" ;;
+    figures)  exec "$PYTHON" "$EVAL/figures.py" "$@" ;;
+    download) exec "$PYTHON" "$EVAL/download_logs.py" "$@" ;;
+    stats)    exec "$PYTHON" "$EVAL/log_stats.py" "$@" ;;
+    logs)
+        exec "$PYTHON" -c "
+import sys; sys.path[:0] = ['$EVAL/..', '$EVAL/../src']
+from evaluation.datasets import available_logs
+print('\n'.join(log.name for log in available_logs()))" ;;
+    help|-h|--help)
+        sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'
+        echo "logs:  ${TOTEM_EVAL_DATA:-<repo>/test_data/large}"
+        echo "runs:  ${TOTEM_EVAL_RUNS:-<repo>/evaluation/results/runs}" ;;
+    *) echo "unknown command: $command (try: totem-eval help)" >&2; exit 2 ;;
+esac

@@ -339,6 +339,38 @@ def import_ocel_from_csv(file_path: str) -> ObjectCentricEventLog:
     return ocel
 
 
+# SQLite refuses a compound SELECT with more than 500 terms (SQLITE_MAX_COMPOUND_SELECT).
+# Logs with more activities than that - Age of Empires has 831 - are read in batches.
+_SQLITE_UNION_BATCH = 400
+
+
+def _load_sqlite_timestamps(con: sqlite3.Connection, activities: list[str]) -> pl.DataFrame:
+    """
+    Read (ocel_id, _timestamp_str) from every per-activity event table.
+
+    One UNION per batch of activities keeps each query under SQLite's compound SELECT
+    limit. UNION removes duplicate rows within a batch, and the final unique() does the
+    same across batches, so the result matches the former single UNION.
+    """
+    frames = []
+    for start in range(0, len(activities), _SQLITE_UNION_BATCH):
+        batch = activities[start:start + _SQLITE_UNION_BATCH]
+        query = " UNION ".join(
+            'SELECT ocel_id, ocel_time AS _timestamp_str FROM "event_{}"'.format(
+                activity.replace('"', '""')
+            )
+            for activity in batch
+        )
+        frames.append(
+            pl.read_database(
+                query=query,
+                connection=con,
+                schema_overrides={"ocel_id": pl.Utf8, "_timestamp_str": pl.Utf8},
+            )
+        )
+    return pl.concat(frames).unique(subset=["ocel_id"], keep="first", maintain_order=True)
+
+
 def load_events_from_sqlite(file_path: str) -> pl.DataFrame:
     """
     Loads event data from an SQLite OCEL file into a Polars DataFrame.
@@ -364,10 +396,7 @@ def load_events_from_sqlite(file_path: str) -> pl.DataFrame:
         con.close()
         return pl.DataFrame(schema=_LOADED_EVENTS_SCHEMA)
 
-    # build the union timestamp table query for all activities
-    timestamp_union_query = " UNION ".join(
-        [f"SELECT ocel_id, ocel_time FROM event_{activity}" for activity in activities]
-    )
+    timestamps = _load_sqlite_timestamps(con, activities)
 
     # event to object relation query (with LEFT JOIN to include all events)
     event_object_query = """
@@ -380,22 +409,12 @@ def load_events_from_sqlite(file_path: str) -> pl.DataFrame:
             (((event e JOIN event_map_type emt ON e.ocel_type = emt.ocel_type) a LEFT JOIN event_object eo ON a.ocel_id = eo.ocel_event_id))
     """
 
-    # join the event object relation with the timestamp union query
-    query = f"""
-        SELECT 
-            e._eventId, 
-            e._activity,
-            e._object,
-            e._qualifier,
-            t.ocel_time as _timestamp_str
-        FROM 
-            ({event_object_query}) e
-        LEFT JOIN 
-            ({timestamp_union_query}) t ON e._eventId = t.ocel_id
-    """
-
-    df = pl.read_database(query=query, connection=con)
+    df = pl.read_database(query=event_object_query, connection=con)
     con.close()
+
+    # Attach each event's timestamp. A left join keeps events whose activity table
+    # has no row for them, as the former SQL LEFT JOIN did.
+    df = df.join(timestamps, left_on="_eventId", right_on="ocel_id", how="left")
 
     # Group by event ID and aggregate objects and qualifiers into lists
     df = df.group_by("_eventId").agg(
@@ -462,6 +481,13 @@ def load_objects_from_sqlite(file_path: str) -> pl.DataFrame:
             FROM object_object
         """,
         connection=con,
+        # Without this, a log with no object-to-object relations comes back with
+        # null-typed columns, and joining them to the string object ids fails.
+        schema_overrides={
+            "_objId": pl.Utf8,
+            "ocel_target_id": pl.Utf8,
+            "ocel_qualifier": pl.Utf8,
+        },
     )
     con.close()
 
