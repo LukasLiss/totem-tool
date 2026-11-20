@@ -948,10 +948,13 @@ def _generate_partitions(seq: list, combo_threshold: int, event_id) -> tuple:
         if foundPartition:
             break
 
-    # Assign indexIDs to the partitions
+    # Assign indexIDs to the partitions. They become the marker keys: markers
+    # of one part share a key and must therefore bind disjoint objects. Start
+    # at 1 because marker key 0 means "no key constraint" everywhere else
+    # (factory, playout engine, editors, canonical JSON format).
     if not is_skipped:
         for i in partitions:
-            indexID = 0
+            indexID = 1
             for j in i:
                 for k_item in j:
                     k_item[3] = indexID
@@ -1244,11 +1247,11 @@ def _mineOutputBindings(
         for activity, (startActivity, count) in activityDict.items():
             if startActivity in outputBindings.keys():
                 outputBindings[startActivity].append(
-                    ([(activity, objectType, 0, (1, float("inf")))], count)
+                    ([(activity, objectType, 1, (1, float("inf")))], count)
                 )
             else:
                 outputBindings[startActivity] = [
-                    ([(activity, objectType, 0, (1, float("inf")))], count)
+                    ([(activity, objectType, 1, (1, float("inf")))], count)
                 ]
 
     return outputBindings, skippedEvents
@@ -1383,11 +1386,11 @@ def _mineInputBindings(
         for activity, (endActivity, count) in activityDict.items():
             if endActivity in inputBindings.keys():
                 inputBindings[endActivity].append(
-                    ([(activity, objectType, 0, (1, float("inf")))], count)
+                    ([(activity, objectType, 1, (1, float("inf")))], count)
                 )
             else:
                 inputBindings[endActivity] = [
-                    ([(activity, objectType, 0, (1, float("inf")))], count)
+                    ([(activity, objectType, 1, (1, float("inf")))], count)
                 ]
 
     return inputBindings, skippedEvents
