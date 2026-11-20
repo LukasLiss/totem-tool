@@ -648,20 +648,26 @@ def _sqlite_metadata(file_path: str):
     """Activities, object types and the attribute columns of their tables.
 
     Returns ``(activities, object_types)`` as lists of
-    ``(ocel_type, ocel_type_map, [attribute columns])``.
+    ``(ocel_type, ocel_type_map, [attribute columns], has_time)``.
+
+    ``has_time`` says whether the table has an ``ocel_time`` column. OCEL 2.0
+    object tables may omit it when no attribute ever changes (e.g. the SAP
+    collection logs); every value is then the initial one, at time 0.
     """
     con = sqlite3.connect(file_path)
     try:
         cur = con.cursor()
 
-        def columns(table: str) -> list[str]:
+        def table_info(table: str) -> tuple[list[str], bool]:
             cur.execute(f"PRAGMA table_info('{table}')")
-            return [r[1] for r in cur.fetchall() if r[1] not in ("ocel_id", "ocel_time")]
+            names = [r[1] for r in cur.fetchall()]
+            cols = [c for c in names if c not in ("ocel_id", "ocel_time")]
+            return cols, "ocel_time" in names
 
         cur.execute("SELECT ocel_type, ocel_type_map FROM event_map_type")
-        activities = [(t, m, columns(f"event_{m}")) for t, m in cur.fetchall()]
+        activities = [(t, m, *table_info(f"event_{m}")) for t, m in cur.fetchall()]
         cur.execute("SELECT ocel_type, ocel_type_map FROM object_map_type")
-        object_types = [(t, m, columns(f"object_{m}")) for t, m in cur.fetchall()]
+        object_types = [(t, m, *table_info(f"object_{m}")) for t, m in cur.fetchall()]
         return activities, object_types
     finally:
         con.close()
@@ -742,7 +748,7 @@ def _stage_sqlite_scanner(file_path, stage, report, activities, object_types) ->
         n_steps = max(1, len(activities) + len(object_types) + 3)
         step = 0
 
-        for _ocel_type, suffix, cols in activities:
+        for _ocel_type, suffix, cols, _has_time in activities:
             table = f'src."event_{suffix}"'
             base = stage.next_seq_base()
             conn.execute(
@@ -777,16 +783,17 @@ def _stage_sqlite_scanner(file_path, stage, report, activities, object_types) ->
             FROM src.object o
             JOIN src.object_map_type omt ON o.ocel_type = omt.ocel_type
         """)
-        for _ocel_type, suffix, cols in object_types:
+        for _ocel_type, suffix, cols, has_time in object_types:
             if not cols:
                 continue
             names, values = _unnest_pairs(cols)
+            ts_col = "ocel_time" if has_time else "NULL::VARCHAR"
             base = stage.next_seq_base()
             conn.execute(
                 f"INSERT INTO _src_obj_attr (seq, obj_id, ts_raw, name, value) "
                 f"SELECT seq, obj_id, ts_raw, name, value FROM ("
                 f"SELECT {base} + row_number() OVER () AS seq, ocel_id AS obj_id, "
-                f"ocel_time AS ts_raw, {names} AS name, {values} AS value "
+                f"{ts_col} AS ts_raw, {names} AS name, {values} AS value "
                 f'FROM src."object_{suffix}") WHERE value IS NOT NULL'
             )
             step += 1
@@ -819,7 +826,7 @@ def _stage_sqlite_python(file_path, stage, report, activities, object_types) -> 
         n_steps = max(1, len(activities) + len(object_types) + 3)
         step = 0
 
-        for _ocel_type, suffix, cols in activities:
+        for _ocel_type, suffix, cols, _has_time in activities:
             col_sql = "".join(f', "{c}"' for c in cols)
             cur.execute(f'SELECT ocel_id, ocel_time{col_sql} FROM "event_{suffix}"')
             while True:
@@ -860,11 +867,12 @@ def _stage_sqlite_python(file_path, stage, report, activities, object_types) -> 
                 buffers.add_object(_str_or_none(obj_id), _str_or_none(obj_type))
             buffers.flush()
 
-        for _ocel_type, suffix, cols in object_types:
+        for _ocel_type, suffix, cols, has_time in object_types:
             if not cols:
                 continue
             col_sql = "".join(f', "{c}"' for c in cols)
-            cur.execute(f'SELECT ocel_id, ocel_time{col_sql} FROM "object_{suffix}"')
+            ts_col = "ocel_time" if has_time else "NULL"
+            cur.execute(f'SELECT ocel_id, {ts_col}{col_sql} FROM "object_{suffix}"')
             while True:
                 rows = cur.fetchmany(BATCH_SIZE)
                 if not rows:
@@ -1069,23 +1077,28 @@ def _xml_attr_value(elem: ET.Element) -> str | None:
 
 
 def _stage_xml(file_path: str, stage: _Staging, report: _Reporter, _threshold) -> None:
+    """Stream ``<log><events><event>`` and ``<log><objects><object>`` elements.
+
+    Elements are told apart by their path, not by tag alone: event-to-object
+    relations are children of the event's ``<objects>`` container, written
+    either as ``<relationship object-id=.../>`` (OCEL 2.0 standard) or as
+    ``<object object-id=.../>`` (e.g. the Angular GitHub commits log). The
+    latter must not be mistaken for a top-level ``<object>``.
+    """
     buffers = _RowBuffers(stage)
     size = os.path.getsize(file_path)
 
-    in_top_events = in_top_objects = in_event = in_object = False
-    cur_event: dict = {}
-    cur_obj: dict = {}
+    path: list[str] = []  # tags from the root down to the current element
+    cur_event: dict | None = None
+    cur_obj: dict | None = None
 
     with open(file_path, "rb") as f:
         tick = _FileProgress(f, size, report, 0.0, 0.5, "Reading XML")
         for ev, elem in ET.iterparse(f, events=("start", "end")):
+            tag = elem.tag
             if ev == "start":
-                if elem.tag == "events" and not in_event and not in_object:
-                    in_top_events = True
-                elif elem.tag == "objects" and not in_event and not in_object:
-                    in_top_objects = True
-                elif elem.tag == "event" and in_top_events:
-                    in_event = True
+                path.append(tag)
+                if len(path) == 3 and path[1] == "events" and tag == "event":
                     cur_event = {
                         "id": elem.get("id", ""),
                         "type": elem.get("type", ""),
@@ -1093,8 +1106,7 @@ def _stage_xml(file_path: str, stage: _Staging, report: _Reporter, _threshold) -
                         "attrs": [],
                         "rels": [],
                     }
-                elif elem.tag == "object" and in_top_objects:
-                    in_object = True
+                elif len(path) == 3 and path[1] == "objects" and tag == "object":
                     cur_obj = {
                         "id": elem.get("id", ""),
                         "type": elem.get("type", ""),
@@ -1103,50 +1115,49 @@ def _stage_xml(file_path: str, stage: _Staging, report: _Reporter, _threshold) -
                     }
                 continue
 
-            # "end" events
-            if elem.tag == "events":
-                in_top_events = False
-            elif elem.tag == "objects" and not in_event and not in_object:
-                in_top_objects = False
-            elif elem.tag == "attribute":
-                value = _xml_attr_value(elem)
-                name = elem.get("name")
-                if value is not None and name:
-                    if in_event:
-                        cur_event["attrs"].append((name, value))
-                    elif in_object:
-                        cur_obj["attrs"].append((name, value, elem.get("time") or ""))
-            elif elem.tag in ("relationship", "relobj"):
-                oid = elem.get("object-id")
-                if oid:
-                    if in_event:
-                        cur_event["rels"].append(
-                            (oid, elem.get("qualifier") or elem.get("relationship"))
-                        )
-                    elif in_object:
-                        cur_obj["rels"].append((oid, elem.get("qualifier")))
-            elif elem.tag == "event":
-                in_event = False
+            # "end": `path` still ends with this element's tag.
+            depth = len(path)
+            path.pop()
+            owner = cur_event if cur_event is not None else cur_obj
+            if depth == 3 and tag == "event" and cur_event is not None:
                 ev_id = cur_event["id"]
                 buffers.add_event(ev_id, cur_event["type"], cur_event["time"])
                 for name, value in cur_event["attrs"]:
                     buffers.add_event_attr(ev_id, name, value)
                 for oid, qualifier in cur_event["rels"]:
                     buffers.add_event_object(ev_id, oid, qualifier)
+                cur_event = None
                 if len(buffers.ev_id) >= BATCH_SIZE:
                     buffers.flush()
                     tick()
-            elif elem.tag == "object":
-                in_object = False
+            elif depth == 3 and tag == "object" and cur_obj is not None:
                 obj_id = cur_obj["id"]
                 buffers.add_object(obj_id, cur_obj["type"])
                 for name, value, ts_raw in cur_obj["attrs"]:
                     buffers.add_object_attr(obj_id, ts_raw, name, value)
                 for tgt, qualifier in cur_obj["rels"]:
                     buffers.add_o2o(obj_id, tgt, qualifier)
+                cur_obj = None
                 if len(buffers.ob_id) >= BATCH_SIZE:
                     buffers.flush()
                     tick()
+            elif owner is None:
+                pass  # header (<object-types>, <event-types>) or containers
+            elif tag == "attribute":
+                value = _xml_attr_value(elem)
+                name = elem.get("name")
+                if value is not None and name:
+                    if owner is cur_event:
+                        owner["attrs"].append((name, value))
+                    else:
+                        owner["attrs"].append((name, value, elem.get("time") or ""))
+            elif tag in ("relationship", "relobj") or (depth > 4 and path[-1] == "objects"):
+                oid = elem.get("object-id")
+                if oid:
+                    qualifier = elem.get("qualifier")
+                    if owner is cur_event:
+                        qualifier = qualifier or elem.get("relationship")
+                    owner["rels"].append((oid, qualifier))
             elem.clear()
 
     buffers.flush()
