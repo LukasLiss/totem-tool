@@ -4,7 +4,6 @@ The heaviest module in the package: every discovery/conformance algorithm the
 frontend can trigger against a stored event log is an ``@action`` here.
 """
 
-import copy
 import json
 import os
 import shutil
@@ -1380,33 +1379,11 @@ class EventLogViewSet(OCAlignmentActionsMixin, viewsets.ModelViewSet):
     def _occn_content_json(occn):
         """Canonical asset JSON for a (possibly discovered) OCCN.
 
-        Discovered nets may carry markers with ``marker_key == 0`` ("no
-        constraint / assign automatically"), which the canonical schema
-        rejects. Mirror the factory / editor behavior and give those markers
-        fresh unique keys — on a deep copy, because the net may live in the
-        shared discovery cache.
+        ``occn_to_dict`` maps non-positive marker keys (older discovered nets
+        numbered key groups from 0) to positive ones group-wise, preserving
+        which markers share a key. It does not mutate the net, which may live
+        in the shared discovery cache.
         """
-        occn = copy.deepcopy(occn)
-        all_groups = [
-            group
-            for groups in (occn.input_marker_groups, occn.output_marker_groups)
-            for group_list in groups.values()
-            for group in group_list
-        ]
-        next_key = 1 + max(
-            (
-                int(marker.marker_key)
-                for group in all_groups
-                for marker in group.markers
-                if isinstance(marker.marker_key, (int, float)) and marker.marker_key > 0
-            ),
-            default=0,
-        )
-        for group in all_groups:
-            for marker in group.markers:
-                if not marker.marker_key or marker.marker_key <= 0:
-                    marker.marker_key = next_key
-                    next_key += 1
         return occn_to_dict(occn)
 
     @action(detail=True, methods=["post"])
