@@ -70,7 +70,9 @@ MEMORY_NOTE = (
 
 def _count(value: Any) -> str:
     """Format a number with thousands separators, or a dash if it is missing."""
-    return MISSING if value is None else f"{value:,}"
+    if value is None:
+        return MISSING
+    return f"{value:,.2f}" if isinstance(value, float) else f"{value:,}"
 
 
 def _cell(value: Any) -> str:

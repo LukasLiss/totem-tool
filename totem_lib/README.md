@@ -204,36 +204,39 @@ pytest ./tests/
 
 ## Evaluation logs
 
-Runtime evaluation runs against real OCEL logs published on
-[ocel-standard.org](https://www.ocel-standard.org/event-logs/overview/). Each log records
-several size statistics, so runtime can be plotted against any of them.
+Runtime evaluation runs against eight real OCEL logs published on
+[ocel-standard.org](https://www.ocel-standard.org/event-logs/overview/) - the eight of the
+TOTeM conformance-checking paper. Each log records several size statistics, so runtime
+can be plotted against any of them.
 
-| Log | Events | Objects | Activities | Object types | E2O relations | O2O relations |
-|---|---|---|---|---|---|---|
-| `ocel2-p2p` | 14,671 | 9,054 | 10 | 7 | 35,927 | 16,757 |
-| `order-management` | 21,008 | 10,840 | 11 | 6 | 147,463 | 28,391 |
-| `container_logistics` | 35,372 | 13,882 | 14 | 7 | 74,272 | 15,920 |
+| Log | Events | Objects | Activities | Object types | E2O relations | O2O relations | Where |
+|---|---|---|---|---|---|---|---|
+| `ocel2-p2p` | 14,671 | 9,054 | 10 | 7 | 35,927 | 16,757 | in git |
+| `order-management` | 21,008 | 10,840 | 11 | 6 | 147,463 | 28,391 | in git |
+| `lrms-reasoning-steps` | 31,709 | 1,645 | 32 | 2 | 63,418 | 0 | download |
+| `container_logistics` | 35,372 | 13,882 | 14 | 7 | 74,272 | 15,920 | in git |
+| `hinge-production` | 38,528 | 23,771 | 11 | 12 | 144,827 | 20,561 | download |
+| `bundestag` | 62,719 | 37,665 | 148 | 44 | 67,185 | 0 | download |
+| `enron` | 517,891 | 316,848 | 9 | 2 | 1,765,575 | 0 | download |
+| `age-of-empires` | 2,372,505 | 361,935 | 829 | 30 | 10,387,384 | 2,541,715 | download |
 
 Which log is "bigger" depends on the metric: `order-management` has fewer events than
 `container_logistics` but twice as many event-to-object relations.
 
-All three ship with the repo and need no setup. Larger logs do not belong in git, so
-`test_data/large/` is gitignored and populated on demand by a download script. Run from
-the `totem_lib/` directory:
+Three logs ship with the repo. The other five (about 2.2 GB) do not belong in git, so
+`test_data/large/` is gitignored and filled by a download script that verifies each file
+against the MD5 Zenodo publishes. Run from the `totem_lib/` directory:
 
 ```bash
 python evaluation/download_logs.py --list
-python evaluation/download_logs.py --logs <name>
+python evaluation/download_logs.py
 python evaluation/log_stats.py
 ```
 
-`evaluation/datasets.py` is the manifest — names, source links, locations and recorded
-statistics, with the full details in its module docstring. `log_stats.py` re-measures the
-statistics and reports any that have drifted from what the manifest records.
-
-The module docstring also records why the largest available OCEL log (Age of Empires 2,
-2.4M events) cannot be used yet: it has 831 activity types, and `import_ocel`'s SQLite
-path exceeds SQLite's compound-`SELECT` limit on logs that wide.
+`evaluation/datasets.py` is the manifest - names, Zenodo records, locations and recorded
+statistics, with the details in its module docstring (which file versions, why Enron and
+Age of Empires are read from SQLite, which logs carry placeholder timestamps).
+`log_stats.py` re-measures the statistics and reports any that have drifted.
 
 ## Running the benchmarks
 
@@ -247,10 +250,39 @@ python evaluation/run_benchmarks.py --algorithms totemDiscovery,OCDFG.from_ocel
 python evaluation/run_benchmarks.py --repeats 10 --timeout 7200
 ```
 
-Results print as each measurement finishes. Result files are written at the end, so an
-interrupted run leaves only the printed lines. A failing, crashing or timed-out algorithm
-is reported and the run continues. `find_variants` only runs when named in
-`--algorithms`, because it exhausts memory on `order-management`.
+Results print as each measurement finishes. A failing, crashing or timed-out algorithm is
+reported and the run continues. `find_variants` only runs when named in `--algorithms`,
+because it exhausts memory on `order-management`.
+
+### Run folders: saved as it goes, resumable
+
+Every run gets its own folder, `evaluation/results/runs/<date>_<time>[_<name>]/`, and
+every measurement is appended to its `measurements.jsonl` the moment it finishes. A crash,
+a reboot or Ctrl+C loses nothing, and the run can be continued:
+
+```bash
+python evaluation/run_benchmarks.py --name laptop
+python evaluation/run_benchmarks.py --resume evaluation/results/runs/2026-11-20_14-03-12_laptop
+python evaluation/run_benchmarks.py --resume <folder> --retry-failed
+python evaluation/run_benchmarks.py --resume <folder> --logs age-of-empires
+```
+
+A resumed run skips every (log, algorithm) pair it already has. `--retry-failed` measures
+failed ones again, and `--logs`/`--algorithms` add to its plan. Settings (repeats,
+warm-up, timeout, isolation) stay fixed for the whole run, so all its numbers are
+comparable. If a resumed session runs on another machine or commit, `run.json` records
+both and each measurement notes its commit.
+
+| File in the run folder | For |
+|---|---|
+| `run.json` | the settings, the planned logs and algorithms, the machine(s) and commit(s) |
+| `measurements.jsonl` | the source of truth: one line per measurement, every repeat included |
+| `benchmark_results.md` / `.csv` / `.json` | reading / tools / everything plus run metadata |
+| `scaling_exponents.md` / `.csv` | the fitted scaling exponents (see below) |
+| `figures/` | every plot |
+
+The summaries and figures are rebuilt from `measurements.jsonl` at the end of every
+session. Run folders are gitignored; copy one elsewhere or `git add -f` it to keep it.
 
 ### How the numbers are taken
 
@@ -281,44 +313,52 @@ Python-heavy code a lot: on `ocel2-p2p` it made `totemDiscovery` 13x slower and
 `import_ocel` 5x slower, while DuckDB-based code was unaffected. Numbers from before this
 change are not comparable with current ones.
 
-Every run saves its results to `evaluation/results/`:
+### Figures
 
-| File | For |
-|---|---|
-| `benchmark_results.md` | reading - two tables, one for the logs and one for the measurements |
-| `benchmark_results.csv` | plots and other tools |
-| `benchmark_results.json` | the same data with every repeat, plus the run settings, machine and git commit |
+Each run draws these into its `figures/` folder. To redraw a run without measuring
+anything, for example after changing a plot:
 
-Use `--out-dir` to save somewhere else and `--formats` to write only some of them, for
-example `--formats md`. Each run overwrites the previous files. The generated JSON is
-gitignored; the Markdown and CSV are not, so an example run can be committed.
-
-It also saves one plot per size metric to `figures/`, named
-`runtime_vs_<metric>.png`. Each figure uses two channels: the line **colour** says which
-algorithm, the **marker shape** says which log a point came from. Runtime is on a log
-scale because the algorithms differ by five orders of magnitude.
-
-The two loading steps are drawn as grey baselines rather than coloured lines, because
-they are what the other algorithms build on rather than discovery algorithms themselves.
-`import_ocel` is dashed and reads the log into Polars; `import_ocel_db` is dotted and
-reads the same file into DuckDB. Which one applies depends on the algorithm: four of
-them need the Polars log, three need the DuckDB one.
-
-Use `--no-figures` for a quick partial run: a filtered run would otherwise overwrite the
-committed figures with incomplete data. To rebuild the figures from the saved results
-without running anything:
-
-```python
-from evaluation.plots import plot_all, rows_from_csv
-plot_all(rows_from_csv("evaluation/results/benchmark_results.csv"))
+```bash
+python evaluation/figures.py evaluation/results/runs/<run folder>
 ```
 
-The algorithms differ enormously in cost — from `CCDFG.from_ocel` at ~0.01 s to
-`discover_occn` at over 7 minutes on `order-management` — so try anything new on
-`ocel2-p2p` with `--repeats 1` first. `evaluation/algorithms.py` lists what runs and how each one is
-called; it is also where a new algorithm gets added.
+| Figure | Question it answers |
+|---|---|
+| `runtime_vs_<metric>.png` | How do all algorithms compare as logs grow? One line per algorithm, one marker shape per log. |
+| `memory/memory_vs_<metric>.png` | The same for the job's peak memory. |
+| `grid/runtime_grid_<metric>.png` | How does each algorithm scale? One log-log panel per algorithm, error bars (one standard deviation of the repeats) and a fitted power law with its exponent and R². |
+| `scaling_exponents.png` | Which size measure drives which algorithm? The fitted exponent for every algorithm and metric. |
+| `polars_vs_duckdb.png` | How much faster is the DuckDB version, alone and including its import? |
+| `pipeline_cost.png` | Where does the time go from the file on disk to each result (import, prerequisite steps, the algorithm)? |
+
+The size metrics are events, objects, event-to-object relations, object-to-object
+relations, activities, object types, and the average number of objects per event. X-axes
+switch to a log scale once the logs span more than a factor of 20, which the eight logs
+do.
+
+**Reading the exponents.** On log-log axes a power law `runtime = a * metric^b` is a
+straight line with slope `b`: 1 is linear, 2 quadratic. The logs differ in many ways at
+once, so `b` is an empirical summary across logs, not a controlled complexity
+measurement. Its R² is the useful part: comparing R² across metrics shows which size
+measure an algorithm actually scales with. Metrics that vary less than 2x across the logs
+are not fitted.
+
+The two loading steps are drawn as grey baselines rather than coloured lines, because
+they are what the other algorithms build on. `import_ocel` (dashed) reads the log into
+Polars and `import_ocel_db` (dotted) into DuckDB. `evaluation/algorithms.py` records which
+steps each algorithm needs (`requires`), which is what the pipeline figure adds up.
+
+The algorithms differ enormously in cost - from `CCDFG.from_ocel` at a few milliseconds
+to `discover_occn` at almost a minute on `order-management` - so try anything new on
+`ocel2-p2p` with `--repeats 1 --warmup 0` first. `evaluation/algorithms.py` lists what
+runs and how each one is called; it is also where a new algorithm gets added.
 
 ## Example run
+
+> **Out of date.** The committed example below was measured with the old harness
+> (memory tracing during the timed calls, three logs only), so its runtimes are inflated
+> by up to 13x and it predates the run folders and the new figures. It will be replaced
+> by a fresh run of all eight logs.
 
 One full run is committed, so the output can be read without running anything. It was
 produced on an otherwise idle machine with the default three repeats, leaving out the one

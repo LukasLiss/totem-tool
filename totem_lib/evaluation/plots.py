@@ -72,7 +72,7 @@ SERIES_COLORS = (
     "#4a3aa7",  # violet
     "#e34948",  # red
 )
-MARKERS = ("o", "s", "^", "D", "v", "P", "X", "*")
+MARKERS = ("o", "s", "^", "D", "v", "P", "X", "h", "p", "<")
 
 SURFACE = "#fcfcfb"
 TEXT = "#0b0b0b"
@@ -98,7 +98,7 @@ def rows_from_csv(path: Path | str) -> list:
     again. CSV gives back only strings, so the numbers are converted here.
     """
     from evaluation.harness import BenchmarkResult
-    from evaluation.run_benchmarks import BenchmarkRow
+    from evaluation.runs import BenchmarkRow
 
     rows = []
     with open(path, newline="", encoding="utf-8") as handle:
@@ -146,7 +146,16 @@ def rows_from_csv(path: Path | str) -> list:
 # Shaping the data
 # ---------------------------------------------------------------------------
 
-def series_for(rows: Sequence, metric: str) -> dict[str, list[tuple[int, float, str]]]:
+# What can go on the y-axis: the field of BenchmarkResult and its axis label.
+VALUES: dict[str, str] = {
+    "elapsed_s": "Runtime (seconds, log scale)",
+    "peak_rss_mb": "Peak memory of the job (MB RSS, log scale)",
+}
+
+
+def series_for(
+    rows: Sequence, metric: str, value: str = "elapsed_s",
+) -> dict[str, list[tuple[float, float, str]]]:
     """
     Group the rows into one (x, y, log) list per algorithm, sorted by x.
 
@@ -159,9 +168,10 @@ def series_for(rows: Sequence, metric: str) -> dict[str, list[tuple[int, float, 
     """
     series: dict[str, list[tuple[int, float, str]]] = {}
     for row in rows:
-        if row.statistics is None or row.result.elapsed_s is None:
+        y = getattr(row.result, value)
+        if row.statistics is None or y is None:
             continue
-        point = (getattr(row.statistics, metric), row.result.elapsed_s, row.log)
+        point = (getattr(row.statistics, metric), y, row.log)
         series.setdefault(row.algorithm, []).append(point)
     return {name: sorted(points) for name, points in series.items()}
 
@@ -215,13 +225,49 @@ def colors_for_algorithms(names: Iterable[str]) -> dict[str, str]:
 # Drawing
 # ---------------------------------------------------------------------------
 
-def plot_metric(rows: Sequence, metric: str, path: Path) -> Path:
-    """Draw one figure: runtime against a single size metric."""
+def use_log_x(values: Iterable[float]) -> bool:
+    """
+    Whether an x-axis needs a log scale: when the values span more than a factor of 20.
+
+    The eight evaluation logs run from 15 thousand to 2.4 million events. On a linear
+    axis every log but the largest two would sit on top of each other.
+    """
+    positive = [v for v in values if v and v > 0]
+    return bool(positive) and max(positive) / min(positive) > 20
+
+
+def format_x_axis(axes, metric: str, values: Iterable[float]) -> None:
+    """Log or linear, whole-number ticks for counts, thousands separators."""
+    values = list(values)
+    if use_log_x(values):
+        axes.set_xscale("log")
+        axes.xaxis.set_major_formatter(ticker.FuncFormatter(_compact))
+        axes.xaxis.set_minor_formatter(ticker.NullFormatter())
+        return
+    if all(float(v).is_integer() for v in values):
+        # Every count is whole, so only whole ticks make sense. Without this, a
+        # metric with a small range (object types are 6 or 7) repeats one label.
+        axes.xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
+        axes.xaxis.set_major_formatter(ticker.StrMethodFormatter("{x:,.0f}"))
+
+
+def _compact(value: float, _position=None) -> str:
+    """10,000 -> 10k, 2,500,000 -> 2.5M: readable log-axis ticks."""
+    for size, suffix in ((1e9, "G"), (1e6, "M"), (1e3, "k")):
+        if abs(value) >= size:
+            return f"{value / size:g}{suffix}"
+    return f"{value:g}"
+
+
+def plot_metric(rows: Sequence, metric: str, path: Path, value: str = "elapsed_s") -> Path:
+    """Draw one figure: runtime (or memory) against a single size metric."""
     if metric not in SIZE_METRICS:
         known = ", ".join(SIZE_METRICS)
         raise ValueError(f"unknown metric {metric!r}; available: {known}")
+    if value not in VALUES:
+        raise ValueError(f"unknown value {value!r}; available: {', '.join(VALUES)}")
 
-    series = series_for(rows, metric)
+    series = series_for(rows, metric, value)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -265,9 +311,10 @@ def plot_metric(rows: Sequence, metric: str, path: Path) -> Path:
 
     axes.set_yscale("log")
     axes.set_xlabel(SIZE_METRICS[metric], color=TEXT, fontsize=11)
-    axes.set_ylabel("Runtime (seconds, log scale)", color=TEXT, fontsize=11)
+    axes.set_ylabel(VALUES[value], color=TEXT, fontsize=11)
+    what = "runtime" if value == "elapsed_s" else "peak memory"
     axes.set_title(
-        "Algorithm runtime against " + SIZE_METRICS[metric].lower(),
+        f"Algorithm {what} against " + SIZE_METRICS[metric].lower(),
         color=TEXT,
         fontsize=13,
         pad=14,
@@ -280,11 +327,8 @@ def plot_metric(rows: Sequence, metric: str, path: Path) -> Path:
     for side in ("left", "bottom"):
         axes.spines[side].set_color(GRID)
     axes.tick_params(colors=TICKS, labelsize=10)
-    # Every metric is a count, so only whole numbers make sense as ticks. Without this,
-    # a metric with a small range (object types are 6 or 7) repeats the same label.
-    axes.xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
-    # Thousands separators, to match the results table.
-    axes.xaxis.set_major_formatter(ticker.StrMethodFormatter("{x:,.0f}"))
+    xs = [x for points in series.values() for x, _, _ in points] + [x for x, _, _ in baselines]
+    format_x_axis(axes, metric, xs)
 
     # Two legends outside the plot, one per channel: colour says which algorithm,
     # marker shape says which log. Skipped when a run produced nothing to draw.

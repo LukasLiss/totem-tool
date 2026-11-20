@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import ssl
 import sys
 import urllib.request
 from pathlib import Path
@@ -42,6 +43,26 @@ DEFAULT_CHUNK_BYTES = 1 << 20
 USER_AGENT = "totem-tool-evaluation/1.0"
 
 ProgressFn = Callable[[int, int | None], None]
+
+
+def _ssl_context() -> ssl.SSLContext:
+    """
+    Verify certificates against certifi's CA bundle when it is installed.
+
+    The python.org macOS builds ship without system certificates, so the default
+    context rejects Zenodo with CERTIFICATE_VERIFY_FAILED. certifi comes with
+    requests, which most environments here already have.
+    """
+    try:
+        import certifi
+    except ImportError:
+        return ssl.create_default_context()
+    return ssl.create_default_context(cafile=certifi.where())
+
+
+def open_url(request: urllib.request.Request):
+    """The default opener: urlopen with a verifying SSL context."""
+    return urllib.request.urlopen(request, context=_ssl_context())
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +114,7 @@ def fetch(
     *,
     expected_md5: str | None = None,
     expected_size: int | None = None,
-    opener: Callable = urllib.request.urlopen,
+    opener: Callable = open_url,
     chunk_bytes: int = DEFAULT_CHUNK_BYTES,
     on_progress: ProgressFn | None = None,
 ) -> Path:
@@ -141,7 +162,7 @@ def fetch(
 def download_log(
     log: EvaluationLog,
     *,
-    opener: Callable = urllib.request.urlopen,
+    opener: Callable = open_url,
     on_progress: ProgressFn | None = None,
 ) -> Path:
     """Fetch one log into the location the manifest specifies."""

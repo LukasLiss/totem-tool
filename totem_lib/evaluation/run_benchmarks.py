@@ -1,10 +1,12 @@
 """
 Run every main totem_lib algorithm on every evaluation log and report time and memory.
 
-This is the one command behind the runtime evaluation. Each result is printed as soon as
-it is ready, so a long run stays readable. Result files are written only at the end,
-so an interrupted run leaves just the printed lines. Use --logs and --algorithms to
-run a part of the grid.
+This is the one command behind the runtime evaluation. Each run gets its own folder,
+evaluation/results/runs/<date>_<time>/, and every measurement is saved there the moment
+it finishes (see evaluation/runs.py). An interrupted run loses nothing, and
+--resume <folder> continues it, skipping what is already measured. The CSV, JSON,
+Markdown and figures in the folder are rebuilt from all its measurements at the end of
+each session. Use --logs and --algorithms to run a part of the grid.
 
 A failing, crashing or timed-out algorithm is reported and the run carries on. Ctrl+C
 stops the whole run, including the measurement in progress.
@@ -58,6 +60,9 @@ Run from the totem_lib/ directory:
     python evaluation/run_benchmarks.py --logs ocel2-p2p --repeats 1 --warmup 0
     python evaluation/run_benchmarks.py --repeats 10 --timeout 7200
     python evaluation/run_benchmarks.py --algorithms OCDFG.from_ocel,totemDiscovery
+    python evaluation/run_benchmarks.py --name laptop --logs age-of-empires
+    python evaluation/run_benchmarks.py --resume evaluation/results/runs/2026-11-20_14-03-12
+    python evaluation/run_benchmarks.py --resume <folder> --retry-failed
 """
 
 from __future__ import annotations
@@ -71,9 +76,8 @@ import signal
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Iterable, Sequence
 
 # Run either as a script or imported as `evaluation.run_benchmarks`.
 _TOTEM_LIB = Path(__file__).resolve().parent.parent
@@ -89,45 +93,25 @@ from evaluation.algorithms import (
 )
 from evaluation.datasets import (
     EvaluationLog,
-    LogStatistics,
     available_logs,
     get_log,
 )
 from evaluation.environment import collect_environment, describe
-from evaluation.export import DEFAULT_OUT_DIR, FORMATS, export
-from evaluation.plots import FIGURES_DIR, plot_all
+from evaluation.export import FORMATS, export
+from evaluation.figures import draw_all
 from evaluation.harness import DEFAULT_REPEATS, DEFAULT_WARMUP, BenchmarkResult, benchmark
+from evaluation.runs import (
+    DEFAULT_RUNS_DIR,
+    BenchmarkRow,
+    RunDirectory,
+    SettingsMismatch,
+)
 
 WORKER = Path(__file__).resolve().parent / "worker.py"
 
 # Generous enough for discover_occn on order-management (about 7 minutes per call)
 # with a warm-up and three repeats, short enough to stop a run that has hung.
 DEFAULT_TIMEOUT_S = 3600
-
-
-# ---------------------------------------------------------------------------
-# Results
-# ---------------------------------------------------------------------------
-
-@dataclass(frozen=True)
-class BenchmarkRow:
-    """One algorithm measured on one log, with that log's size next to it."""
-
-    log: str
-    algorithm: str
-    result: BenchmarkResult
-    statistics: LogStatistics | None = None
-
-    @property
-    def ok(self) -> bool:
-        return self.result.ok
-
-    def as_dict(self) -> dict:
-        """Flat mapping of everything in the row, for CSV or JSON export."""
-        row = {"log": self.log, "algorithm": self.algorithm, **self.result.as_dict()}
-        if self.statistics is not None:
-            row.update(self.statistics.as_dict())
-        return row
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +286,8 @@ def run(
     warmup: int = DEFAULT_WARMUP,
     timeout_s: float | None = DEFAULT_TIMEOUT_S,
     isolated: bool = True,
+    skip: Iterable[tuple[str, str]] = (),
+    on_row: Callable[[BenchmarkRow], None] | None = None,
 ) -> list[BenchmarkRow]:
     """
     Run every algorithm on every log.
@@ -311,25 +297,37 @@ def run(
     datasets.py and algorithms.py. Without it everything runs here, and `timeout_s`
     does not apply.
 
+    `skip` lists (log, algorithm) pairs that are already measured, for resuming.
+    `on_row` is called with each row the moment it is ready, before the next
+    measurement starts - that is where a run saves it to disk.
+
     Rows are printed as they finish so partial progress is visible, and returned so the
     export and plotting steps can use them.
     """
     if isolated:
         _check_registered(logs, algorithms)
+    skip = set(skip)
 
     rows: list[BenchmarkRow] = []
     for log in logs:
+        todo = [a for a in algorithms if (log.name, a.name) not in skip]
         if echo:
-            print(f"\n{log.name}  ({log.event_count or '?'} events)", flush=True)
+            done = len(algorithms) - len(todo)
+            already = f", {done} already measured" if done else ""
+            print(f"\n{log.name}  ({log.event_count or '?'} events{already})", flush=True)
+        if not todo:
+            continue
         context = None if isolated else LogContext(log)
         try:
-            for algorithm in algorithms:
+            for algorithm in todo:
                 if isolated:
                     result = measure_isolated(log, algorithm, repeats, warmup, timeout_s)
                 else:
                     result = measure(algorithm, context, repeats, warmup)
                 row = BenchmarkRow(log.name, algorithm.name, result, log.statistics)
                 rows.append(row)
+                if on_row is not None:
+                    on_row(row)
                 if echo:
                     print("  " + format_row(row), flush=True)
         finally:
@@ -401,6 +399,13 @@ def _csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _resolve(names: Iterable[str], lookup) -> list:
+    try:
+        return [lookup(name) for name in names]
+    except ValueError as exc:
+        raise SystemExit(str(exc))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -408,80 +413,141 @@ def main() -> None:
                         help="comma-separated log names (default: every available log)")
     parser.add_argument("--algorithms", type=_csv, default=None,
                         help="comma-separated algorithm names (default: all but find_variants)")
-    parser.add_argument("--repeats", type=int, default=DEFAULT_REPEATS,
+    # None means "not given", so a resumed run can tell a deliberate change apart.
+    parser.add_argument("--repeats", type=int, default=None,
                         help=f"timed runs per algorithm (default: {DEFAULT_REPEATS})")
-    parser.add_argument("--warmup", type=int, default=DEFAULT_WARMUP,
+    parser.add_argument("--warmup", type=int, default=None,
                         help=f"untimed runs before the timed ones (default: {DEFAULT_WARMUP})")
-    parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_S,
+    parser.add_argument("--timeout", type=float, default=None,
                         help="seconds before one log/algorithm measurement is killed, "
                              f"0 for none (default: {DEFAULT_TIMEOUT_S})")
-    parser.add_argument("--in-process", action="store_true",
+    parser.add_argument("--in-process", action="store_true", default=None,
                         help="run everything in this process: no isolation, no memory "
                              "figures, no timeout")
-    parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR,
-                        help=f"where to save results (default: {DEFAULT_OUT_DIR})")
+    parser.add_argument("--out-dir", type=Path, default=DEFAULT_RUNS_DIR,
+                        help=f"where new run folders go (default: {DEFAULT_RUNS_DIR})")
+    parser.add_argument("--name", default=None,
+                        help="suffix for the run folder, e.g. 'laptop-baseline'")
+    parser.add_argument("--resume", type=Path, default=None, metavar="RUN_DIR",
+                        help="continue an earlier run: skip what it already measured. "
+                             "--logs/--algorithms add to its plan")
+    parser.add_argument("--retry-failed", action="store_true",
+                        help="with --resume, measure failed pairs again")
     parser.add_argument("--formats", type=_csv, default=list(FORMATS),
                         help=f"result formats to write (default: {','.join(FORMATS)})")
-    parser.add_argument("--figures-dir", type=Path, default=FIGURES_DIR,
-                        help=f"where to save the plots (default: {FIGURES_DIR})")
-    parser.add_argument("--no-figures", action="store_true",
-                        help="skip plotting (a filtered run would overwrite the figures)")
+    parser.add_argument("--no-figures", action="store_true", help="skip plotting")
     parser.add_argument("--list", action="store_true",
                         help="show the logs and algorithms, then exit")
     args = parser.parse_args()
 
-    try:
-        logs = [get_log(name) for name in args.logs] if args.logs else available_logs()
-        algorithms = (
-            [get_algorithm(name) for name in args.algorithms]
-            if args.algorithms
-            else list(DEFAULT_ALGORITHMS)
-        )
-    except ValueError as exc:
-        raise SystemExit(str(exc))
+    if args.retry_failed and args.resume is None:
+        raise SystemExit("--retry-failed only makes sense with --resume")
+
+    # --- what to run -------------------------------------------------------
+    run_dir = RunDirectory.open(args.resume) if args.resume else None
+    if run_dir is not None:
+        stored = run_dir.settings
+        settings = {
+            "repeats": stored["repeats"] if args.repeats is None else args.repeats,
+            "warmup": stored["warmup"] if args.warmup is None else args.warmup,
+            "isolated": stored["isolated"] if args.in_process is None else not args.in_process,
+        }
+        if args.timeout is None:
+            settings["timeout_s"] = stored["timeout_s"]
+        else:
+            settings["timeout_s"] = (args.timeout or None) if settings["isolated"] else None
+        try:
+            run_dir.check_settings(settings)
+        except SettingsMismatch as exc:
+            raise SystemExit(str(exc))
+        log_names, algorithm_names = run_dir.extend_plan(args.logs or [], args.algorithms or [])
+    else:
+        isolated = not args.in_process
+        timeout = DEFAULT_TIMEOUT_S if args.timeout is None else args.timeout
+        settings = {
+            "repeats": DEFAULT_REPEATS if args.repeats is None else args.repeats,
+            "warmup": DEFAULT_WARMUP if args.warmup is None else args.warmup,
+            "timeout_s": (timeout or None) if isolated else None,
+            "isolated": isolated,
+        }
+        log_names = args.logs or [log.name for log in available_logs()]
+        algorithm_names = args.algorithms or [a.name for a in DEFAULT_ALGORITHMS]
+
+    logs = _resolve(log_names, get_log)
+    algorithms = _resolve(algorithm_names, get_algorithm)
 
     if args.list:
         print_plan(logs, algorithms)
         return
 
+    missing = [log.name for log in logs if not log.available]
+    if missing:
+        raise SystemExit(
+            f"Not on disk: {', '.join(missing)}. Fetch with: "
+            f"python evaluation/download_logs.py --logs {','.join(missing)}"
+        )
     if not logs:
         raise SystemExit(
             "No logs available. Small logs ship with the repo; larger ones need "
             "python evaluation/download_logs.py"
         )
-    if args.repeats < 1:
-        raise SystemExit(f"--repeats must be at least 1, got {args.repeats}")
-    if args.warmup < 0:
-        raise SystemExit(f"--warmup cannot be negative, got {args.warmup}")
-    if args.timeout < 0:
-        raise SystemExit(f"--timeout cannot be negative, got {args.timeout}")
+    if settings["repeats"] < 1:
+        raise SystemExit(f"--repeats must be at least 1, got {settings['repeats']}")
+    if settings["warmup"] < 0:
+        raise SystemExit(f"--warmup cannot be negative, got {settings['warmup']}")
+    if (settings["timeout_s"] or 0) < 0:
+        raise SystemExit(f"--timeout cannot be negative, got {settings['timeout_s']}")
+    unknown = [name for name in args.formats if name not in FORMATS]
+    if unknown:
+        raise SystemExit(f"unknown format(s): {', '.join(unknown)}; available: {', '.join(FORMATS)}")
 
-    timeout_s = args.timeout or None
-    isolated = not args.in_process
+    # --- the run folder ----------------------------------------------------
     environment = collect_environment()
-    settings = {
-        "repeats": args.repeats,
-        "warmup": args.warmup,
-        "timeout_s": timeout_s if isolated else None,
-        "isolated": isolated,
-    }
+    if run_dir is None:
+        run_dir = RunDirectory.create(
+            args.out_dir, settings=settings, environment=environment,
+            logs=log_names, algorithms=algorithm_names, name=args.name,
+        )
+        skip: set = set()
+        print(f"Run folder: {run_dir.path}")
+    else:
+        if run_dir.record_environment(environment):
+            print("Note: this session runs on a different machine or commit than the "
+                  "earlier part of the run. run.json records both.")
+        skip = run_dir.completed(retry_failed=args.retry_failed)
+        print(f"Resuming {run_dir.path}: {len(skip)} measurement(s) already done")
     print(f"Machine: {describe(environment)}")
     print(f"Settings: {settings}")
 
-    rows = run(logs, algorithms, args.repeats, warmup=args.warmup, timeout_s=timeout_s,
-               isolated=isolated)
-    print_summary(rows)
-
+    commit = (environment.get("git") or {}).get("commit")
+    interrupted = False
     try:
-        written = export(rows, args.out_dir, args.formats, repeats=args.repeats,
-                         settings=settings, environment=environment)
-    except ValueError as exc:
-        raise SystemExit(str(exc))
+        run(logs, algorithms, settings["repeats"], warmup=settings["warmup"],
+            timeout_s=settings["timeout_s"], isolated=settings["isolated"],
+            skip=skip, on_row=lambda row: run_dir.append(row, commit=commit))
+    except KeyboardInterrupt:
+        interrupted = True
+        print("\nInterrupted. Everything measured so far is saved.")
+
+    # --- summaries, rebuilt from everything the run folder holds -----------
+    rows = run_dir.rows()
+    print_summary(rows)
+    written = export(rows, run_dir.path, args.formats, repeats=settings["repeats"],
+                     settings=settings, environment=run_dir.environment)
+    if not args.no_figures and rows:
+        try:
+            written += draw_all(rows, run_dir.figures_dir, run_dir.path)
+        except Exception as exc:
+            # The measurements are safe on disk; a plotting bug must not hide that.
+            print(f"\nDrawing the figures failed ({type(exc).__name__}: {exc}). "
+                  f"Redraw with: python evaluation/figures.py {run_dir.path}")
     print("\nSaved:")
-    if not args.no_figures:
-        written += plot_all(rows, args.figures_dir)
-    for path in written:
+    for path in [run_dir.measurements_file, *written]:
         print(f"  {path}")
+
+    if interrupted:
+        print(f"\nContinue with: python evaluation/run_benchmarks.py --resume {run_dir.path}")
+        raise SystemExit(130)
 
 
 if __name__ == "__main__":

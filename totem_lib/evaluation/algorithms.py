@@ -182,24 +182,38 @@ class Algorithm:
 
     `make_call` turns a context into a function of no arguments. It runs before timing
     starts, so preparing the input is not counted.
+
+    `requires` names the other benchmarked steps that produce this algorithm's input,
+    in order. The end-to-end cost of an algorithm is their times plus its own; the
+    pipeline figure adds them up.
     """
 
     name: str
     make_call: Callable[[LogContext], Callable[[], Any]]
+    requires: tuple[str, ...] = ()
 
 
 ALGORITHMS: tuple[Algorithm, ...] = (
     Algorithm("import_ocel", lambda c: partial(import_ocel, *import_args(c.log))),
     Algorithm("import_ocel_db", lambda c: c.fresh_db_import()),
-    Algorithm("totemDiscovery", lambda c: partial(totemDiscovery, c.ocel)),
-    Algorithm("totemDiscovery_db", lambda c: partial(totemDiscovery_db, c.ocel_db)),
-    Algorithm("mlpaDiscovery", lambda c: partial(mlpaDiscovery, c.totem)),
-    Algorithm("discover_ocpn_db", lambda c: partial(discover_ocpn_db, c.ocel_db)),
-    Algorithm("discover_occn", lambda c: partial(discover_occn, c.ocel, OCCN_THRESHOLD)),
-    Algorithm("OCDFG.from_ocel", lambda c: partial(OCDFG.from_ocel, c.ocel)),
+    Algorithm("totemDiscovery", lambda c: partial(totemDiscovery, c.ocel),
+              requires=("import_ocel",)),
+    Algorithm("totemDiscovery_db", lambda c: partial(totemDiscovery_db, c.ocel_db),
+              requires=("import_ocel_db",)),
+    Algorithm("mlpaDiscovery", lambda c: partial(mlpaDiscovery, c.totem),
+              requires=("import_ocel", "totemDiscovery")),
+    Algorithm("discover_ocpn_db", lambda c: partial(discover_ocpn_db, c.ocel_db),
+              requires=("import_ocel_db",)),
+    Algorithm("discover_occn", lambda c: partial(discover_occn, c.ocel, OCCN_THRESHOLD),
+              requires=("import_ocel",)),
+    Algorithm("OCDFG.from_ocel", lambda c: partial(OCDFG.from_ocel, c.ocel),
+              requires=("import_ocel",)),
+    # The flattening CCDFG takes as input is not a benchmarked step, so its end-to-end
+    # cost is understated - see run_benchmarks.print_summary.
     Algorithm(
         "CCDFG.from_ocel",
         lambda c: partial(CCDFG.from_ocel, c.ocel, c.leading_object_type, c.base_df),
+        requires=("import_ocel",),
     ),
     Algorithm(
         "find_variants",
@@ -212,6 +226,7 @@ ALGORITHMS: tuple[Algorithm, ...] = (
             timeout_s=None,
             verbose=False,
         ),
+        requires=("import_ocel_db",),
     ),
 )
 
