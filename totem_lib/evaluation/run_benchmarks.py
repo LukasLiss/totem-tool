@@ -103,6 +103,7 @@ from evaluation.harness import DEFAULT_REPEATS, DEFAULT_WARMUP, BenchmarkResult,
 from evaluation.runs import (
     DEFAULT_RUNS_DIR,
     BenchmarkRow,
+    RUN_FILE,
     RunDirectory,
     SettingsMismatch,
 )
@@ -288,6 +289,7 @@ def run(
     isolated: bool = True,
     skip: Iterable[tuple[str, str]] = (),
     on_row: Callable[[BenchmarkRow], None] | None = None,
+    on_start: Callable[[str, str], None] | None = None,
 ) -> list[BenchmarkRow]:
     """
     Run every algorithm on every log.
@@ -299,7 +301,8 @@ def run(
 
     `skip` lists (log, algorithm) pairs that are already measured, for resuming.
     `on_row` is called with each row the moment it is ready, before the next
-    measurement starts - that is where a run saves it to disk.
+    measurement starts - that is where a run saves it to disk. `on_start` is called
+    with (log, algorithm) just before a measurement begins, for live status.
 
     Rows are printed as they finish so partial progress is visible, and returned so the
     export and plotting steps can use them.
@@ -320,6 +323,8 @@ def run(
         context = None if isolated else LogContext(log)
         try:
             for algorithm in todo:
+                if on_start is not None:
+                    on_start(log.name, algorithm.name)
                 if isolated:
                     result = measure_isolated(log, algorithm, repeats, warmup, timeout_s)
                 else:
@@ -431,6 +436,9 @@ def main() -> None:
     parser.add_argument("--resume", type=Path, default=None, metavar="RUN_DIR",
                         help="continue an earlier run: skip what it already measured. "
                              "--logs/--algorithms add to its plan")
+    parser.add_argument("--run-dir", type=Path, default=None,
+                        help="use exactly this folder: start a run there, or resume the one "
+                             "already in it. For batch jobs that get restarted")
     parser.add_argument("--retry-failed", action="store_true",
                         help="with --resume, measure failed pairs again")
     parser.add_argument("--formats", type=_csv, default=list(FORMATS),
@@ -440,8 +448,13 @@ def main() -> None:
                         help="show the logs and algorithms, then exit")
     args = parser.parse_args()
 
-    if args.retry_failed and args.resume is None:
-        raise SystemExit("--retry-failed only makes sense with --resume")
+    if args.run_dir is not None:
+        if args.resume is not None:
+            raise SystemExit("give --run-dir or --resume, not both")
+        if (args.run_dir / RUN_FILE).exists():
+            args.resume = args.run_dir
+    if args.retry_failed and args.resume is None and args.run_dir is None:
+        raise SystemExit("--retry-failed only makes sense with --resume or --run-dir")
 
     # --- what to run -------------------------------------------------------
     run_dir = RunDirectory.open(args.resume) if args.resume else None
@@ -507,6 +520,7 @@ def main() -> None:
         run_dir = RunDirectory.create(
             args.out_dir, settings=settings, environment=environment,
             logs=log_names, algorithms=algorithm_names, name=args.name,
+            folder=args.run_dir,
         )
         skip: set = set()
         print(f"Run folder: {run_dir.path}")
@@ -524,10 +538,14 @@ def main() -> None:
     try:
         run(logs, algorithms, settings["repeats"], warmup=settings["warmup"],
             timeout_s=settings["timeout_s"], isolated=settings["isolated"],
-            skip=skip, on_row=lambda row: run_dir.append(row, commit=commit))
+            skip=skip, on_row=lambda row: run_dir.append(row, commit=commit),
+            on_start=lambda log, algorithm: run_dir.mark_running(
+                log, algorithm, timeout_s=settings["timeout_s"]))
     except KeyboardInterrupt:
         interrupted = True
         print("\nInterrupted. Everything measured so far is saved.")
+    finally:
+        run_dir.clear_running()
 
     # --- summaries, rebuilt from everything the run folder holds -----------
     rows = run_dir.rows()

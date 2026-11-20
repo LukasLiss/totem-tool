@@ -86,6 +86,7 @@ is the single place that override is applied.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -96,8 +97,14 @@ from typing import Sequence
 
 _TEST_DATA = Path(__file__).resolve().parent.parent / "test_data"
 
+# Where downloaded logs live. The large ones are never committed: set TOTEM_EVAL_DATA to
+# keep them somewhere roomy, such as $HPCWORK on a cluster. Read once at import, so a
+# benchmark's worker processes see the same folder as the run that started them.
+DATA_ENV_VAR = "TOTEM_EVAL_DATA"
+
 SMALL = _TEST_DATA / "small"
-LARGE = _TEST_DATA / "large"
+LARGE = Path(os.environ[DATA_ENV_VAR]).expanduser().resolve() if os.environ.get(DATA_ENV_VAR) \
+    else _TEST_DATA / "large"
 
 # Formats import_ocel can infer from a file extension.
 SUPPORTED_FORMATS = ("sqlite", "json", "xml", "csv", "duckdb")

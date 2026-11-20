@@ -28,6 +28,11 @@ metrics shows which size measure an algorithm actually scales with.
 Rebuild every figure of a run without measuring anything again:
 
     python evaluation/figures.py evaluation/results/runs/<run folder>
+
+Combine several runs, e.g. a cluster batch with one run per log, into one set of
+tables and figures (written to <folder>/combined unless --out says otherwise):
+
+    python evaluation/figures.py $HPCWORK/totem-eval/runs/<batch>
 """
 
 from __future__ import annotations
@@ -641,21 +646,53 @@ def draw_all(rows: Sequence, figures_dir: Path, tables_dir: Path | None = None) 
     return written
 
 
+def output_folder(paths: list[Path], runs: list, out: Path | None = None) -> Path:
+    """Where the figures go: a run folder given on its own is drawn into itself; a batch
+    folder or several runs go to ``<first path>/combined``, even if only one run is in it
+    so far, so a batch always ends up in the same place."""
+    if out is not None:
+        return out
+    if len(paths) == 1 and len(runs) == 1 and runs[0].path.resolve() == paths[0].resolve():
+        return runs[0].path
+    return paths[0] / "combined"
+
+
 def main() -> None:
-    from evaluation.runs import RunDirectory
+    from evaluation.export import FORMATS, export
+    from evaluation.runs import combined_rows, find_runs
 
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("run_dir", type=Path, help="a run folder from run_benchmarks.py")
+    parser.add_argument("paths", nargs="+", type=Path,
+                        help="a run folder, several, or a folder holding runs (a cluster "
+                             "batch writes one run per log); their results are combined")
+    parser.add_argument("--out", type=Path, default=None,
+                        help="where to write: default is the run folder itself, or "
+                             "<folder>/combined when several runs are combined")
     args = parser.parse_args()
-    try:
-        run_dir = RunDirectory.open(args.run_dir)
-    except FileNotFoundError as exc:
-        raise SystemExit(str(exc))
-    rows = run_dir.rows()
+
+    runs = find_runs(args.paths)
+    if not runs:
+        raise SystemExit(f"no benchmark runs in {', '.join(map(str, args.paths))}")
+    rows = combined_rows(runs)
     if not rows:
-        raise SystemExit(f"{run_dir.path} has no measurements yet")
-    for path in draw_all(rows, run_dir.figures_dir, run_dir.path):
+        raise SystemExit("those runs have no measurements yet")
+
+    out = output_folder(args.paths, runs, args.out)
+    if out != runs[0].path:
+        settings = {run.path.name: run.settings for run in runs}
+        if len({tuple(sorted(s.items())) for s in settings.values()}) > 1:
+            print("Warning: these runs used different settings, so their numbers are not "
+                  "strictly comparable:")
+            for name, values in settings.items():
+                print(f"  {name}: {values}")
+        print(f"Combining {len(runs)} runs ({len(rows)} measurements) into {out}")
+        # The tables too, so the combined folder reads like one run.
+        first = runs[0]
+        for path in export(rows, out, FORMATS, repeats=first.settings.get("repeats"),
+                           settings=first.settings, environment=first.environment):
+            print(path)
+    for path in draw_all(rows, out / "figures", out):
         print(path)
 
 

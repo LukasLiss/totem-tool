@@ -72,6 +72,13 @@ def package_versions() -> dict[str, str | None]:
 
 def git_state() -> dict[str, object]:
     commit = _run("git", "rev-parse", "HEAD")
+    if commit is None and os.environ.get("TOTEM_GIT_COMMIT"):
+        # Inside the evaluation image there is no .git; the build bakes the state in.
+        return {
+            "commit": os.environ["TOTEM_GIT_COMMIT"],
+            "branch": os.environ.get("TOTEM_GIT_BRANCH") or None,
+            "dirty": os.environ.get("TOTEM_GIT_DIRTY") == "1",
+        }
     status = _run("git", "status", "--porcelain", "--untracked-files=no")
     return {
         "commit": commit,
@@ -94,6 +101,10 @@ def collect_environment() -> dict[str, object]:
         "python": platform.python_version(),
         "packages": package_versions(),
         "git": git_state(),
+        # Where it ran: the node, the batch job and the image, when there are any.
+        "host": platform.node() or None,
+        "slurm_job": os.environ.get("SLURM_JOB_ID"),
+        "image": os.environ.get("TOTEM_IMAGE"),
     }
 
 

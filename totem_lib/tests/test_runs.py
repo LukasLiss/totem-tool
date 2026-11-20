@@ -19,6 +19,8 @@ from evaluation.runs import (
     BenchmarkRow,
     RunDirectory,
     SettingsMismatch,
+    combined_rows,
+    find_runs,
     latest_per_pair,
 )
 
@@ -151,6 +153,62 @@ def test_a_new_machine_or_commit_is_recorded_once(tmp_path):
     assert run_dir.environment == other
 
 
+def test_a_run_can_be_created_in_an_exact_folder_once(tmp_path):
+    """A batch job names its folder so a resubmitted job finds the same run."""
+    run_dir = _create(tmp_path, folder=tmp_path / "batch" / "enron")
+    assert run_dir.path == tmp_path / "batch" / "enron"
+    with pytest.raises(FileExistsError):
+        _create(tmp_path, folder=tmp_path / "batch" / "enron")
+
+
+# ---------------------------------------------------------------------------
+# Live status
+# ---------------------------------------------------------------------------
+
+def test_the_running_pair_is_marked_and_cleared(tmp_path):
+    run_dir = _create(tmp_path)
+    assert run_dir.running() is None
+    run_dir.mark_running("a", "works", timeout_s=3600)
+    running = run_dir.running()
+    assert (running["log"], running["algorithm"], running["timeout_s"]) == ("a", "works", 3600)
+    assert running["pid"] and running["host"] and running["started_at"]
+    run_dir.clear_running()
+    assert run_dir.running() is None
+    run_dir.clear_running()  # clearing twice is harmless
+
+
+def test_progress_counts_against_the_plan(tmp_path):
+    run_dir = _create(tmp_path, algorithms=["works", "breaks"])
+    run_dir.append(_row("a", "works"))
+    run_dir.append(_row("a", "breaks", error="Timeout"))
+    progress = run_dir.progress()
+    assert progress["planned"] == 4
+    assert progress["done"] == 1
+    assert progress["failed"] == [("a", "breaks")]
+    assert progress["remaining"] == [("b", "works"), ("b", "breaks")]
+    assert progress["last_recorded_at"]
+
+
+def test_find_runs_takes_a_run_or_a_folder_of_runs(tmp_path):
+    one = _create(tmp_path / "batch", folder=tmp_path / "batch" / "a")
+    two = _create(tmp_path / "batch", folder=tmp_path / "batch" / "b")
+    (tmp_path / "batch" / "slurm").mkdir()  # not a run, ignored
+    assert [r.path for r in find_runs([tmp_path / "batch"])] == [one.path, two.path]
+    assert [r.path for r in find_runs([one.path])] == [one.path]
+    assert len(find_runs([one.path, tmp_path / "batch"])) == 2  # no duplicates
+    assert find_runs([tmp_path / "nothing"]) == []
+
+
+def test_combined_rows_merge_runs_and_keep_the_later_run_for_a_repeat(tmp_path):
+    one = _create(tmp_path, folder=tmp_path / "a")
+    two = _create(tmp_path, folder=tmp_path / "b")
+    one.append(_row("a", "works", elapsed=1.0))
+    one.append(_row("b", "works", elapsed=5.0))
+    two.append(_row("b", "works", elapsed=2.0))
+    rows = combined_rows([one, two])
+    assert [(r.log, r.result.min_s) for r in rows] == [("a", 1.0), ("b", 2.0)]
+
+
 # ---------------------------------------------------------------------------
 # The runner's side
 # ---------------------------------------------------------------------------
@@ -183,3 +241,12 @@ def test_run_skips_pairs_that_are_already_measured():
                isolated=False, skip={("a", "counting")})
     assert [row.log for row in rows] == ["b"]
     assert calls == ["b"]
+
+
+def test_run_announces_each_measurement_before_it_starts():
+    events = []
+    algorithm = Algorithm("one", lambda context: lambda: events.append("measure"))
+    run([_log("a")], [algorithm], repeats=1, echo=False, warmup=0, isolated=False,
+        on_start=lambda log, name: events.append(("start", log, name)),
+        on_row=lambda row: events.append("saved"))
+    assert events == [("start", "a", "one"), "measure", "saved"]

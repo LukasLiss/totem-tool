@@ -10,6 +10,7 @@ and every measurement is appended to it the moment it finishes:
                               machine(s) and commit(s) the run was measured on
         measurements.jsonl    one line per finished measurement, appended and flushed
                               immediately - the source of truth
+        running.json          the pair being measured right now (only while running)
         benchmark_results.*   CSV / JSON / Markdown, rebuilt from measurements.jsonl
         figures/              the plots, rebuilt from measurements.jsonl
 
@@ -27,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -35,9 +37,15 @@ from typing import Iterable, Sequence
 from evaluation.datasets import STATISTIC_FIELDS, LogStatistics
 from evaluation.harness import BenchmarkResult
 
-DEFAULT_RUNS_DIR = Path(__file__).resolve().parent / "results" / "runs"
+# TOTEM_EVAL_RUNS moves new runs elsewhere, e.g. out of a read-only container image.
+DEFAULT_RUNS_DIR = (
+    Path(os.environ["TOTEM_EVAL_RUNS"]).expanduser() if os.environ.get("TOTEM_EVAL_RUNS")
+    else Path(__file__).resolve().parent / "results" / "runs"
+)
 RUN_FILE = "run.json"
 MEASUREMENTS_FILE = "measurements.jsonl"
+# Which pair is being measured right now, for status.py. Gone between measurements.
+RUNNING_FILE = "running.json"
 
 # Settings a resumed run must share with the original, or its numbers would not be
 # comparable with the ones already measured.
@@ -137,16 +145,28 @@ class RunDirectory:
         algorithms: Sequence[str],
         name: str | None = None,
         now: datetime | None = None,
+        folder: Path | str | None = None,
     ) -> "RunDirectory":
-        """Start a new run in a fresh folder named after the current time."""
-        stamp = (now or datetime.now()).strftime("%Y-%m-%d_%H-%M-%S")
-        folder = Path(base) / (f"{stamp}_{name}" if name else stamp)
-        # Two runs started in the same second must not share a folder.
-        suffix = 1
-        while folder.exists():
-            suffix += 1
-            folder = folder.with_name(f"{folder.name.rsplit('~', 1)[0]}~{suffix}")
-        folder.mkdir(parents=True)
+        """
+        Start a new run in a fresh folder named after the current time.
+
+        With `folder`, the run goes exactly there instead (a batch job that has to find
+        its run again after a restart). That folder must not already hold a run.
+        """
+        if folder is not None:
+            folder = Path(folder)
+            if (folder / RUN_FILE).exists():
+                raise FileExistsError(f"{folder} already holds a run; resume it instead")
+            folder.mkdir(parents=True, exist_ok=True)
+        else:
+            stamp = (now or datetime.now()).strftime("%Y-%m-%d_%H-%M-%S")
+            folder = Path(base) / (f"{stamp}_{name}" if name else stamp)
+            # Two runs started in the same second must not share a folder.
+            suffix = 1
+            while folder.exists():
+                suffix += 1
+                folder = folder.with_name(f"{folder.name.rsplit('~', 1)[0]}~{suffix}")
+            folder.mkdir(parents=True)
 
         run = cls(folder)
         run._write_meta({
@@ -225,6 +245,63 @@ class RunDirectory:
         environments = self.meta().get("environments") or []
         return environments[-1] if environments else None
 
+    # --- what is running now ----------------------------------------------
+
+    @property
+    def running_file(self) -> Path:
+        return self.path / RUNNING_FILE
+
+    def mark_running(self, log: str, algorithm: str, *, timeout_s: float | None = None) -> None:
+        """Note the pair that is about to be measured, so status.py can show it."""
+        values = {
+            "log": log,
+            "algorithm": algorithm,
+            "started_at": datetime.now().isoformat(timespec="seconds"),
+            "timeout_s": timeout_s,
+            "host": socket.gethostname(),
+            "pid": os.getpid(),
+        }
+        tmp = self.running_file.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(values) + "\n", encoding="utf-8")
+        os.replace(tmp, self.running_file)
+
+    def clear_running(self) -> None:
+        self.running_file.unlink(missing_ok=True)
+
+    def running(self) -> dict | None:
+        """The pair being measured, or None. May be stale if the process was killed."""
+        try:
+            return json.loads(self.running_file.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+
+    def progress(self) -> dict:
+        """How far the run is: planned, finished and failed pairs, and what is left."""
+        meta = self.meta()
+        planned = [(log, algorithm) for log in meta["logs"] for algorithm in meta["algorithms"]]
+        rows = {row.key: row for row in self.rows()}
+        failed = [key for key in planned if key in rows and not rows[key].ok]
+        return {
+            "planned": len(planned),
+            "done": sum(1 for key in planned if key in rows and rows[key].ok),
+            "failed": failed,
+            "remaining": [key for key in planned if key not in rows],
+            "last_recorded_at": max(
+                (line.get("recorded_at") for line in self._raw_lines() if line.get("recorded_at")),
+                default=None,
+            ),
+        }
+
+    def _raw_lines(self) -> list[dict]:
+        lines = []
+        if self.measurements_file.exists():
+            for line in self.measurements_file.read_text(encoding="utf-8").splitlines():
+                try:
+                    lines.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+        return lines
+
     # --- measurements ------------------------------------------------------
 
     def append(self, row: BenchmarkRow, *, commit: str | None = None) -> None:
@@ -277,3 +354,32 @@ def _fingerprint(environment: dict) -> tuple:
         git.get("commit"),
         git.get("dirty"),
     )
+
+
+def find_runs(paths: Iterable[Path | str]) -> list[RunDirectory]:
+    """
+    The runs in these paths: a run folder itself, or any run folders beneath it.
+
+    A cluster batch writes one run per log into a shared parent folder; pointing at
+    the parent picks them all up, in name order.
+    """
+    found: dict[Path, RunDirectory] = {}
+    for path in map(Path, paths):
+        if (path / RUN_FILE).exists():
+            candidates = [path / RUN_FILE]
+        else:
+            candidates = sorted(path.glob(f"**/{RUN_FILE}"))
+        for run_file in candidates:
+            found.setdefault(run_file.parent.resolve(), RunDirectory(run_file.parent))
+    return list(found.values())
+
+
+def combined_rows(runs: Iterable[RunDirectory]) -> list[BenchmarkRow]:
+    """
+    Every run's rows together. A pair measured in more than one run keeps the line
+    from the run listed last (find_runs lists them in folder-name order).
+    """
+    lines = []
+    for run in runs:
+        lines.extend(run.all_rows())
+    return latest_per_pair(lines)

@@ -284,6 +284,23 @@ both and each measurement notes its commit.
 The summaries and figures are rebuilt from `measurements.jsonl` at the end of every
 session. Run folders are gitignored; copy one elsewhere or `git add -f` it to keep it.
 
+Follow a run from another terminal, and combine several runs into one set of figures:
+
+```bash
+python evaluation/status.py evaluation/results/runs/<folder> --watch 30
+python evaluation/figures.py <run folder> [<run folder> ...]   # or a folder of runs
+```
+
+`status.py` shows finished / planned measurements, failures, and the pair being measured
+right now against its 1-hour timeout. Set `TOTEM_EVAL_DATA` to keep downloaded logs
+outside the repo, and `TOTEM_EVAL_RUNS` to put run folders elsewhere.
+
+### On a cluster, or anywhere with Docker
+
+`evaluation/hpc/` packages the evaluation as a Docker image that Apptainer can run on an
+HPC cluster, with Slurm scripts that measure one log per node and draw the combined
+figures at the end. See [evaluation/hpc/README.md](evaluation/hpc/README.md).
+
 ### How the numbers are taken
 
 - **One process per measurement.** Each (log, algorithm) pair runs in a fresh Python

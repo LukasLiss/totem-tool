@@ -15,6 +15,7 @@ from evaluation.figures import (
     MIN_RANGE_FACTOR,
     draw_all,
     duckdb_pairs,
+    output_folder,
     fit_power_law,
     plot_grid,
     plot_pipeline,
@@ -196,3 +197,21 @@ def test_a_log_at_zero_does_not_break_a_log_axis(tmp_path):
     ]
     assert plot_grid(rows, "num_o2o_relations", tmp_path / "zero.png").exists()
     assert draw_all(rows, tmp_path / "figures")
+
+
+# ---------------------------------------------------------------------------
+# Where the figures go
+# ---------------------------------------------------------------------------
+
+def test_figures_go_into_a_run_folder_given_alone_and_combined_otherwise(tmp_path):
+    from types import SimpleNamespace
+
+    batch = tmp_path / "batch"
+    one = SimpleNamespace(path=batch / "enron")
+    two = SimpleNamespace(path=batch / "bundestag")
+    (batch / "enron").mkdir(parents=True)
+    assert output_folder([batch / "enron"], [one]) == batch / "enron"
+    # A batch with one log done so far still goes to combined/, like the full batch will.
+    assert output_folder([batch], [one]) == batch / "combined"
+    assert output_folder([batch], [one, two]) == batch / "combined"
+    assert output_folder([batch], [one], tmp_path / "elsewhere") == tmp_path / "elsewhere"
