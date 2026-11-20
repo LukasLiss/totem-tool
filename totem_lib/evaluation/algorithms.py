@@ -217,6 +217,16 @@ ALGORITHMS: tuple[Algorithm, ...] = (
 
 ALGORITHM_NAMES = tuple(algorithm.name for algorithm in ALGORITHMS)
 
+# Run only when asked for by name. find_variants exhausts memory on order-management;
+# a timeout cannot stop that, and on macOS the swapping slows the whole machine down
+# before the process is killed.
+OPT_IN_ALGORITHMS = frozenset({"find_variants"})
+
+# What a run covers when no --algorithms are given.
+DEFAULT_ALGORITHMS: tuple[Algorithm, ...] = tuple(
+    algorithm for algorithm in ALGORITHMS if algorithm.name not in OPT_IN_ALGORITHMS
+)
+
 
 def get_algorithm(name: str, algorithms: Sequence[Algorithm] = ALGORITHMS) -> Algorithm:
     """Return the algorithm with this name, or raise ValueError listing the valid ones."""

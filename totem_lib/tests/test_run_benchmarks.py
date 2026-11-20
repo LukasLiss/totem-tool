@@ -99,37 +99,37 @@ def test_measure_swallows_algorithm_output(capsys):
 
 def test_run_covers_every_log_and_algorithm():
     logs = [_log(name="a"), _log(name="b")]
-    rows = run(logs, [_works(), _works()], repeats=1, echo=False)
+    rows = run(logs, [_works(), _works()], repeats=1, echo=False, isolated=False)
     assert len(rows) == 4
     assert {row.log for row in rows} == {"a", "b"}
 
 
 def test_one_broken_algorithm_does_not_stop_the_others():
-    rows = run([_log()], [_raises_when_run(), _works()], repeats=1, echo=False)
+    rows = run([_log()], [_raises_when_run(), _works()], repeats=1, echo=False, isolated=False)
     assert [row.ok for row in rows] == [False, True]
 
 
 def test_a_broken_algorithm_does_not_stop_later_logs():
     logs = [_log(name="a"), _log(name="b")]
-    rows = run(logs, [_raises_when_run()], repeats=1, echo=False)
+    rows = run(logs, [_raises_when_run()], repeats=1, echo=False, isolated=False)
     assert len(rows) == 2
     assert all(not row.ok for row in rows)
 
 
 def test_repeats_reach_the_harness():
-    rows = run([_log()], [_works()], repeats=4, echo=False)
+    rows = run([_log()], [_works()], repeats=4, echo=False, isolated=False)
     assert rows[0].result.repeats == 4
 
 
 def test_rows_are_printed_as_they_finish(capsys):
-    run([_log()], [_works()], repeats=1, echo=True)
+    run([_log()], [_works()], repeats=1, echo=True, isolated=False)
     printed = capsys.readouterr().out
     assert "fake-log" in printed
     assert "works" in printed
 
 
 def test_nothing_is_printed_when_echo_is_off(capsys):
-    run([_log()], [_works()], repeats=1, echo=False)
+    run([_log()], [_works()], repeats=1, echo=False, isolated=False)
     assert capsys.readouterr().out == ""
 
 
@@ -138,7 +138,7 @@ def test_nothing_is_printed_when_echo_is_off(capsys):
 # ---------------------------------------------------------------------------
 
 def test_a_row_carries_the_logs_size_next_to_the_measurement():
-    rows = run([_log()], [_works()], repeats=1, echo=False)
+    rows = run([_log()], [_works()], repeats=1, echo=False, isolated=False)
     values = rows[0].as_dict()
     assert values["log"] == "fake-log"
     assert values["algorithm"] == "works"
@@ -148,15 +148,15 @@ def test_a_row_carries_the_logs_size_next_to_the_measurement():
 
 
 def test_a_failed_row_exports_its_error_and_no_timings():
-    rows = run([_log()], [_raises_when_run()], repeats=1, echo=False)
+    rows = run([_log()], [_raises_when_run()], repeats=1, echo=False, isolated=False)
     values = rows[0].as_dict()
     assert values["elapsed_s"] is None
-    assert values["peak_mb"] is None
+    assert values["peak_rss_mb"] is None
     assert "algorithm exploded" in values["error"]
 
 
 def test_a_row_without_statistics_still_exports():
-    rows = run([_log(statistics=None)], [_works()], repeats=1, echo=False)
+    rows = run([_log(statistics=None)], [_works()], repeats=1, echo=False, isolated=False)
     values = rows[0].as_dict()
     assert values["log"] == "fake-log"
     assert "num_events" not in values
@@ -174,6 +174,82 @@ def test_the_cheapest_real_algorithm_runs_on_a_real_log():
     if not logs:
         pytest.skip("no evaluation logs present on disk")
 
-    rows = run(logs[:1], [get_algorithm("OCDFG.from_ocel")], repeats=1, echo=False)
+    rows = run(logs[:1], [get_algorithm("OCDFG.from_ocel")], repeats=1, echo=False,
+               warmup=0, isolated=False)
     assert rows[0].ok, rows[0].result.error
     assert rows[0].result.elapsed_s > 0
+
+
+def test_the_cheapest_real_algorithm_runs_in_its_own_process():
+    """The default path: a worker process, with peak memory reported."""
+    from evaluation.algorithms import get_algorithm
+    from evaluation.datasets import available_logs
+
+    logs = available_logs()
+    if not logs:
+        pytest.skip("no evaluation logs present on disk")
+
+    rows = run(logs[:1], [get_algorithm("OCDFG.from_ocel")], repeats=2, echo=False,
+               warmup=0, timeout_s=600)
+    result = rows[0].result
+    assert result.ok, result.error
+    assert len(result.times_s) == 2
+    assert result.std_s is not None
+    if result.peak_rss_mb is not None:  # None only where `resource` is missing
+        assert result.peak_rss_mb >= result.input_rss_mb > 0
+
+
+# ---------------------------------------------------------------------------
+# Isolation
+# ---------------------------------------------------------------------------
+
+def test_isolated_runs_refuse_unregistered_algorithms():
+    """A worker finds its algorithm by name, so a fake one cannot be sent there."""
+    with pytest.raises(ValueError):
+        run([_log()], [_works()], repeats=1, echo=False)
+
+
+def test_a_timeout_is_reported_as_a_failed_row(monkeypatch, tmp_path):
+    import evaluation.run_benchmarks as runner
+    from evaluation.algorithms import get_algorithm
+    from evaluation.datasets import LOGS
+
+    hang = tmp_path / "hang.py"
+    hang.write_text("import time\ntime.sleep(60)\n")
+    monkeypatch.setattr(runner, "WORKER", hang)
+
+    result = runner.measure_isolated(LOGS[0], get_algorithm("OCDFG.from_ocel"),
+                                     repeats=1, timeout_s=0.5)
+    assert not result.ok
+    assert result.error.startswith("Timeout")
+
+
+def test_a_crashing_worker_is_reported_as_a_failed_row(monkeypatch, tmp_path):
+    import evaluation.run_benchmarks as runner
+    from evaluation.algorithms import get_algorithm
+    from evaluation.datasets import LOGS
+
+    crash = tmp_path / "crash.py"
+    crash.write_text("import sys\nprint('MemoryError: out of memory')\nsys.exit(3)\n")
+    monkeypatch.setattr(runner, "WORKER", crash)
+
+    result = runner.measure_isolated(LOGS[0], get_algorithm("OCDFG.from_ocel"),
+                                     repeats=1, timeout_s=30)
+    assert not result.ok
+    assert "exit code 3" in result.error
+    assert "MemoryError" in result.error
+
+
+def test_in_process_runs_report_no_memory():
+    """This process has done other work, so its high-water mark means nothing here."""
+    rows = run([_log()], [_works()], repeats=1, echo=False, isolated=False)
+    assert rows[0].result.peak_rss_mb is None
+
+
+def test_warmup_runs_are_not_timed():
+    calls = []
+    counting = Algorithm("counting", lambda context: lambda: calls.append(1))
+    rows = run([_log()], [counting], repeats=2, echo=False, warmup=3, isolated=False)
+    assert len(calls) == 5
+    assert len(rows[0].result.times_s) == 2
+    assert rows[0].result.warmup == 3

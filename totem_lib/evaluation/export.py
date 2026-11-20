@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 from evaluation.datasets import SIZE_METRICS, STATISTIC_FIELDS
+from evaluation.environment import describe
 
 DEFAULT_OUT_DIR = Path(__file__).resolve().parent / "results"
 BASE_NAME = "benchmark_results"
@@ -34,8 +35,15 @@ CSV_FIELDS = (
     "log",
     "algorithm",
     "repeats",
+    "warmup",
     "elapsed_s",
-    "peak_mb",
+    "std_s",
+    "min_s",
+    "median_s",
+    "ci95_s",
+    "times_s",
+    "input_rss_mb",
+    "peak_rss_mb",
     "error",
     *STATISTIC_FIELDS,
     "duration_seconds",
@@ -45,9 +53,14 @@ CSV_FIELDS = (
 MISSING = "-"
 
 MEMORY_NOTE = (
-    "Peak RAM comes from `tracemalloc`, which only sees Python allocations. "
-    "Polars and DuckDB work mostly in native memory, so these numbers understate "
-    "what those algorithms really use."
+    "Time is the mean of the timed repeats; warm-up runs are excluded. "
+    "\u00b1 is the half-width of the 95% confidence interval for that mean. "
+    "Memory is the peak resident set size (RSS) of a process that ran just one "
+    "algorithm on one log, so it includes native Polars/DuckDB memory. Input RSS is "
+    "the peak before the algorithm ran (interpreter, libraries, importing the log), "
+    "Peak RSS the peak of the whole job, and Added how far the algorithm raised it - "
+    "0 when it fits in memory the import already needed. Only reported when each "
+    "measurement runs in its own process."
 )
 
 
@@ -72,6 +85,15 @@ def _cell(value: Any) -> str:
     return str(value).replace("|", "\\|").replace("\n", " ")
 
 
+def _seconds(value: Any) -> str:
+    """Three significant digits: enough to compare, short enough to read."""
+    return MISSING if value is None else f"{value:.3g}"
+
+
+def _megabytes(value: Any) -> str:
+    return MISSING if value is None else f"{value:,.0f}"
+
+
 def _logs_of(rows: Iterable) -> list[tuple[str, Any]]:
     """Each log that appears in the rows, in order, with its statistics."""
     logs: dict[str, Any] = {}
@@ -92,16 +114,28 @@ def write_csv(rows: Sequence, path: Path) -> Path:
         writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS, restval="")
         writer.writeheader()
         for row in rows:
-            writer.writerow(row.as_dict())
+            values = row.as_dict()
+            # A cell holds one value, so the repeats go in as a ;-separated list.
+            values["times_s"] = ";".join(repr(t) for t in values.get("times_s") or [])
+            writer.writerow(values)
     return path
 
 
-def write_json(rows: Sequence, path: Path, *, repeats: int | None = None) -> Path:
-    """Write the results plus a little about the run that produced them."""
+def write_json(
+    rows: Sequence,
+    path: Path,
+    *,
+    repeats: int | None = None,
+    settings: dict | None = None,
+    environment: dict | None = None,
+) -> Path:
+    """Write the results plus the settings, machine and code that produced them."""
     path.parent.mkdir(parents=True, exist_ok=True)
     document = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "repeats": repeats,
+        "settings": settings,
+        "environment": environment,
         "logs": [
             {"name": name, "statistics": stats.as_dict() if stats else None}
             for name, stats in _logs_of(rows)
@@ -114,7 +148,14 @@ def write_json(rows: Sequence, path: Path, *, repeats: int | None = None) -> Pat
     return path
 
 
-def write_markdown(rows: Sequence, path: Path, *, repeats: int | None = None) -> Path:
+def write_markdown(
+    rows: Sequence,
+    path: Path,
+    *,
+    repeats: int | None = None,
+    settings: dict | None = None,
+    environment: dict | None = None,
+) -> Path:
     """
     Write a summary for people to read.
 
@@ -127,8 +168,17 @@ def write_markdown(rows: Sequence, path: Path, *, repeats: int | None = None) ->
     when = datetime.now().strftime("%Y-%m-%d %H:%M")
     run_info = f"Generated {when}"
     if repeats is not None:
-        run_info += f", {repeats} repeat(s) per algorithm"
-    lines += [run_info, "", MEMORY_NOTE, ""]
+        run_info += f", {repeats} timed repeat(s) per algorithm"
+    if settings:
+        if settings.get("warmup") is not None:
+            run_info += f", {settings['warmup']} warm-up run(s)"
+        if settings.get("isolated") is not None:
+            run_info += (", one process per measurement" if settings["isolated"]
+                         else ", all in one process")
+    lines += [run_info, ""]
+    if environment:
+        lines += [f"Machine: {describe(environment)}", ""]
+    lines += [MEMORY_NOTE, ""]
 
     # --- logs ---
     labels = list(SIZE_METRICS.values())
@@ -150,16 +200,19 @@ def write_markdown(rows: Sequence, path: Path, *, repeats: int | None = None) ->
         "",
         "## Results",
         "",
-        "| Log | Events | Algorithm | Time (s) | Peak RAM (MB) |",
-        "|---|---|---|---|---|",
+        "| Log | Events | Algorithm | Time (s) | \u00b1 95% CI | Std (s) | Min (s) "
+        "| Input RSS (MB) | Peak RSS (MB) | Added RSS (MB) |",
+        "|---|---|---|---|---|---|---|---|---|---|",
     ]
     for row in rows:
         events = _count(row.statistics.num_events if row.statistics else None)
-        elapsed = MISSING if not row.ok else f"{row.result.elapsed_s}"
-        memory = MISSING if not row.ok else f"{row.result.peak_mb}"
+        result = row.result
         lines.append(
             f"| {_cell(row.log)} | {events} | {_cell(row.algorithm)} "
-            f"| {elapsed} | {memory} |"
+            f"| {_seconds(result.elapsed_s)} | {_seconds(result.ci95_s)} "
+            f"| {_seconds(result.std_s)} | {_seconds(result.min_s)} "
+            f"| {_megabytes(result.input_rss_mb)} | {_megabytes(result.peak_rss_mb)} "
+            f"| {_megabytes(result.added_rss_mb)} |"
         )
 
     # --- failures ---
@@ -184,6 +237,8 @@ def export(
     formats: Sequence[str] = FORMATS,
     *,
     repeats: int | None = None,
+    settings: dict | None = None,
+    environment: dict | None = None,
 ) -> list[Path]:
     """
     Write the results in each requested format and return the files written.
@@ -201,7 +256,9 @@ def export(
     if "csv" in formats:
         written.append(write_csv(rows, out_dir / f"{BASE_NAME}.csv"))
     if "json" in formats:
-        written.append(write_json(rows, out_dir / f"{BASE_NAME}.json", repeats=repeats))
+        written.append(write_json(rows, out_dir / f"{BASE_NAME}.json", repeats=repeats,
+                                  settings=settings, environment=environment))
     if "md" in formats:
-        written.append(write_markdown(rows, out_dir / f"{BASE_NAME}.md", repeats=repeats))
+        written.append(write_markdown(rows, out_dir / f"{BASE_NAME}.md", repeats=repeats,
+                                      settings=settings, environment=environment))
     return written

@@ -242,13 +242,44 @@ One command runs every main algorithm on every log and reports time and peak mem
 ```bash
 python evaluation/run_benchmarks.py
 python evaluation/run_benchmarks.py --list
-python evaluation/run_benchmarks.py --logs ocel2-p2p --repeats 1
+python evaluation/run_benchmarks.py --logs ocel2-p2p --repeats 1 --warmup 0
 python evaluation/run_benchmarks.py --algorithms totemDiscovery,OCDFG.from_ocel
+python evaluation/run_benchmarks.py --repeats 10 --timeout 7200
 ```
 
-Results print as each measurement finishes, so an interrupted run still shows everything
-measured so far, and `--logs` / `--algorithms` fill in the rest later. A failing algorithm
-is reported and the run continues.
+Results print as each measurement finishes. Result files are written at the end, so an
+interrupted run leaves only the printed lines. A failing, crashing or timed-out algorithm
+is reported and the run continues. `find_variants` only runs when named in
+`--algorithms`, because it exhausts memory on `order-management`.
+
+### How the numbers are taken
+
+- **One process per measurement.** Each (log, algorithm) pair runs in a fresh Python
+  process (`evaluation/worker.py`) that imports the log and then runs the algorithm.
+  Nothing an earlier algorithm cached or allocated can affect the next one, a hung run
+  is killed after `--timeout` seconds (default 3600), and a crash takes down only that
+  process. `--in-process` runs everything in one process instead, without memory figures
+  or a timeout.
+- **Only the algorithm is timed.** Preparing its input (importing the log, discovering
+  the TOTeM model `mlpaDiscovery` needs) happens before the clock starts. The timer is a
+  bare `time.perf_counter()` around the call, with nothing else running.
+- **Warm-up, then repeats.** `--warmup` untimed calls (default 1) absorb one-off costs
+  such as lazy imports. Then come `--repeats` timed calls (default 3). Every repeat is
+  saved, along with the mean, standard deviation, minimum, median and the 95% confidence
+  interval of the mean.
+- **Memory is the job's peak RSS.** The operating system's resident-memory high-water
+  mark (`ru_maxrss`), read before the first call (*input*: interpreter plus importing the
+  log) and after the last (*peak*: input plus algorithm). It includes native Polars and
+  DuckDB memory. *Added* is how far the algorithm raised the peak. It is 0 when the
+  algorithm fits in memory the import already needed, because freed memory stays with the
+  process and no process-level figure can separate the two.
+- **The machine is recorded.** The JSON holds the settings, CPU, core count, RAM, OS,
+  Python and library versions, and the git commit, with a flag for uncommitted changes.
+
+Earlier versions measured memory with `tracemalloc` during the timed calls. Tracing slows
+Python-heavy code a lot: on `ocel2-p2p` it made `totemDiscovery` 13x slower and
+`import_ocel` 5x slower, while DuckDB-based code was unaffected. Numbers from before this
+change are not comparable with current ones.
 
 Every run saves its results to `evaluation/results/`:
 
@@ -256,7 +287,7 @@ Every run saves its results to `evaluation/results/`:
 |---|---|
 | `benchmark_results.md` | reading - two tables, one for the logs and one for the measurements |
 | `benchmark_results.csv` | plots and other tools |
-| `benchmark_results.json` | the same data plus a note of when the run happened |
+| `benchmark_results.json` | the same data with every repeat, plus the run settings, machine and git commit |
 
 Use `--out-dir` to save somewhere else and `--formats` to write only some of them, for
 example `--formats md`. Each run overwrites the previous files. The generated JSON is

@@ -36,7 +36,7 @@ STATS = LogStatistics(
 
 
 def _ok_row(log="fake-log", algorithm="works", statistics=STATS) -> BenchmarkRow:
-    result = BenchmarkResult(name=algorithm, repeats=1, elapsed_s=1.5, peak_mb=2.5)
+    result = BenchmarkResult(name=algorithm, repeats=1, elapsed_s=1.5, peak_rss_mb=2.5)
     return BenchmarkRow(log=log, algorithm=algorithm, result=result, statistics=statistics)
 
 
@@ -82,7 +82,7 @@ def test_csv_writes_a_failed_row_with_its_error_and_no_timings(tmp_path):
     row = _read_csv(path)[0]
     assert row["error"] == "ValueError: boom"
     assert row["elapsed_s"] == ""
-    assert row["peak_mb"] == ""
+    assert row["peak_rss_mb"] == ""
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +137,7 @@ def test_an_error_containing_a_pipe_does_not_break_the_table(tmp_path):
         if line.startswith("| fake-log |") and "broken" in line
     ]
     assert len(result_lines) == 1
-    assert result_lines[0].count("|") == 6  # 5 columns -> 6 pipes
+    assert result_lines[0].count("|") == 11  # 10 columns -> 11 pipes
 
 
 def test_markdown_reports_failures_separately(tmp_path):
@@ -189,3 +189,47 @@ def test_export_handles_an_empty_run(tmp_path):
     """A fully filtered run writes headers and no rows, rather than crashing."""
     written = export([], tmp_path)
     assert all(path.exists() for path in written)
+
+
+# ---------------------------------------------------------------------------
+# Repeats and run metadata
+# ---------------------------------------------------------------------------
+
+def _repeated_row() -> BenchmarkRow:
+    from evaluation.harness import Measurement
+
+    result = BenchmarkResult.from_measurements(
+        "works", [Measurement(0.1), Measurement(0.30000000000000004)], warmup=1,
+        input_rss_mb=100.0, peak_rss_mb=180.0,
+    )
+    return BenchmarkRow(log="fake-log", algorithm="works", result=result, statistics=STATS)
+
+
+def test_csv_keeps_every_repeat_and_reads_back_exactly(tmp_path):
+    from evaluation.plots import rows_from_csv
+
+    path = write_csv([_repeated_row()], tmp_path / "r.csv")
+    assert _read_csv(path)[0]["times_s"] == "0.1;0.30000000000000004"
+    assert rows_from_csv(path)[0].result == _repeated_row().result
+
+
+def test_json_records_settings_and_environment(tmp_path):
+    from evaluation.environment import collect_environment
+
+    environment = collect_environment()
+    settings = {"repeats": 2, "warmup": 1, "timeout_s": 60, "isolated": True}
+    path = write_json([_repeated_row()], tmp_path / "r.json", repeats=2,
+                      settings=settings, environment=environment)
+    document = json.loads(path.read_text(encoding="utf-8"))
+    assert document["settings"] == settings
+    assert document["environment"]["python"]
+    assert document["results"][0]["times_s"] == [0.1, 0.30000000000000004]
+
+
+def test_markdown_names_the_machine(tmp_path):
+    environment = {"cpu": "Test CPU", "cpu_count": 8, "ram_gb": 16.0, "os": "TestOS",
+                   "python": "3.12", "git": {"commit": "abcdef1234567", "dirty": True}}
+    text = write_markdown([_repeated_row()], tmp_path / "r.md",
+                          environment=environment).read_text(encoding="utf-8")
+    assert "Test CPU, 8 cores, 16.0 GB RAM" in text
+    assert "abcdef1234 (uncommitted changes)" in text

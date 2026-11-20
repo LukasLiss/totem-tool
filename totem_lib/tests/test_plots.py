@@ -55,7 +55,7 @@ def _stats(**overrides) -> LogStatistics:
 
 
 def _row(log="log-a", algorithm="works", elapsed_s=1.5, statistics=None) -> BenchmarkRow:
-    result = BenchmarkResult(name=algorithm, repeats=1, elapsed_s=elapsed_s, peak_mb=2.0)
+    result = BenchmarkResult(name=algorithm, repeats=1, elapsed_s=elapsed_s, peak_rss_mb=2.0)
     return BenchmarkRow(
         log=log,
         algorithm=algorithm,
@@ -145,7 +145,7 @@ def test_series_drops_rows_without_statistics():
     row = BenchmarkRow(
         log="a",
         algorithm="works",
-        result=BenchmarkResult(name="works", repeats=1, elapsed_s=1.0, peak_mb=1.0),
+        result=BenchmarkResult(name="works", repeats=1, elapsed_s=1.0, peak_rss_mb=1.0),
         statistics=None,
     )
     assert series_for([row], "num_events") == {}
@@ -299,7 +299,7 @@ def test_rows_from_csv_handles_a_row_without_statistics(tmp_path):
     row = BenchmarkRow(
         log="a",
         algorithm="works",
-        result=BenchmarkResult(name="works", repeats=1, elapsed_s=1.0, peak_mb=1.0),
+        result=BenchmarkResult(name="works", repeats=1, elapsed_s=1.0, peak_rss_mb=1.0),
         statistics=None,
     )
     loaded = rows_from_csv(write_csv([row], tmp_path / "r.csv"))[0]

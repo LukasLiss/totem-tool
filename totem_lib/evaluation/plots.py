@@ -115,11 +115,20 @@ def rows_from_csv(path: Path | str) -> list:
                     earliest_timestamp=int(record["earliest_timestamp"]),
                     newest_timestamp=int(record["newest_timestamp"]),
                 )
+            # .get(): results files written before a column existed still load.
+            times = record.get("times_s") or ""
             result = BenchmarkResult(
                 name=record["algorithm"],
                 repeats=int(record["repeats"]) if record["repeats"] else 0,
+                warmup=_number(record.get("warmup"), int) or 0,
                 elapsed_s=_number(record["elapsed_s"], float),
-                peak_mb=_number(record["peak_mb"], float),
+                std_s=_number(record.get("std_s"), float),
+                min_s=_number(record.get("min_s"), float),
+                median_s=_number(record.get("median_s"), float),
+                ci95_s=_number(record.get("ci95_s"), float),
+                times_s=tuple(float(t) for t in times.split(";") if t),
+                input_rss_mb=_number(record.get("input_rss_mb"), float),
+                peak_rss_mb=_number(record.get("peak_rss_mb"), float),
                 error=record["error"] or None,
             )
             rows.append(
