@@ -137,10 +137,11 @@ When the array is done, the figures job combines every log's run folder into
 ```
 combined/
     benchmark_results.csv / .json / .md    every measurement, one table
-    scaling_exponents.csv / .md            fitted exponents and R^2
-    figures/                               runtime and memory vs. log size, per-algorithm
-                                           grids, exponent heatmap, Polars vs DuckDB,
-                                           pipeline cost
+    figures/<chapter>/                     each dissertation chapter's figures (PDF,
+                                           PNG) and tables (CSV, Markdown, LaTeX):
+                                           totem-discovery, totem-conformance,
+                                           occn-discovery, occn-conformance,
+                                           process-area, totem-tool
 ```
 
 Redraw at any time, e.g. after resubmitting failures, or before the batch is complete
@@ -152,7 +153,8 @@ apptainer exec --bind $HPCWORK $HPCWORK/totem-eval/totem-eval.sif \
 ```
 
 Or copy the batch to your laptop and draw there; the raw measurements
-(`measurements.jsonl`, `run.json`) are all the figures need:
+(`measurements.jsonl`, `run.json`) and the saved models (`artifacts/`) are all
+the figures need:
 
 ```bash
 rsync -a <your-tim-id>@login25-1.hpc.itc.rwth-aachen.de:'$HPCWORK/totem-eval/runs/thesis-v1' .

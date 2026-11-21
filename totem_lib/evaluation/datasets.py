@@ -8,18 +8,26 @@ gets measured several ways - see `LogStatistics` below.
 Logs
 ----
 
-The eight logs of the TOTeM conformance-checking paper (BPM 2026), sorted by events:
+The eight logs of the TOTeM conformance-checking paper (BPM 2026), plus the remaining
+public OCEL 2.0 logs used in the other TOTeM papers (marked *), sorted by events:
 
-| name                   |    events | objects | E2O rel.   | act. | types | where it lives    | source |
-|------------------------|-----------|---------|------------|------|-------|-------------------|--------|
-| `ocel2-p2p`            |    14,671 |   9,054 |     35,927 |   10 |     7 | `small/` (in git) | 10.5281/zenodo.8412919 |
-| `order-management`     |    21,008 |  10,840 |    147,463 |   11 |     6 | `small/` (in git) | 10.5281/zenodo.8337463 |
-| `lrms-reasoning-steps` |    31,709 |   1,645 |     63,418 |   32 |     2 | `large/` (fetch)  | 10.5281/zenodo.21977680 |
-| `container_logistics`  |    35,372 |  13,882 |     74,272 |   14 |     7 | `small/` (in git) | 10.5281/zenodo.8289899 |
-| `hinge-production`     |    38,528 |  23,771 |    144,827 |   11 |    12 | `large/` (fetch)  | 10.5281/zenodo.24331838 |
-| `bundestag`            |    62,719 |  37,665 |     67,185 |  148 |    44 | `large/` (fetch)  | 10.5281/zenodo.16811928 |
-| `enron`                |   517,891 | 316,848 |  1,765,575 |    9 |     2 | `large/` (fetch)  | 10.5281/zenodo.21989732 |
-| `age-of-empires`       | 2,372,505 | 361,935 | 10,387,384 |  829 |    30 | `large/` (fetch)  | 10.5281/zenodo.13365584 |
+| name                       |    events | objects | E2O rel.   | act. | types | where it lives    | source |
+|----------------------------|-----------|---------|------------|------|-------|-------------------|--------|
+| `github-pm4py` *           |     1,798 |     532 |      5,394 |   20 |     3 | `large/` (fetch)  | 10.5281/zenodo.18334009 |
+| `recruiting` *             |     6,980 |   1,505 |     21,961 |   16 |     6 | `large/` (fetch)  | 10.5281/zenodo.18334009 |
+| `transfer-order` *         |    10,319 |   2,500 |     51,574 |    3 |     5 | `large/` (fetch)  | 10.5281/zenodo.18334009 |
+| `ocel2-p2p`                |    14,671 |   9,054 |     35,927 |   10 |     7 | `small/` (in git) | 10.5281/zenodo.8412919 |
+| `order-management`         |    21,008 |  10,840 |    147,463 |   11 |     6 | `small/` (in git) | 10.5281/zenodo.8337463 |
+| `p2p` *                    |    24,854 |  74,489 |    105,039 |   32 |     8 | `large/` (fetch)  | 10.5281/zenodo.18334009 |
+| `angular-github-commits` * |    27,842 |  28,317 |  2,462,456 |   67 |     2 | `large/` (fetch)  | 10.5281/zenodo.8430332 |
+| `lrms-reasoning-steps`     |    31,709 |   1,645 |     63,418 |   32 |     2 | `large/` (fetch)  | 10.5281/zenodo.21977680 |
+| `container_logistics`      |    35,372 |  13,882 |     74,272 |   14 |     7 | `small/` (in git) | 10.5281/zenodo.8289899 |
+| `hinge-production`         |    38,528 |  23,771 |    144,827 |   11 |    12 | `large/` (fetch)  | 10.5281/zenodo.24331838 |
+| `bundestag`                |    62,719 |  37,665 |     67,185 |  148 |    44 | `large/` (fetch)  | 10.5281/zenodo.16811928 |
+| `windows-events` *         |    98,128 |     404 |    519,001 |  337 |     6 | `large/` (fetch)  | 10.5281/zenodo.18334009 |
+| `o2c` *                    |    98,350 | 107,767 |    236,265 |   23 |    19 | `large/` (fetch)  | 10.5281/zenodo.18334009 |
+| `enron`                    |   517,891 | 316,848 |  1,765,575 |    9 |     2 | `large/` (fetch)  | 10.5281/zenodo.21989732 |
+| `age-of-empires`           | 2,372,505 | 361,935 | 10,387,384 |  829 |    30 | `large/` (fetch)  | 10.5281/zenodo.13365584 |
 
 Note how the order changes with the metric: `order-management` has the fewest events of
 the small logs but by far the most event-to-object relations. Which log counts as
@@ -35,6 +43,13 @@ Things to know about the large logs:
   importers' runtimes therefore mix formats; compare import times within a format.
 - Some logs carry placeholder timestamps (`bundestag` ends in 2038, `enron` spans
   1979-2044, `lrms-reasoning-steps` sits on 2 January 1970). They are recorded as found.
+- `p2p`, `o2c`, `recruiting`, `transfer-order`, `github-pm4py` and `windows-events` come
+  from the OCEL 2.0 example collection (SQLite edition), which publishes each log only as
+  a ZIP. The download script extracts the single SQLite file from it (`archive_member`).
+  `p2p` is that collection's SAP-style P2P log; `ocel2-p2p` is the separate
+  "P2P normal" simulation. None of the collection logs has object-to-object relations.
+- `angular-github-commits` is read from XML: its `.jsonocel` file is OCEL 1.0 and imports
+  as 0 events. It has by far the most relations per event (about 88).
 - Age of Empires has 829 activities. Its SQLite file used to fail with "too many terms in
   compound SELECT"; `import_ocel` now reads the per-activity tables in batches.
 
@@ -197,6 +212,10 @@ class EvaluationLog:
     `leading_object_type` is the object type used as the "case" when an algorithm needs
     one, such as variant discovery. The `_db` algorithms build their own DuckDB copy
     from `path` at run time, so no second file is recorded here.
+
+    `archive_member` is set when `download_url` points at a ZIP archive rather than the
+    log itself: it names the file inside the archive that ends up at `path`. `md5` and
+    `size_bytes` then describe the archive, since that is what the source publishes.
     """
 
     name: str
@@ -208,6 +227,7 @@ class EvaluationLog:
     download_url: str | None = None
     md5: str | None = None
     size_bytes: int | None = None
+    archive_member: str | None = None
 
     @property
     def available(self) -> bool:
@@ -389,6 +409,152 @@ LOGS: tuple[EvaluationLog, ...] = tuple(
                     num_o2o_relations=2541715,
                     earliest_timestamp=1681691569,
                     newest_timestamp=1702536162,
+                ),
+            ),
+            # --- OCEL 2.0 example collection (Berti et al.) ------------------------
+            # Published only as one ZIP per log, each holding a single SQLite file;
+            # download_logs.py fetches the archive, verifies it, and extracts the
+            # member. md5 and size_bytes describe the ZIP. None of these logs has
+            # object-to-object relations.
+            EvaluationLog(
+                name="github-pm4py",
+                source_url="https://doi.org/10.5281/zenodo.18334009",
+                path=LARGE / "6_github_pm4py.sqlite",
+                download_url=_zenodo(18334009, "6_github_pm4py.zip"),
+                md5="6dcf6eed94183f55561250a24dec75f6",
+                size_bytes=104_648,
+                archive_member="6_github_pm4py.sqlite",
+                leading_object_type="case:concept:name",
+                statistics=LogStatistics(
+                    num_events=1798,
+                    num_objects=532,
+                    num_unique_activities=20,
+                    num_object_types=3,
+                    num_e2o_relations=5394,
+                    num_o2o_relations=0,
+                    earliest_timestamp=1535112199,
+                    newest_timestamp=1667812568,
+                ),
+            ),
+            EvaluationLog(
+                name="recruiting",
+                source_url="https://doi.org/10.5281/zenodo.18334009",
+                path=LARGE / "5_recruiting.sqlite",
+                download_url=_zenodo(18334009, "5_recruiting.zip"),
+                md5="18224fa48f1560c6abb2181ac478fa0c",
+                size_bytes=402_084,
+                archive_member="5_recruiting.sqlite",
+                leading_object_type="applications",
+                statistics=LogStatistics(
+                    num_events=6980,
+                    num_objects=1505,
+                    num_unique_activities=16,
+                    num_object_types=6,
+                    num_e2o_relations=21961,
+                    num_o2o_relations=0,
+                    earliest_timestamp=1558355217,
+                    newest_timestamp=1597870398,
+                ),
+            ),
+            EvaluationLog(
+                name="transfer-order",
+                source_url="https://doi.org/10.5281/zenodo.18334009",
+                path=LARGE / "4_transfer_order.sqlite",
+                download_url=_zenodo(18334009, "4_transfer_order.zip"),
+                md5="86f525e0fa9ddf55d52b0d45b65fc2a0",
+                size_bytes=543_644,
+                archive_member="4_transfer_order.sqlite",
+                leading_object_type="MATNR",
+                statistics=LogStatistics(
+                    num_events=10319,
+                    num_objects=2500,
+                    num_unique_activities=3,
+                    num_object_types=5,
+                    num_e2o_relations=51574,
+                    num_o2o_relations=0,
+                    earliest_timestamp=786818013,
+                    newest_timestamp=1664323080,
+                ),
+            ),
+            EvaluationLog(
+                name="p2p",
+                source_url="https://doi.org/10.5281/zenodo.18334009",
+                path=LARGE / "2_p2p.sqlite",
+                download_url=_zenodo(18334009, "2_p2p.zip"),
+                md5="c8169ed450a4320f9cf8be915fcd1a61",
+                size_bytes=4_351_460,
+                archive_member="2_p2p.sqlite",
+                leading_object_type="EBELN",
+                statistics=LogStatistics(
+                    num_events=24854,
+                    num_objects=74489,
+                    num_unique_activities=32,
+                    num_object_types=8,
+                    num_e2o_relations=105039,
+                    num_o2o_relations=0,
+                    earliest_timestamp=784512000,
+                    newest_timestamp=1591228800,
+                ),
+            ),
+            EvaluationLog(
+                name="windows-events",
+                source_url="https://doi.org/10.5281/zenodo.18334009",
+                path=LARGE / "7_windows_events.sqlite",
+                download_url=_zenodo(18334009, "7_windows_events.zip"),
+                md5="f9871f081baf2e1916954fff30cf1538",
+                size_bytes=6_159_292,
+                archive_member="7_windows_events.sqlite",
+                leading_object_type="eventIdentifier",
+                statistics=LogStatistics(
+                    num_events=98128,
+                    num_objects=404,
+                    num_unique_activities=337,
+                    num_object_types=6,
+                    num_e2o_relations=519001,
+                    num_o2o_relations=0,
+                    earliest_timestamp=1610278577,
+                    newest_timestamp=1667996006,
+                ),
+            ),
+            EvaluationLog(
+                name="o2c",
+                source_url="https://doi.org/10.5281/zenodo.18334009",
+                path=LARGE / "3_o2c.sqlite",
+                download_url=_zenodo(18334009, "3_o2c.zip"),
+                md5="0c2a6db975e4dd8dccda1556e327a7f9",
+                size_bytes=7_150_177,
+                archive_member="3_o2c.sqlite",
+                leading_object_type="VERKBELEG",
+                statistics=LogStatistics(
+                    num_events=98350,
+                    num_objects=107767,
+                    num_unique_activities=23,
+                    num_object_types=19,
+                    num_e2o_relations=236265,
+                    num_o2o_relations=0,
+                    earliest_timestamp=709344000,
+                    newest_timestamp=1588032000,
+                ),
+            ),
+            # Angular has no SQLite file, and its `.jsonocel` file is OCEL 1.0 (it
+            # imports as 0 events). The XML file is the OCEL 2.0 one.
+            EvaluationLog(
+                name="angular-github-commits",
+                source_url="https://doi.org/10.5281/zenodo.8430332",
+                path=LARGE / "angular_github_commits_ocel.xml",
+                download_url=_zenodo(8430332, "angular_github_commits_ocel.xml"),
+                md5="6c6200127174d953379ebd50e0ab7e70",
+                size_bytes=178_138_217,
+                leading_object_type="branches",
+                statistics=LogStatistics(
+                    num_events=27842,
+                    num_objects=28317,
+                    num_unique_activities=67,
+                    num_object_types=2,
+                    num_e2o_relations=2462456,
+                    num_o2o_relations=0,
+                    earliest_timestamp=1411056721,
+                    newest_timestamp=1694187105,
                 ),
             ),
         ],

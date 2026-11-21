@@ -12,7 +12,10 @@ and every measurement is appended to it the moment it finishes:
                               immediately - the source of truth
         running.json          the pair being measured right now (only while running)
         benchmark_results.*   CSV / JSON / Markdown, rebuilt from measurements.jsonl
-        figures/              the plots, rebuilt from measurements.jsonl
+        artifacts/<log>/      what each measurement produced (model, fitness, ...),
+                              one JSON file per measurement - see outcomes.py
+        figures/<chapter>/    the plots per dissertation chapter, rebuilt from
+                              measurements.jsonl and the artifacts
 
 Resuming (`run_benchmarks.py --resume <folder>`) reads measurements.jsonl and skips every
 (log, algorithm) pair already in it, so an interrupted run picks up where it stopped.
@@ -29,7 +32,7 @@ from __future__ import annotations
 import json
 import os
 import socket
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -46,6 +49,8 @@ RUN_FILE = "run.json"
 MEASUREMENTS_FILE = "measurements.jsonl"
 # Which pair is being measured right now, for status.py. Gone between measurements.
 RUNNING_FILE = "running.json"
+# One JSON file per measurement: the model or result it produced.
+ARTIFACTS_DIR = "artifacts"
 
 # Settings a resumed run must share with the original, or its numbers would not be
 # comparable with the ones already measured.
@@ -131,6 +136,11 @@ class RunDirectory:
     @property
     def figures_dir(self) -> Path:
         return self.path / "figures"
+
+    @property
+    def artifacts_dir(self) -> Path:
+        """The models and results each measurement produced, one JSON file each."""
+        return self.path / ARTIFACTS_DIR
 
     # --- creating and opening ---------------------------------------------
 
@@ -277,8 +287,10 @@ class RunDirectory:
 
     def progress(self) -> dict:
         """How far the run is: planned, finished and failed pairs, and what is left."""
+        from evaluation.algorithms import planned_pairs  # loads totem_lib, so only here
+
         meta = self.meta()
-        planned = [(log, algorithm) for log in meta["logs"] for algorithm in meta["algorithms"]]
+        planned = planned_pairs(meta["logs"], meta["algorithms"])
         rows = {row.key: row for row in self.rows()}
         failed = [key for key in planned if key in rows and not rows[key].ok]
         return {
@@ -328,9 +340,15 @@ class RunDirectory:
             if not line.strip():
                 continue
             try:
-                rows.append(BenchmarkRow.from_dict(json.loads(line)))
+                row = BenchmarkRow.from_dict(json.loads(line))
             except (json.JSONDecodeError, KeyError, TypeError):
                 continue
+            # Saved relative to the run folder; resolved here, so rows read from
+            # several runs can still find their artifacts.
+            if row.result.artifact and not Path(row.result.artifact).is_absolute():
+                row = replace(row, result=replace(
+                    row.result, artifact=str(self.path / row.result.artifact)))
+            rows.append(row)
         return rows
 
     def rows(self) -> list[BenchmarkRow]:

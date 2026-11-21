@@ -205,12 +205,18 @@ def _repeated_row() -> BenchmarkRow:
     return BenchmarkRow(log="fake-log", algorithm="works", result=result, statistics=STATS)
 
 
-def test_csv_keeps_every_repeat_and_reads_back_exactly(tmp_path):
-    from evaluation.plots import rows_from_csv
+def test_csv_keeps_every_repeat_and_what_the_algorithm_produced(tmp_path):
+    from dataclasses import replace
 
-    path = write_csv([_repeated_row()], tmp_path / "r.csv")
-    assert _read_csv(path)[0]["times_s"] == "0.1;0.30000000000000004"
-    assert rows_from_csv(path)[0].result == _repeated_row().result
+    row = _repeated_row()
+    row = replace(row, result=replace(row.result, properties={"params": {"tau": 0.3},
+                                                              "totem_arcs": 9},
+                                      artifact="artifacts/fake-log/works.json"))
+    path = write_csv([row], tmp_path / "r.csv")
+    written = _read_csv(path)[0]
+    assert written["times_s"] == "0.1;0.30000000000000004"
+    assert json.loads(written["properties"]) == {"params": {"tau": 0.3}, "totem_arcs": 9}
+    assert written["artifact"] == "artifacts/fake-log/works.json"
 
 
 def test_json_records_settings_and_environment(tmp_path):
