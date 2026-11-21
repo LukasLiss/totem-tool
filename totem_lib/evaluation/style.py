@@ -5,9 +5,10 @@ Each log has one colour, one marker and one short name, and keeps them in every 
 of every chapter, so a reader can follow a log across the dissertation. The first eight
 are exactly those of the conformance paper's figures (tab10, markers in the order the
 paper's notebook assigned them to the alphabetically sorted names). Logs added later
-continue with the two unused tab10 colours and then five tab20b shades and black, chosen
-to keep every pair of the fifteen colours at least as far apart (OKLab distance 10.8) as
-the closest pair within tab10 itself (11.3). Fifteen colours cannot all be told apart by
+continue with the two unused tab10 colours and then five colours in tab10's own
+lightness and saturation range (OKLab L 0.5-0.7, chroma 0.12-0.18), chosen so that every
+pair of the fifteen colours is at least as far apart (OKLab distance 12.2) as the
+closest pair within tab10 itself (11.3). Fifteen colours cannot all be told apart by
 colour-blind readers, so every log also has a marker of its own: the marker, not the
 colour, is what identifies a log in greyscale print or for a colour-blind reader.
 
@@ -46,11 +47,11 @@ LOG_STYLES: dict[str, LogStyle] = {
     # The OCCN and process-area papers' logs.
     "o2c": LogStyle("O2C", "#bcbd22", "h"),
     "recruiting": LogStyle("Recruiting", "#17becf", "p"),
-    "transfer-order": LogStyle("Transfer", "#393b79", "d"),
-    "p2p": LogStyle("P2P (SAP)", "#637939", "<"),
-    "github-pm4py": LogStyle("GitHub", "#9c9ede", ">"),
-    "windows-events": LogStyle("Windows", "#cedb9c", "H"),
-    "angular-github-commits": LogStyle("Angular", "#000000", "8"),
+    "transfer-order": LogStyle("Transfer", "#4c701a", "d"),
+    "p2p": LogStyle("P2P (SAP)", "#a02a83", "<"),
+    "github-pm4py": LogStyle("GitHub", "#7a97fb", ">"),
+    "windows-events": LogStyle("Windows", "#ac8b26", "H"),
+    "angular-github-commits": LogStyle("Angular", "#ce6f70", "8"),
 }
 
 _FALLBACK = LogStyle("?", "#ffffff", ".")
