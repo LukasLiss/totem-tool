@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useContext, useCallback } from "react";
-import { BookOpen, ChevronsUpDown, Pencil, Plus, Trash2 } from "lucide-react"
+import { BookOpen, ChevronsUpDown, Download, Pencil, Plus, Trash2 } from "lucide-react"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -29,7 +29,13 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import { SelectedFileContext } from "../contexts/SelectedFileContext.tsx";
-import { deleteProject, getUserFiles, renameProject } from "../api/fileApi"
+import {
+  deleteProject,
+  exportProject,
+  getUserFiles,
+  renameProject,
+} from "../api/fileApi"
+import { saveProjectBundle, toFilename } from "@/editors/shared/io"
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner"
 import { DashboardContext } from "@/contexts/DashboardContext.tsx";
@@ -47,6 +53,9 @@ type ProjectFile = {
 /** Project.display_name is the name the user gave it; otherwise the file name. */
 const projectLabel = (project: Partial<ProjectFile> | null): string =>
   project?.display_name || project?.file?.split("/").pop() || "Untitled project";
+
+/** A safe filename stem for an exported project. */
+const projectFilename = (label: string) => toFilename(label, "project");
 
 /** The rename field is capped to Project.display_name's column width. */
 const PROJECT_NAME_MAX_LENGTH = 120;
@@ -87,6 +96,29 @@ export function Switcher() {
     setMenuOpen(false);
     setProjectToRename(project);
     setNewName(projectLabel(project));
+  };
+
+  const handleExport = async (project: ProjectFile) => {
+    setMenuOpen(false);
+    const label = projectLabel(project);
+    const id = toast.loading(`Preparing “${label}”…`);
+    try {
+      // The archive carries the event log, so it can take a moment and can be
+      // tens of megabytes — fetched first, then handed to the save picker.
+      const blob = await exportProject(project.id);
+      const stem = projectFilename(label);
+      const outcome = await saveProjectBundle(stem, blob);
+      toast.dismiss(id);
+      if (outcome === "cancelled") return;
+      toast.success(
+        outcome === "saved"
+          ? `Saved ${stem}.totem`
+          : `Downloading ${stem}.totem`
+      );
+    } catch {
+      toast.dismiss(id);
+      toast.error("Project could not be exported");
+    }
   };
 
   const startDelete = (project: ProjectFile) => {
@@ -195,6 +227,12 @@ export function Switcher() {
                 </span>
                 {/* Row actions. Every pointer event is kept off the item so
                     using them does not also switch to the project. */}
+                <ProjectAction
+                  label={`Export ${projectLabel(project)}`}
+                  onTrigger={() => handleExport(project)}
+                >
+                  <Download className="size-3.5" />
+                </ProjectAction>
                 <ProjectAction
                   label={`Rename ${projectLabel(project)}`}
                   onTrigger={() => startRename(project)}
