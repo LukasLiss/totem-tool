@@ -270,13 +270,14 @@ def _serialize_marker_group_list(
 
 
 def _serialize_marker_group(group: OCCausalNet.MarkerGroup) -> dict[str, Any]:
+    key_offset = _marker_key_offset(group)
     markers = [
         {
             "related_activity": marker.related_activity,
             "object_type": marker.object_type,
             "min_count": marker.min_count,
             "max_count": _finite_or_none(marker.max_count),
-            "marker_key": marker.marker_key,
+            "marker_key": marker.marker_key + key_offset,
         }
         for marker in group.markers
     ]
@@ -293,6 +294,24 @@ def _serialize_marker_group(group: OCCausalNet.MarkerGroup) -> dict[str, Any]:
         "support_count": _finite_or_none(group.support_count),
         "markers": markers,
     }
+
+
+def _marker_key_offset(group: OCCausalNet.MarkerGroup) -> int:
+    """Shift that makes every marker key of ``group`` a positive int.
+
+    On an ``OCCausalNet`` object a marker key is a plain label: markers of one
+    group that share ``(marker_key, object_type)`` must bind disjoint objects
+    (see ``MarkerGroup.key_constraints``), and ``0`` is a label like any
+    other. The canonical format (and the editors' ``[.., key]`` tuples, the
+    factory and the playout engine) reserve ``0`` for "no key constraint" and
+    require stored keys to be positive. Nets with non-positive keys (e.g.
+    pickled nets from discovery before it numbered keys from 1) are shifted
+    group-wise, which keeps exactly the same key groups.
+    """
+    keys = [marker.marker_key for marker in group.markers]
+    if not keys or not all(_is_non_bool_int(key) for key in keys):
+        return 0  # left for validate_occn_dict to report
+    return max(0, 1 - min(keys))
 
 
 def _deserialize_marker_groups(

@@ -40,7 +40,11 @@ class OCCausalNet(VisualizableMixin):
             count_range : Tuple
                 Min and max number of markers consumable ('cardinalities')
             marker_key : int
-                Key of the marker
+                Key of the marker. Markers of one group that share
+                ``(marker_key, object_type)`` must bind disjoint objects
+                (see ``MarkerGroup.key_constraints``). Use positive keys:
+                ``from_dict``, the canonical JSON format and the editors
+                treat ``0`` as "no key constraint" (a fresh unique key).
             """
             if not isinstance(count_range, (tuple, list)) or len(count_range) != 2:
                 raise TypeError(f"count_range must be a tuple of 2 cardinalities, got {count_range}")
