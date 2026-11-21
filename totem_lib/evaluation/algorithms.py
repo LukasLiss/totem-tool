@@ -209,7 +209,7 @@ class LogContext:
         mined when it does not.
         """
         if self._occn is None:
-            saved = self.saved_object(OCCN_DISCOVERY)
+            saved = self.saved_occn(OCCN_DISCOVERY)
             if saved is not None:
                 self._occn = saved
             else:
@@ -238,7 +238,7 @@ class LogContext:
         mined otherwise - see `occn` for why.
         """
         if self._main_occn is None:
-            saved = self.saved_object(OCCN_MAIN_DISCOVERY)
+            saved = self.saved_occn(OCCN_MAIN_DISCOVERY)
             if saved is not None:
                 self._main_occn = saved
             else:
@@ -260,11 +260,14 @@ class LogContext:
                 self.ocel_db, object_types=self.main_object_types)
         return self._replay_units
 
-    def saved_object(self, algorithm_name: str):
+    def saved_occn(self, algorithm_name: str):
         """
-        The object an earlier measurement of this run kept for reuse, if any.
+        The OCCN an earlier measurement of this run saved for this log, or None.
 
-        Only files this run wrote are read (see worker.py), so unpickling is safe.
+        Read from the pickle next to its JSON artifact, which keeps the net exactly as
+        discovered, including the order of its marker groups that the threshold filter
+        depends on (see outcomes.occn_json). Only files this run wrote are read, so
+        unpickling is safe.
         """
         if self.artifact_dir is None:
             return None

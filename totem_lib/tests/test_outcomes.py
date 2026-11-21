@@ -22,7 +22,7 @@ from evaluation.algorithms import (
 from evaluation.datasets import EvaluationLog
 from evaluation.harness import benchmark
 from evaluation.worker import measure_in_this_process
-from totem_lib import discover_occn, extract_occn_replay_units, import_ocel
+from totem_lib import discover_occn, extract_occn_replay_units, import_ocel, occn_from_dict
 from totem_lib.ocel.importer_db import import_ocel_db
 from totem_lib.totem import totemDiscovery_db
 
@@ -62,12 +62,17 @@ def test_conformance_keeps_all_six_values_and_the_model(ocel_db):
     json.dumps(outcome.artifact)  # must be saveable as it is
 
 
-def test_an_occn_is_described_saved_as_json_and_kept_for_reuse(occn):
+def test_an_occn_is_saved_in_the_canonical_form_and_kept_exactly_for_reuse(occn):
     outcome = outcomes.describe_occn(occn)
     assert outcome.properties["occn_activities"] == len(occn.activities)
     assert outcome.properties["occn_markers"] > 0
-    json.dumps(outcome.artifact)
-    assert outcome.reuse is occn
+    saved = json.loads(json.dumps(outcome.artifact))["occn"]
+    assert saved["schema"] == "occn"
+    assert occn_from_dict(saved) == occn
+    reused = pickle.loads(pickle.dumps(outcome.reuse))
+    for threshold in (0, 0.1, 0.5):  # the conformance experiments filter the reused net
+        assert str(reused.apply_relative_occurrence_threshold(threshold)) == \
+            str(occn.apply_relative_occurrence_threshold(threshold))
 
 
 def test_each_execution_is_replayed_and_timed_on_its_own(occn, ocel_db):
@@ -149,7 +154,7 @@ def test_the_worker_saves_the_model_and_records_where(tmp_path, monkeypatch):
     assert result.properties["occn_markers"] > 0
     assert result.artifact == "artifacts/running-example/discover_occn_db.json"
     saved = artifacts / "running-example" / "discover_occn_db.json"
-    assert "occn" in json.loads(saved.read_text())
+    assert json.loads(saved.read_text())["occn"]["schema"] == "occn"
     with open(saved.with_suffix(".pickle"), "rb") as handle:
         assert pickle.load(handle).activities
 
@@ -158,12 +163,12 @@ def test_conformance_reuses_the_occn_discovery_saved(tmp_path, monkeypatch, occn
     artifacts = tmp_path / "artifacts"
     target = artifacts / "running-example" / "discover_occn_db.pickle"
     target.parent.mkdir(parents=True)
-    target.write_bytes(pickle.dumps(outcomes.picklable_occn(occn)))
+    target.write_bytes(pickle.dumps(outcomes.describe_occn(occn).reuse))
     monkeypatch.setattr("evaluation.algorithms.discover_occn",
                         lambda *a, **k: pytest.fail("mined again"))
     context = LogContext(_example_log(), artifacts)
     try:
-        assert context.occn.activities == occn.activities
+        assert context.occn == occn
     finally:
         context.close()
 

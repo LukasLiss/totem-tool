@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from statistics import mean
 from typing import Any
 
-from totem_lib import serialize_occn, totem_to_dict
+from totem_lib import occn_to_dict, totem_to_dict
 from totem_lib.totem.totem import TR_DEPENDENT, TR_INITIATING, TR_PARALLEL
 
 
@@ -31,10 +31,10 @@ class Outcome:
     """
     The described output of one measurement.
 
-    `reuse` is an object a later measurement of the same run can load back exactly
-    (pickled next to the JSON artifact). The OCCN needs this: the conformance
-    experiments reuse the discovered net instead of mining it again, and its JSON form
-    cannot be read back (see occn_json).
+    `reuse` is an object a later measurement of the same run loads back exactly,
+    pickled next to the JSON artifact. The OCCN needs this: the conformance experiments
+    filter the discovered net again, and the library's marker-group filter depends on
+    the order of the groups, which a JSON round trip does not keep (see occn_json).
     """
 
     properties: dict[str, Any] = field(default_factory=dict)
@@ -110,14 +110,15 @@ def occn_properties(occn) -> dict[str, Any]:
 
 def occn_json(occn) -> dict:
     """
-    The OCCN as JSON, in the shape the frontend reads (serialize_occn).
+    The OCCN in the library's canonical JSON form (occn_to_dict), readable with
+    occn_from_dict: every activity, arc and marker group with its support.
 
-    Not the canonical occn_to_dict: its validator demands positive marker keys, while
-    discover_occn hands out key 0, so every discovered net fails it. This form keeps
-    every activity, arc and marker group with its support, but has no reader, which is
-    why the net is also pickled for reuse.
+    It is the same net, but not in the same group order, and
+    apply_relative_occurrence_threshold depends on that order: on the running example
+    the net and its JSON copy filter to different marker groups from 0.3 on. So for
+    reuse the net is pickled as well (Outcome.reuse).
     """
-    return serialize_occn(occn)
+    return occn_to_dict(occn)
 
 
 def picklable_occn(occn):
