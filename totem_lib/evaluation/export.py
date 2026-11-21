@@ -47,6 +47,10 @@ CSV_FIELDS = (
     "error",
     *STATISTIC_FIELDS,
     "duration_seconds",
+    # What the algorithm produced (parameters, model size, fitness, ...) as JSON, and
+    # the file holding the model itself - see evaluation/outcomes.py.
+    "properties",
+    "artifact",
 )
 
 # Shown instead of a number when an algorithm failed.
@@ -119,6 +123,8 @@ def write_csv(rows: Sequence, path: Path) -> Path:
             values = row.as_dict()
             # A cell holds one value, so the repeats go in as a ;-separated list.
             values["times_s"] = ";".join(repr(t) for t in values.get("times_s") or [])
+            if values.get("properties") is not None:
+                values["properties"] = json.dumps(values["properties"], sort_keys=True)
             writer.writerow(values)
     return path
 

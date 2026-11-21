@@ -3,8 +3,10 @@ from .algorithms import (
     ALGORITHMS,
     DEFAULT_ALGORITHMS,
     OPT_IN_ALGORITHMS,
+    CHAPTERS,
     Algorithm,
     LogContext,
+    algorithms_for,
     MissingInput,
     get_algorithm,
 )
@@ -35,13 +37,7 @@ from .runs import (
     SettingsMismatch,
     latest_per_pair,
 )
-from .plots import (
-    FIGURES_DIR,
-    plot_all,
-    plot_metric,
-    rows_from_csv,
-    series_for,
-)
+from .figures import CHAPTER_FIGURES, draw_all
 from .environment import collect_environment
 from .harness import (
     DEFAULT_REPEATS,
@@ -60,10 +56,13 @@ __all__ = [
     "Algorithm",
     "ALGORITHM_NAMES",
     "ALGORITHMS",
+    "algorithms_for",
     "available_logs",
     "benchmark",
     "BenchmarkResult",
     "BenchmarkRow",
+    "CHAPTER_FIGURES",
+    "CHAPTERS",
     "collect_environment",
     "confidence_half_width",
     "CSV_FIELDS",
@@ -73,9 +72,9 @@ __all__ = [
     "DEFAULT_RUNS_DIR",
     "DEFAULT_WARMUP",
     "downloadable_logs",
+    "draw_all",
     "EvaluationLog",
     "export",
-    "FIGURES_DIR",
     "FORMATS",
     "get_algorithm",
     "get_log",
@@ -89,11 +88,7 @@ __all__ = [
     "MissingInput",
     "OPT_IN_ALGORITHMS",
     "peak_rss_mb",
-    "plot_all",
-    "plot_metric",
-    "rows_from_csv",
     "RunDirectory",
-    "series_for",
     "SettingsMismatch",
     "SIZE_METRICS",
     "STATISTIC_FIELDS",

@@ -88,7 +88,9 @@ from evaluation.algorithms import (
     ALGORITHMS,
     DEFAULT_ALGORITHMS,
     Algorithm,
+    CHAPTERS,
     LogContext,
+    algorithms_for,
     get_algorithm,
 )
 from evaluation.datasets import (
@@ -151,7 +153,7 @@ def silenced():
 
 
 def measure(algorithm: Algorithm, context: LogContext, repeats: int,
-            warmup: int = 0) -> BenchmarkResult:
+            warmup: int = 0, artifact_dir: Path | None = None) -> BenchmarkResult:
     """
     Benchmark one algorithm against one prepared log, in this process.
 
@@ -161,12 +163,11 @@ def measure(algorithm: Algorithm, context: LogContext, repeats: int,
     Preparing the input can fail on its own - a log may lack a leading object type -
     and that is reported the same way a failing algorithm is, so the run continues.
     """
+    from evaluation.worker import measure_in_this_process
+
     with silenced():
-        try:
-            call = algorithm.make_call(context)
-        except Exception as exc:
-            return BenchmarkResult.failed(algorithm.name, repeats, exc, warmup=warmup)
-        return benchmark(algorithm.name, call, repeats=repeats, warmup=warmup, memory=False)
+        return measure_in_this_process(context.log.name, algorithm, repeats, warmup,
+                                       artifact_dir, memory=False, context=context)
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +216,7 @@ def measure_isolated(
     repeats: int,
     warmup: int = 0,
     timeout_s: float | None = DEFAULT_TIMEOUT_S,
+    artifact_dir: Path | None = None,
 ) -> BenchmarkResult:
     """
     Benchmark one algorithm on one log in a fresh Python process.
@@ -233,6 +235,8 @@ def measure_isolated(
             "--warmup", str(warmup),
             "--result-file", str(result_file),
         ]
+        if artifact_dir is not None:
+            command += ["--artifact-dir", str(artifact_dir)]
         with open(output_file, "wb") as output:
             # A session of its own, so a timeout can kill the whole process group and
             # Ctrl+C in the terminal reaches only this process, which then cleans up.
@@ -290,6 +294,7 @@ def run(
     skip: Iterable[tuple[str, str]] = (),
     on_row: Callable[[BenchmarkRow], None] | None = None,
     on_start: Callable[[str, str], None] | None = None,
+    artifact_dir: Path | None = None,
 ) -> list[BenchmarkRow]:
     """
     Run every algorithm on every log.
@@ -303,6 +308,8 @@ def run(
     `on_row` is called with each row the moment it is ready, before the next
     measurement starts - that is where a run saves it to disk. `on_start` is called
     with (log, algorithm) just before a measurement begins, for live status.
+    `artifact_dir` is where each measurement's model or result is saved (see
+    evaluation/outcomes.py); without it only the numbers are kept.
 
     Rows are printed as they finish so partial progress is visible, and returned so the
     export and plotting steps can use them.
@@ -313,22 +320,24 @@ def run(
 
     rows: list[BenchmarkRow] = []
     for log in logs:
-        todo = [a for a in algorithms if (log.name, a.name) not in skip]
+        meant = [a for a in algorithms if a.runs_on(log.name)]
+        todo = [a for a in meant if (log.name, a.name) not in skip]
         if echo:
-            done = len(algorithms) - len(todo)
+            done = len(meant) - len(todo)
             already = f", {done} already measured" if done else ""
             print(f"\n{log.name}  ({log.event_count or '?'} events{already})", flush=True)
         if not todo:
             continue
-        context = None if isolated else LogContext(log)
+        context = None if isolated else LogContext(log, artifact_dir)
         try:
             for algorithm in todo:
                 if on_start is not None:
                     on_start(log.name, algorithm.name)
                 if isolated:
-                    result = measure_isolated(log, algorithm, repeats, warmup, timeout_s)
+                    result = measure_isolated(log, algorithm, repeats, warmup, timeout_s,
+                                              artifact_dir)
                 else:
-                    result = measure(algorithm, context, repeats, warmup)
+                    result = measure(algorithm, context, repeats, warmup, artifact_dir)
                 row = BenchmarkRow(log.name, algorithm.name, result, log.statistics)
                 rows.append(row)
                 if on_row is not None:
@@ -411,6 +420,16 @@ def _resolve(names: Iterable[str], lookup) -> list:
         raise SystemExit(str(exc))
 
 
+def _chapter_algorithms(chapters: Sequence[str] | None) -> list[str]:
+    """The algorithm names some chapters need, or [] when no chapters were given."""
+    if not chapters:
+        return []
+    try:
+        return [a.name for a in algorithms_for(chapters)]
+    except ValueError as exc:
+        raise SystemExit(str(exc))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -418,6 +437,9 @@ def main() -> None:
                         help="comma-separated log names (default: every available log)")
     parser.add_argument("--algorithms", type=_csv, default=None,
                         help="comma-separated algorithm names (default: all but find_variants)")
+    parser.add_argument("--chapters", type=_csv, default=None,
+                        help="only what these dissertation chapters need, e.g. "
+                             f"totem-conformance,process-area (chapters: {', '.join(CHAPTERS)})")
     # None means "not given", so a resumed run can tell a deliberate change apart.
     parser.add_argument("--repeats", type=int, default=None,
                         help=f"timed runs per algorithm (default: {DEFAULT_REPEATS})")
@@ -473,7 +495,8 @@ def main() -> None:
             run_dir.check_settings(settings)
         except SettingsMismatch as exc:
             raise SystemExit(str(exc))
-        log_names, algorithm_names = run_dir.extend_plan(args.logs or [], args.algorithms or [])
+        log_names, algorithm_names = run_dir.extend_plan(
+            args.logs or [], args.algorithms or _chapter_algorithms(args.chapters))
     else:
         isolated = not args.in_process
         timeout = DEFAULT_TIMEOUT_S if args.timeout is None else args.timeout
@@ -484,7 +507,8 @@ def main() -> None:
             "isolated": isolated,
         }
         log_names = args.logs or [log.name for log in available_logs()]
-        algorithm_names = args.algorithms or [a.name for a in DEFAULT_ALGORITHMS]
+        algorithm_names = (args.algorithms or _chapter_algorithms(args.chapters)
+                           or [a.name for a in DEFAULT_ALGORITHMS])
 
     logs = _resolve(log_names, get_log)
     algorithms = _resolve(algorithm_names, get_algorithm)
@@ -540,7 +564,8 @@ def main() -> None:
             timeout_s=settings["timeout_s"], isolated=settings["isolated"],
             skip=skip, on_row=lambda row: run_dir.append(row, commit=commit),
             on_start=lambda log, algorithm: run_dir.mark_running(
-                log, algorithm, timeout_s=settings["timeout_s"]))
+                log, algorithm, timeout_s=settings["timeout_s"]),
+            artifact_dir=run_dir.artifacts_dir)
     except KeyboardInterrupt:
         interrupted = True
         print("\nInterrupted. Everything measured so far is saved.")

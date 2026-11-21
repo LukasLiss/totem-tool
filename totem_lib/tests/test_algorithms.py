@@ -15,7 +15,17 @@ from evaluation.algorithms import (
     ALGORITHMS,
     Algorithm,
     LogContext,
+    CHAPTERS,
+    OCCN_MAIN_DISCOVERY,
+    OCCN_THRESHOLD_SWEEP,
+    MAIN_OBJECT_TYPES,
+    OCCN_MAX_STATES,
+    TAU_SWEEP,
     MissingInput,
+    main_area_types,
+    planned_pairs,
+    algorithms_for,
+    artifact_path,
     get_algorithm,
 )
 from evaluation.datasets import LOGS, EvaluationLog
@@ -35,22 +45,94 @@ def _log(**overrides) -> EvaluationLog:
 # The registry
 # ---------------------------------------------------------------------------
 
-def test_every_algorithm_named_by_the_issue_is_registered():
-    expected = {
-        "import_ocel",
-        # Not in the issue's list. Added so the DuckDB loading step is measured too,
-        # instead of happening for free while the inputs are prepared.
-        "import_ocel_db",
-        "totemDiscovery",
-        "totemDiscovery_db",
-        "mlpaDiscovery",
-        "discover_ocpn_db",
-        "discover_occn",
-        "OCDFG.from_ocel",
-        "CCDFG.from_ocel",
-        "find_variants",
+def test_the_library_algorithms_are_registered_for_the_tool_chapter():
+    tool = {a.name for a in ALGORITHMS if "totem-tool" in a.chapters}
+    assert tool == {
+        "import_ocel", "import_ocel_db",
+        "totemDiscovery", "totemDiscovery_db",
+        "mlpaDiscovery", "discover_ocpn_db",
+        "discover_occn", "discover_occn_db",
+        "OCDFG.from_ocel", "OCDFG.from_ocel_db",
+        "CCDFG.from_ocel", "find_variants",
     }
-    assert set(ALGORITHM_NAMES) == expected
+
+
+def test_every_chapter_has_its_experiments():
+    for chapter in CHAPTERS:
+        assert algorithms_for([chapter]), chapter
+    with pytest.raises(ValueError, match="unknown chapter"):
+        algorithms_for(["nope"])
+
+
+def test_sweeps_cover_every_value_and_record_their_parameter():
+    conformance = [a for a in ALGORITHMS if a.family == "totem_conformance"]
+    assert sorted(a.params["tau"] for a in conformance) == list(TAU_SWEEP)
+    assert get_algorithm("totem_conformance@tau=0.3").params == {"tau": 0.3}
+    # TOTeM discovery at 0.9 is the tool's plain totemDiscovery_db, measured once.
+    discovery = [a for a in ALGORITHMS if a.family == "totemDiscovery_db"]
+    assert sorted(a.params["tau"] for a in discovery) == list(TAU_SWEEP)
+    fitness = [a for a in ALGORITHMS if a.family == "occn_fitness"]
+    assert sorted(a.params["threshold"] for a in fitness) == list(OCCN_THRESHOLD_SWEEP)
+
+
+def test_occn_conformance_runs_after_the_discovery_whose_model_it_reuses():
+    names = [a.name for a in ALGORITHMS]
+    first_check = min(names.index(a.name) for a in ALGORITHMS if a.family == "occn_fitness")
+    assert names.index(OCCN_MAIN_DISCOVERY) < first_check
+
+
+def test_the_main_object_types_are_the_biggest_area_on_the_lowest_level():
+    areas = {
+        0.0: [({"Handling Unit"}, {"Collect Goods", "Load Truck"}),
+              ({"Container", "Vehicle"}, {"Depart"}),
+              ({"Truck", "Order"}, {"Book", "Register"})],  # ties on types, more activities
+        1.0: [({"Forklift", "Customer", "Plant"}, {"Drive"})],  # bigger, but not lowest
+    }
+    assert main_area_types(areas) == ("Order", "Truck")
+
+
+def test_main_object_types_can_be_set_by_hand(monkeypatch):
+    monkeypatch.setitem(MAIN_OBJECT_TYPES, "fake-log", ("b", "a"))
+    monkeypatch.setattr("evaluation.algorithms.mlpaDiscovery",
+                        lambda *a: pytest.fail("chose automatically"))
+    assert LogContext(_log()).main_object_types == ("a", "b")
+
+
+def test_occn_conformance_runs_only_on_the_logs_with_chosen_main_types():
+    fitness = get_algorithm("occn_fitness@threshold=0.1")
+    assert set(fitness.logs) == set(MAIN_OBJECT_TYPES) == {
+        "ocel2-p2p", "container_logistics", "github-pm4py", "recruiting"}
+    assert fitness.runs_on("recruiting") and not fitness.runs_on("enron")
+    assert get_algorithm("totemDiscovery_db").runs_on("enron")
+    pairs = planned_pairs(["enron", "recruiting"], ["totemDiscovery_db", fitness.name])
+    assert pairs == [("enron", "totemDiscovery_db"), ("recruiting", "totemDiscovery_db"),
+                     ("recruiting", fitness.name)]
+
+
+def test_the_hand_picked_types_exist_in_their_logs():
+    """Names as the DuckDB importer stores them; a typo would silently drop events."""
+    from evaluation.datasets import get_log
+    for log_name, types in MAIN_OBJECT_TYPES.items():
+        log = get_log(log_name)
+        if not log.available:
+            continue
+        context = LogContext(log)
+        try:
+            stored = {row[0] for row in context.ocel_db.conn.execute(
+                "select distinct obj_type from objects").fetchall()}
+        finally:
+            context.close()
+        assert set(types) <= stored, log_name
+
+
+def test_replay_is_not_capped():
+    assert OCCN_MAX_STATES is None
+    assert not [a for a in ALGORITHMS if "precision" in a.name]
+
+
+def test_artifacts_are_saved_per_log_and_algorithm(tmp_path):
+    assert artifact_path(tmp_path, "p2p", "occn_fitness@threshold=0.1") == \
+        tmp_path / "p2p" / "occn_fitness@threshold=0.1.json"
 
 
 def test_algorithm_names_are_unique_and_non_empty():

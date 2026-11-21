@@ -93,6 +93,11 @@ class BenchmarkResult:
     input_rss_mb: float | None = None
     peak_rss_mb: float | None = None
     error: str | None = None
+    # What the algorithm produced, described after timing (see evaluation/outcomes.py):
+    # the parameters it ran with, the model's size, fitness and precision, ... And
+    # where the produced model itself was saved, relative to the run folder.
+    properties: dict | None = None
+    artifact: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -154,6 +159,8 @@ class BenchmarkResult:
             "input_rss_mb": self.input_rss_mb,
             "peak_rss_mb": self.peak_rss_mb,
             "error": self.error,
+            "properties": self.properties,
+            "artifact": self.artifact,
         }
 
     @classmethod
@@ -235,10 +242,14 @@ def benchmark(
     repeats: int = DEFAULT_REPEATS,
     warmup: int = 0,
     memory: bool = False,
+    keep_output: Callable[[Any], None] | None = None,
     **kwargs: Any,
 ) -> BenchmarkResult:
     """
     Run `func` `warmup` times untimed, then `repeats` times timed.
+
+    `keep_output` receives what the last timed call returned, after all timing is
+    done, so the result can be described and saved without running it again.
 
     `memory=True` records the peak memory before and after, see the module
     docstring. Only ask for it in a fresh process, since the high-water mark would
@@ -258,14 +269,23 @@ def benchmark(
     try:
         for _ in range(warmup):
             func(*args, **kwargs)
-        for _ in range(repeats):
-            # Keep only the Measurement. Binding the output to a name would hold the
-            # previous run's result in memory while the next call allocates.
-            measurements.append(measure_once(func, *args, **kwargs)[1])
+        for repeat in range(repeats):
+            # Keep only the Measurement, except from the last call. Binding every
+            # output to a name would hold the previous run's result in memory while
+            # the next call allocates.
+            output, measurement = measure_once(func, *args, **kwargs)
+            measurements.append(measurement)
+            if repeat < repeats - 1:
+                del output
     except Exception as exc:
         # Only Exception: KeyboardInterrupt/SystemExit must still abort the run.
         return BenchmarkResult.failed(name, repeats, exc, warmup=warmup)
+    # Read before keep_output runs: describing and saving the output must not count
+    # towards the algorithm's memory.
     after = peak_rss_mb() if memory else None
+    if keep_output is not None:
+        keep_output(output)
+    del output
     return BenchmarkResult.from_measurements(
         name, measurements, warmup=warmup, input_rss_mb=before, peak_rss_mb=after,
     )

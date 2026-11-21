@@ -21,9 +21,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import shutil
 import ssl
 import sys
 import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
@@ -165,17 +167,58 @@ def download_log(
     opener: Callable = open_url,
     on_progress: ProgressFn | None = None,
 ) -> Path:
-    """Fetch one log into the location the manifest specifies."""
+    """
+    Fetch one log into the location the manifest specifies.
+
+    When the log ships inside a ZIP (`archive_member` is set), the archive is fetched
+    and verified first, then the member is extracted to `log.path` and the archive is
+    deleted.
+    """
     if log.bundled:
         raise ValueError(f"{log.name} ships with the repo and is not downloadable")
-    return fetch(
+    if log.archive_member is None:
+        return fetch(
+            log.download_url,
+            log.path,
+            expected_md5=log.md5,
+            expected_size=log.size_bytes,
+            opener=opener,
+            on_progress=on_progress,
+        )
+
+    archive = log.path.with_name(log.path.name + ".zip")
+    fetch(
         log.download_url,
-        log.path,
+        archive,
         expected_md5=log.md5,
         expected_size=log.size_bytes,
         opener=opener,
         on_progress=on_progress,
     )
+    try:
+        extract_member(archive, log.archive_member, log.path)
+    finally:
+        archive.unlink(missing_ok=True)
+    return log.path
+
+
+def extract_member(archive: Path, member: str, dest: Path) -> Path:
+    """
+    Extract one named file from a ZIP archive to `dest`.
+
+    The member is streamed to a sibling `.part` file and only renamed into place once
+    complete, the same guarantee `fetch` gives. The member's own path inside the archive
+    is never used as a destination, so the archive cannot write anywhere else.
+    """
+    part = dest.with_name(dest.name + ".part")
+    try:
+        with zipfile.ZipFile(archive) as zf, zf.open(member) as src, open(part, "wb") as out:
+            shutil.copyfileobj(src, out, DEFAULT_CHUNK_BYTES)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
+    os.replace(part, dest)
+    return dest
 
 
 # ---------------------------------------------------------------------------
