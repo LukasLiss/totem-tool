@@ -281,8 +281,11 @@ export default function FilterChipStack() {
       restoredRules = rules;
 
       if (rules) {
-        replaceFilters(["time_range", "object_types", "activity"], rules);
-        applyGlobalFilterRules(fileId, rules).catch(() => {});
+        // Apply the stack's copies (fresh ids), not the stored ones: the bar
+        // compares the two by id, and would otherwise show "Apply" for a
+        // filter that is already applied.
+        const restored = replaceFilters(["time_range", "object_types", "activity"], rules);
+        applyGlobalFilterRules(fileId, restored).catch(() => {});
         return;
       }
 
