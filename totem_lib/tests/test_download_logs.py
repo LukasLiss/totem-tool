@@ -179,6 +179,34 @@ def test_download_log_refuses_a_bundled_log(tmp_path):
         download_log(log, opener=FakeOpener())
 
 
+def _zip_of(member: str, content: bytes) -> bytes:
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr(member, content)
+        archive.writestr("readme.txt", b"other file")
+    return buffer.getvalue()
+
+
+def test_a_zipped_log_is_verified_extracted_and_the_archive_removed(tmp_path):
+    zipped = _zip_of("logs/2_p2p.sqlite", PAYLOAD)
+    log = _log(tmp_path / "p2p.sqlite", archive_member="logs/2_p2p.sqlite",
+               md5=hashlib.md5(zipped).hexdigest(), size_bytes=len(zipped))
+    assert download_log(log, opener=FakeOpener(zipped)) == log.path
+    assert log.path.read_bytes() == PAYLOAD
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["p2p.sqlite"]
+
+
+def test_a_zip_without_the_member_leaves_nothing_behind(tmp_path):
+    zipped = _zip_of("something-else.sqlite", PAYLOAD)
+    log = _log(tmp_path / "p2p.sqlite", archive_member="logs/2_p2p.sqlite",
+               md5=hashlib.md5(zipped).hexdigest(), size_bytes=len(zipped))
+    with pytest.raises(KeyError):
+        download_log(log, opener=FakeOpener(zipped))
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_file_md5_matches_hashlib(tmp_path):
     path = tmp_path / "f.bin"
     path.write_bytes(PAYLOAD)

@@ -1,7 +1,7 @@
 import { useState, useRef, useContext } from "react";
 import axios from "axios";
 import { fileTypeFromBlob } from "file-type";
-import { getUploadLimits, uploadFile } from "../api/fileApi";
+import { getUploadLimits, importProject, uploadFile } from "../api/fileApi";
 import { Loader2, CheckCircle2, XCircle } from "lucide-react";
 import {useDropzone} from 'react-dropzone';
 import { Button } from "@/components/ui/button";
@@ -29,6 +29,16 @@ import { ProgressBar } from "@/components/ComputationPanel";
 
 const UNLIMITED_VERSION_HINT =
   "At totem-tool.com, you can download the local or self-hosted version that has no limitations.";
+
+/**
+ * A whole project exported from TOTeM, rather than a bare event log.
+ *
+ * Matched on the extension: the file is a zip inside, so sniffing its bytes
+ * would only say "zip" — and `.duckdb` is already recognised this way for the
+ * same reason (`file-type` has no signature for it).
+ */
+const isProjectBundle = (file: File) =>
+  file.name.toLowerCase().endsWith(".totem");
 
 export function FileUploadValidator() {
     const { setSelectedFile } = useContext(SelectedFileContext);
@@ -88,8 +98,8 @@ export function FileUploadValidator() {
     const isDuckDB =
       file.name.toLowerCase().endsWith(".duckdb");
 
-    if (!(isJson || isXml || isSqlite || isCsv || isDuckDB)){
-        toast.error("Invalid file type", {description:"Please enter 'json', 'xml', 'sqlite', 'csv', or 'duckdb'."});
+    if (!(isJson || isXml || isSqlite || isCsv || isDuckDB || isProjectBundle(file))){
+        toast.error("Invalid file type", {description:"Please choose a TOTeM project (.totem) or an event log ('json', 'xml', 'sqlite', 'csv', or 'duckdb')."});
         return false;
     }
 
@@ -117,6 +127,58 @@ export function FileUploadValidator() {
     return true;
   };
 
+  /**
+   * Restore a whole project from a `.totem` archive.
+   *
+   * Everything the dashboards reference travels in the same file, so unlike a
+   * dashboard import this one normally has nothing to report — anything that
+   * does come back is a real problem and is shown rather than swallowed.
+   */
+  const handleProjectImport = async (bundle: File) => {
+    const result = await importProject(bundle, (progressEvent) => {
+      if (progressEvent.total) {
+        const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+        setUploadPercent(percent);
+        setUploadStage(
+          percent >= 100 ? "Restoring the project..." : `Uploading file... ${percent}%`
+        );
+      }
+    });
+
+    setValidationStatus("success");
+    const label = result.project.display_name || result.project.name;
+    if (result.warnings.length > 0) {
+      toast.warning(`Imported “${label}” with ${result.warnings.length} issue${result.warnings.length === 1 ? "" : "s"}`, {
+        description: (
+          <ul className="list-disc pl-4 text-left space-y-1 mt-2 max-h-40 overflow-y-auto">
+            {result.warnings.map((warning, index) => (
+              <li key={index} className="text-xs">{warning.detail}</li>
+            ))}
+          </ul>
+        ),
+        duration: 12000,
+      });
+    } else {
+      toast.success("Project imported", { description: label });
+    }
+
+    // Select the restored project, exactly as a finished upload does: the
+    // whole serialized event log, not just its id — the project switcher
+    // labels a project from `display_name` / `file` and would otherwise show
+    // "Untitled project".
+    if (result.file) {
+      setSelectedFile(result.file as never);
+      await prepareLargeLogFilter(Number(result.event_log));
+    }
+    setFile(null);
+    setShowConversionModal(false);
+    setIsConverting(false);
+    setUploadPercent(null);
+    setUploadStage("");
+    navigate("/overview");
+    setTimeout(() => setValidationStatus("idle"), 3000);
+  };
+
   const handleFileUpload = async () => {
     try {
       if (!file) {
@@ -126,6 +188,12 @@ export function FileUploadValidator() {
       setValidationStatus('loading');
       setUploadPercent(0);
       setUploadStage("Uploading file...");
+
+      if (isProjectBundle(file)) {
+        await handleProjectImport(file);
+        return;
+      }
+
       const response = await uploadFile(file, (progressEvent) => {
         if (progressEvent.total) {
           const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
@@ -192,7 +260,14 @@ export function FileUploadValidator() {
     e.preventDefault();
     const isValid = await validateFile();
     if (isValid) {
-      if (file && !file.name.toLowerCase().endsWith(".duckdb")) {
+      // A project bundle already holds a converted log, so the conversion
+      // notice does not apply to it — only an event log in another format
+      // has to be converted on upload.
+      const needsConversion =
+        file &&
+        !isProjectBundle(file) &&
+        !file.name.toLowerCase().endsWith(".duckdb");
+      if (needsConversion) {
         setShowConversionModal(true);
       } else {
         await handleFileUpload();
@@ -220,7 +295,7 @@ export function FileUploadValidator() {
                 style={{ opacity: 0 }}
               />
               <input  {...getInputProps()} />
-              <p className="text-lg text-primary">Click or drag and drop an OCEL file here to start a new project</p>
+              <p className="text-lg text-primary">Click or drag and drop an OCEL file or a TOTeM project (.totem) here to start a new project</p>
             </div>
 
         <CardFooter className="flex-col gap-6 text-sm w-full mt-6 p-0">

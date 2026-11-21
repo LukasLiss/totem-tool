@@ -1,7 +1,31 @@
+def _canonical_key(marker_group):
+    """
+    Order-independent sort key for a MarkerGroup, used to break ties between
+    equally frequent groups: fewer markers first, then the sorted marker
+    content (related activity, object type, cardinalities), then the marker
+    keys. Two groups that compare equal under this key are equal groups.
+    """
+    markers = marker_group.markers
+    content = sorted(
+        (m.related_activity, m.object_type, m.min_count, m.max_count) for m in markers
+    )
+    keyed = sorted(
+        (m.related_activity, m.object_type, m.min_count, m.max_count, m.marker_key)
+        for m in markers
+    )
+    return (len(markers), content, keyed)
+
+
 def filter4(input_marker_groups, output_marker_groups, threshold, activity_count):
     """
     Filters input_marker_groups and output_marker_groups by relative support, then
     recursively keeps only those MarkerGroups that remain connected.
+
+    Every marker of a kept group that would otherwise be left without a
+    counterpart is repaired by adding the most frequent compatible group of the
+    related activity. Equally frequent candidates are resolved by a canonical
+    key (see ``_canonical_key``), so the result is independent of the order of
+    the input lists (e.g. after a JSON round trip).
 
     Parameters
     ----------
@@ -50,6 +74,10 @@ def filter4(input_marker_groups, output_marker_groups, threshold, activity_count
         """
         Returns the most frequent MarkerGroup in the list.
 
+        Ties in support_count are broken by ``_canonical_key`` (fewest markers
+        first, then marker content), never by list position, so the result
+        does not depend on the order in which the marker groups are stored.
+
         Parameters
         ----------
         marker_groups : List[OCCausalNet.MarkerGroup]
@@ -60,15 +88,14 @@ def filter4(input_marker_groups, output_marker_groups, threshold, activity_count
         OCCausalNet.MarkerGroup
             The one with the highest support_count.
         """
-        try:
-            most_frequent_marker_group = marker_groups[
-                [marker_group.support_count for marker_group in marker_groups].index(
-                    max([marker_group.support_count for marker_group in marker_groups])
-                )
-            ]
-        except ValueError as e:
-            raise Exception(f"Invalid marker groups provided for some activity. Error: {e}")
-        return most_frequent_marker_group
+        if not marker_groups:
+            raise Exception(
+                "Invalid marker groups provided for some activity. Error: no candidate marker group"
+            )
+        return min(
+            marker_groups,
+            key=lambda marker_group: (-marker_group.support_count, _canonical_key(marker_group)),
+        )
 
     def getSubsequentInputMarkerGroups(most_frequent_marker_group, activity):
         """

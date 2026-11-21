@@ -32,6 +32,11 @@ import {
   proposeLargeLogFilter,
 } from "@/store/applyGlobalFilter";
 import { toast } from "sonner";
+import {
+  GLOBAL_FILTER_KEY,
+  getProjectViewSetting,
+  putProjectViewSetting,
+} from "@/api/projectApi";
 
 const FILTER_TYPE_ORDER: FilterType[] = ["time_range", "object_types", "activity"];
 
@@ -211,6 +216,7 @@ export default function FilterChipStack() {
   const { selectedFile } = useContext(SelectedFileContext);
   const fileId: number | undefined = selectedFile?.id;
   const isMobile = useIsMobile();
+  const projectId: number | undefined = selectedFile?.project as number | undefined;
 
   const [dialogOpen,    setDialogOpen]    = useState(false);
   const [activeType,    setActiveType]    = useState<FilterType>("object_types");
@@ -236,23 +242,50 @@ export default function FilterChipStack() {
       return;
     }
 
-    // Restore filter preferences from sessionStorage for this fileId
     const sessionKey = `totem_filters_${fileId}`;
-    let restoredRules: FilterRule[] | null = null;
-    try {
-      const stored = sessionStorage.getItem(sessionKey);
-      if (stored) {
-        restoredRules = JSON.parse(stored);
-      }
-    } catch {
-      restoredRules = null;
-    }
-
     let stale = false;
-    if (restoredRules && Array.isArray(restoredRules) && restoredRules.length > 0) {
-      replaceFilters(["time_range", "object_types", "activity"], restoredRules);
-      applyGlobalFilterRules(fileId, restoredRules).catch(() => {});
-    } else {
+    // Set once the restore has decided, so the statistics request below knows
+    // whether it is allowed to publish unfiltered counts.
+    let restoredRules: FilterRule[] | null = null;
+
+    /** The filter saved with the project, or null. */
+    const savedProjectFilter = async (): Promise<FilterRule[] | null> => {
+      if (projectId == null) return null;
+      try {
+        const value = await getProjectViewSetting(projectId, GLOBAL_FILTER_KEY);
+        const rules = (value as { rules?: unknown } | null)?.rules;
+        return Array.isArray(rules) && rules.length > 0 ? (rules as FilterRule[]) : null;
+      } catch {
+        // Never block opening a project on this: fall back to the tab cache.
+        return null;
+      }
+    };
+
+    /** The per-tab cache, which predates the project-level filter. */
+    const cachedFilter = (): FilterRule[] | null => {
+      try {
+        const stored = sessionStorage.getItem(sessionKey);
+        const rules = stored ? JSON.parse(stored) : null;
+        return Array.isArray(rules) && rules.length > 0 ? rules : null;
+      } catch {
+        return null;
+      }
+    };
+
+    void (async () => {
+      // The project's own filter wins over the tab cache: it is what an
+      // exported project carries, and what a colleague opening the same
+      // project should see.
+      const rules = (await savedProjectFilter()) ?? cachedFilter();
+      if (stale) return;
+      restoredRules = rules;
+
+      if (rules) {
+        replaceFilters(["time_range", "object_types", "activity"], rules);
+        applyGlobalFilterRules(fileId, rules).catch(() => {});
+        return;
+      }
+
       // `clear()` bumps the filter version, which makes every component abort
       // and resend its request — for nothing when no filter is applied.
       if (useFilterStore.getState().isApplied) useFilterStore.getState().clear();
@@ -260,25 +293,27 @@ export default function FilterChipStack() {
       // A large log gets a time-range filter straight away: the analyses on
       // the overview page would otherwise run over the whole log, which can
       // take minutes. The user sees the rule as a chip in the bar and can
-      // change or remove it like any other filter.
-      proposeLargeLogFilter(fileId).then(async (rule) => {
-        if (!rule || stale) return;
-        const rules = replaceFilters(["time_range"], [rule]);
-        try {
-          await applyGlobalFilterRules(fileId, rules);
-          sessionStorage.setItem(sessionKey, JSON.stringify(rules));
-        } catch {
-          return;
-        }
-        if (stale) return;
-        toast.info("Large event log: showing the first events only", {
-          description:
-            `This log has more than ${LARGE_LOG_EVENT_LIMIT.toLocaleString()} events, so a global time-range ` +
-            "filter was applied to keep the analyses responsive. Adjust or remove it in the filter bar.",
-          duration: 10000,
-        });
-      }).catch(() => {});
-    }
+      // change or remove it like any other filter. Only reached when the
+      // project saved no filter of its own — otherwise this would silently
+      // discard the one an exported project was published with.
+      const rule = await proposeLargeLogFilter(fileId).catch(() => null);
+      if (!rule || stale) return;
+      const proposed = replaceFilters(["time_range"], [rule]);
+      try {
+        await applyGlobalFilterRules(fileId, proposed);
+        sessionStorage.setItem(sessionKey, JSON.stringify(proposed));
+      } catch {
+        return;
+      }
+      if (stale) return;
+      restoredRules = proposed;
+      toast.info("Large event log: showing the first events only", {
+        description:
+          `This log has more than ${LARGE_LOG_EVENT_LIMIT.toLocaleString()} events, so a global time-range ` +
+          "filter was applied to keep the analyses responsive. Adjust or remove it in the filter bar.",
+        duration: 10000,
+      });
+    })();
 
     axios.get<{ name: string; count: number }[]>(`/api/files/${fileId}/object_types/`, { _skipGlobalFilter: true })
       .then(({ data }) => setObjectTypes(Array.isArray(data) ? data : []))
@@ -302,7 +337,7 @@ export default function FilterChipStack() {
       }
     }).catch(() => {});
     return () => { stale = true; };
-  }, [fileId]);
+  }, [fileId, projectId]);
 
   const currentKey = JSON.stringify(filters);
   const dirty = currentKey !== appliedKey;
@@ -340,6 +375,19 @@ export default function FilterChipStack() {
         }
       } catch {
         /* ignore storage quota or serialization errors */
+      }
+      // Saved on the project as well as in the tab: this is what survives a
+      // new tab, another machine, and an export. `null` removes the entry, so
+      // clearing the stack really clears it rather than storing an empty one.
+      if (projectId != null) {
+        putProjectViewSetting(
+          projectId,
+          GLOBAL_FILTER_KEY,
+          filters.length > 0 ? { rules: filters } : null,
+        ).catch(() => {
+          // The filter is applied either way; only its persistence failed.
+          toast.error("The filter was applied but could not be saved to the project");
+        });
       }
     } catch {
       toast.error("Filter could not be applied");

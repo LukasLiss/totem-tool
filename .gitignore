@@ -284,3 +284,6 @@ Claude_design
 
 # Locally generated Django/JWT signing key (settings._local_secret_key)
 .secret_key
+
+# Benchmark run folders - copy a run elsewhere (or git add -f) to keep it in git
+totem_lib/evaluation/results/runs/

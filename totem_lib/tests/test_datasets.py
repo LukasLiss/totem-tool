@@ -70,11 +70,18 @@ def test_every_log_path_is_absolute_and_in_a_known_location():
 
 
 def test_recorded_statistics_are_positive():
+    # Object-to-object relations are optional in OCEL 2.0: Enron, Bundestag and the
+    # LRM reasoning log have none.
+    may_be_zero = {"num_o2o_relations"}
     for log in LOGS:
         if log.statistics is None:
             continue
         for field in STATISTIC_FIELDS:
-            assert getattr(log.statistics, field) > 0, f"{log.name}.{field}"
+            value = getattr(log.statistics, field)
+            if field in may_be_zero:
+                assert value >= 0, f"{log.name}.{field}"
+            else:
+                assert value > 0, f"{log.name}.{field}"
 
 
 def test_logs_are_sorted_by_event_count_with_unmeasured_last():
@@ -113,9 +120,17 @@ def test_statistic_fields_match_the_dataclass():
 
 
 def test_every_plottable_metric_is_a_real_statistic():
+    """A recorded field, or a property derived from recorded fields."""
     for metric, label in SIZE_METRICS.items():
-        assert metric in STATISTIC_FIELDS, metric
+        assert metric in STATISTIC_FIELDS or isinstance(
+            getattr(LogStatistics, metric, None), property
+        ), metric
         assert label, metric
+
+
+def test_average_objects_per_event_is_derived_from_the_relation_count():
+    stats = get_log("order-management").statistics
+    assert stats.avg_objects_per_event == pytest.approx(147463 / 21008)
 
 
 def test_timestamps_are_not_offered_as_plot_axes():

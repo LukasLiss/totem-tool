@@ -21,8 +21,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import shutil
+import ssl
 import sys
 import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
@@ -42,6 +45,26 @@ DEFAULT_CHUNK_BYTES = 1 << 20
 USER_AGENT = "totem-tool-evaluation/1.0"
 
 ProgressFn = Callable[[int, int | None], None]
+
+
+def _ssl_context() -> ssl.SSLContext:
+    """
+    Verify certificates against certifi's CA bundle when it is installed.
+
+    The python.org macOS builds ship without system certificates, so the default
+    context rejects Zenodo with CERTIFICATE_VERIFY_FAILED. certifi comes with
+    requests, which most environments here already have.
+    """
+    try:
+        import certifi
+    except ImportError:
+        return ssl.create_default_context()
+    return ssl.create_default_context(cafile=certifi.where())
+
+
+def open_url(request: urllib.request.Request):
+    """The default opener: urlopen with a verifying SSL context."""
+    return urllib.request.urlopen(request, context=_ssl_context())
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +116,7 @@ def fetch(
     *,
     expected_md5: str | None = None,
     expected_size: int | None = None,
-    opener: Callable = urllib.request.urlopen,
+    opener: Callable = open_url,
     chunk_bytes: int = DEFAULT_CHUNK_BYTES,
     on_progress: ProgressFn | None = None,
 ) -> Path:
@@ -141,20 +164,61 @@ def fetch(
 def download_log(
     log: EvaluationLog,
     *,
-    opener: Callable = urllib.request.urlopen,
+    opener: Callable = open_url,
     on_progress: ProgressFn | None = None,
 ) -> Path:
-    """Fetch one log into the location the manifest specifies."""
+    """
+    Fetch one log into the location the manifest specifies.
+
+    When the log ships inside a ZIP (`archive_member` is set), the archive is fetched
+    and verified first, then the member is extracted to `log.path` and the archive is
+    deleted.
+    """
     if log.bundled:
         raise ValueError(f"{log.name} ships with the repo and is not downloadable")
-    return fetch(
+    if log.archive_member is None:
+        return fetch(
+            log.download_url,
+            log.path,
+            expected_md5=log.md5,
+            expected_size=log.size_bytes,
+            opener=opener,
+            on_progress=on_progress,
+        )
+
+    archive = log.path.with_name(log.path.name + ".zip")
+    fetch(
         log.download_url,
-        log.path,
+        archive,
         expected_md5=log.md5,
         expected_size=log.size_bytes,
         opener=opener,
         on_progress=on_progress,
     )
+    try:
+        extract_member(archive, log.archive_member, log.path)
+    finally:
+        archive.unlink(missing_ok=True)
+    return log.path
+
+
+def extract_member(archive: Path, member: str, dest: Path) -> Path:
+    """
+    Extract one named file from a ZIP archive to `dest`.
+
+    The member is streamed to a sibling `.part` file and only renamed into place once
+    complete, the same guarantee `fetch` gives. The member's own path inside the archive
+    is never used as a destination, so the archive cannot write anywhere else.
+    """
+    part = dest.with_name(dest.name + ".part")
+    try:
+        with zipfile.ZipFile(archive) as zf, zf.open(member) as src, open(part, "wb") as out:
+            shutil.copyfileobj(src, out, DEFAULT_CHUNK_BYTES)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
+    os.replace(part, dest)
+    return dest
 
 
 # ---------------------------------------------------------------------------
