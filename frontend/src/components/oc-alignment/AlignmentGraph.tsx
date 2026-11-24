@@ -3,7 +3,7 @@ import { Minus, Plus, Scan } from "lucide-react";
 
 import type { OCAlignmentMove } from "@/api/ocAlignmentApi";
 import { Button } from "@/components/ui/button";
-import { mapTypesToColors } from "@/utils/objectColors";
+import { useObjectTypeColors } from "@/hooks/useObjectTypeColors";
 
 import {
   MOVE_STYLES,
@@ -41,6 +41,8 @@ export interface AlignmentGraphProps {
   showSilentMoves: boolean;
   /** Height of the graph block; "fill" grows with a flex parent. */
   height?: number | "fill";
+  /** The event log, so object types get the log's colors (stable across views). */
+  fileId?: number | null;
 }
 
 function ObjectChips({
@@ -176,9 +178,11 @@ export function AlignmentLegend({ colors }: { colors: Record<string, string> }) 
  * The alignment as a directed acyclic graph of moves. Edges connect moves
  * that share an object; the layout reads left (start) to right (end).
  */
-export function AlignmentGraph({ moves, objectsByType, showSilentMoves, height = 420 }: AlignmentGraphProps) {
+export function AlignmentGraph({ moves, objectsByType, showSilentMoves, height = 420, fileId }: AlignmentGraphProps) {
   const [zoom, setZoom] = useState(1);
-  const colors = useMemo(() => mapTypesToColors(Object.keys(objectsByType)), [objectsByType]);
+  const shownTypes = useMemo(() => Object.keys(objectsByType), [objectsByType]);
+  // From the log's full type list (when known), so the types of one execution keep the log's colors.
+  const colors = useObjectTypeColors(fileId, shownTypes);
   const shades = useMemo(() => objectShades(objectsByType), [objectsByType]);
   const layout = useMemo(() => {
     const visible = visibleAlignment(moves, showSilentMoves);

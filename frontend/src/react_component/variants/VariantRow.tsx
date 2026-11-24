@@ -6,11 +6,10 @@ import { CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
 import type { Variant, VariantObject } from "./types";
+import { mapTypesToColors } from "@/utils/objectColors";
 
 /* ========== colors/tokens ========== */
-const ACTOR_COLORS = ["#2563EB", "#10B981", "#F59E0B", "#8B5CF6", "#F43F5E"];
-const EXTENDED_PALETTE = ["#06B6D4", "#84CC16", "#F97316", "#EC4899", "#6366F1"];
-const TYPE_PALETTE = [...ACTOR_COLORS, ...EXTENDED_PALETTE];
+// Object type colors come from the shared palette (utils/objectColors).
 
 const UI = {
   primary: "#2563EB",
@@ -28,15 +27,6 @@ function shade(hex: string, factor: number): string {
   const b = parseInt(c.slice(4, 6), 16);
   const mix = (x: number) => Math.round(x + (255 - x) * factor);
   return `rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`;
-}
-function mapTypesToColors(types: string[], overrides?: Record<string, string>): Record<string, string> {
-  const map: Record<string, string> = {};
-  let i = 0;
-  for (const t of types) {
-    map[t] = (overrides && overrides[t]) || TYPE_PALETTE[i % TYPE_PALETTE.length];
-    i++;
-  }
-  return map;
 }
 function abbreviateFirstLetters(label?: string): string | undefined {
   if (!label) return label;

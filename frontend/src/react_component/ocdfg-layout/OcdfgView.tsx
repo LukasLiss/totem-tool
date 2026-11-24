@@ -18,7 +18,7 @@ import { ControlPill, type PillRegion, type PillSpot } from '@/components/canvas
 import { roomBelowForPill } from '@/components/canvas/pillSpots';
 import { FIT_GAP, pillRect, TITLE_LEGEND_GAP, type FitRect } from './fitMargins';
 import { ObjectTypePanel } from '@/components/canvas/ObjectTypePanel';
-import { mapTypesToColors } from '@/utils/objectColors';
+import { useObjectTypeColors } from '@/hooks/useObjectTypeColors';
 import OcdfgLayoutStatusCard from '../OcdfgLayoutStatusCard';
 import Gallery from './Gallery';
 import { subgraph } from './graph';
@@ -115,7 +115,8 @@ export default function OcdfgView({
 
   // --- legend: object types and their sliders -------------------------------
   const types = useMemo(() => graph?.types ?? [], [graph]);
-  const colors = useMemo(() => mapTypesToColors(types, typeColorOverrides), [types, typeColorOverrides]);
+  // From the log's full type list, so a filter or a hidden type doesn't shift the colors.
+  const colors = useObjectTypeColors(fileId, types, typeColorOverrides);
   const available = useMemo(() => new Set((graph?.arcs ?? []).map((a) => a.type)), [graph]);
   const [visibility, setVisibility] = useState<Record<string, boolean>>({});
   const sliderMax = useMemo(() => {

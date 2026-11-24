@@ -38,7 +38,19 @@ import type { PillRegion, PillSpot } from '@/components/canvas/pillSpots';
 import { FIT_GAP, bestFit, pillRect } from '@/components/canvas/canvasFit';
 import { useCanvasGestures } from '@/components/canvas/useCanvasGestures';
 import { useFitAvoidRects } from '@/components/canvas/useFitAvoidRects';
-import { mapTypesToColors, textColorForBackground } from '../utils/objectColors';
+import { textColorForBackground } from '../utils/objectColors';
+import { useObjectTypeColors } from '@/hooks/useObjectTypeColors';
+
+// Fixed colors for some well-known object types; the others come from the log's type list.
+const MINER_TYPE_COLORS: Record<string, string> = {
+  'Forklift': '#f59e0b',
+  'Vehicle': '#22c55e',
+  'Transport Document': '#ef4444',
+  'Customer Order': '#10b981',
+  'Container': '#2563eb',
+  'Handling Unit': '#7c3aed',
+  'Truck': '#06b6d4',
+};
 import { computeTotemHubLayout } from '@/components/totem/totemLayout';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -478,8 +490,8 @@ function TotemMinerVisualizer({
   }, []);
 
   // ── Build graph data ─────────────────────────────────────────────────────────
-  const { nodeIds, edges, colorMap, rawCardinalities } = useMemo(() => {
-    if (!rawData) return { nodeIds: [], edges: [], colorMap: {}, rawCardinalities: [] };
+  const { nodeIds, edges, rawCardinalities } = useMemo(() => {
+    if (!rawData) return { nodeIds: [], edges: [], rawCardinalities: [] };
 
     const nodes = new Set<string>();
     // Seed nodes from tempgraph to ensure isolated object types without relations are included
@@ -555,18 +567,11 @@ function TotemMinerVisualizer({
     const nodeIds = Array.from(nodes).sort();
     const edges = extractEdges(tempgraph, cardinalities);
 
-    const colorMap = mapTypesToColors(nodeIds, {
-      'Forklift': '#f59e0b',
-      'Vehicle': '#22c55e',
-      'Transport Document': '#ef4444',
-      'Customer Order': '#10b981',
-      'Container': '#2563eb',
-      'Handling Unit': '#7c3aed',
-      'Truck': '#06b6d4',
-    });
 
-    return { nodeIds, edges, colorMap, rawCardinalities: cardinalities };
+    return { nodeIds, edges, rawCardinalities: cardinalities };
   }, [rawData, tau]);
+  // From the log's full type list, so the threshold (tau) hiding types doesn't shift the colors.
+  const colorMap = useObjectTypeColors(eventLogId, nodeIds, MINER_TYPE_COLORS);
 
   // Node widths (auto-sized to label)
   const widthMap = useMemo(

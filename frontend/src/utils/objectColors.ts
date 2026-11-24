@@ -17,6 +17,36 @@ export function mapTypesToColors(types: string[], overrides?: Record<string, str
   return colorMap;
 }
 
+/**
+ * Colors for the object types a view shows (`types`), taken from the event
+ * log's full list of object types (`logTypes`, see useObjectTypeColors), so a
+ * type keeps its color when a filter or a view hides other types. Only the
+ * requested types are returned (legends list what they get). Without the
+ * log's list (not loaded yet, no log) it is mapTypesToColors(types).
+ */
+export function colorsFromLogTypes(
+  types: string[],
+  logTypes: string[] | null | undefined,
+  overrides?: Record<string, string>,
+) {
+  if (!logTypes || logTypes.length === 0) return mapTypesToColors(types, overrides);
+  const valid = (t: unknown): t is string => typeof t === 'string' && t.length > 0;
+  const sorted = Array.from(new Set(logTypes.filter(valid))).sort((a, b) => a.localeCompare(b));
+  const position = new Map(sorted.map((type, index) => [type, index]));
+  // Types missing from the log's list (shouldn't happen) get the colors after
+  // the log's own, so they never shift the known types.
+  const missing = Array.from(new Set(types.filter((t) => valid(t) && !position.has(t)))).sort((a, b) =>
+    a.localeCompare(b),
+  );
+  missing.forEach((type, index) => position.set(type, sorted.length + index));
+  const colorMap: Record<string, string> = {};
+  for (const type of types) {
+    if (!valid(type)) continue;
+    colorMap[type] = overrides?.[type] ?? TYPE_PALETTE[position.get(type)! % TYPE_PALETTE.length];
+  }
+  return colorMap;
+}
+
 function lighten(hex: string, factor = 0.12) {
   const stripped = hex.replace('#', '');
   const r = parseInt(stripped.slice(0, 2), 16);

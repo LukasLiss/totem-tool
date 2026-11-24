@@ -28,7 +28,9 @@ import { extractAssetApiError } from '@/api/assetsApi';
 import { createProcessAreaAsset, updateProcessAreaAsset } from '@/api/processAreaAssetsApi';
 import { useProcessAreaAssets, useProcessAreaAssetsStore } from '@/store/processAreaAssetsStore';
 import { useProcessAreaStore } from '@/store/processAreaStore';
-import { mapTypesToColors } from '@/utils/objectColors';
+import { useObjectTypeColors } from '@/hooks/useObjectTypeColors';
+
+const NO_TYPES: string[] = [];
 import { ProcessAreaEditor } from './process-area/ProcessAreaEditor';
 import {
   compositionFromLayers,
@@ -212,10 +214,8 @@ export default function ProcessArea({
     () => (composition ? compositionToLayers(composition) : null),
     [composition],
   );
-  const typeColors = useMemo(
-    () => mapTypesToColors(discovery?.allObjectTypes ?? []),
-    [discovery?.allObjectTypes],
-  );
+  // From the log's full type list, so a filter doesn't shift the colors.
+  const typeColors = useObjectTypeColors(validFileId, discovery?.allObjectTypes ?? NO_TYPES);
 
   // Share what is shown, so the Variants Explorer and the alignments use
   // the same areas (the visualizer publishes plain discoveries itself).

@@ -16,7 +16,10 @@ import {
 import { VisualizerEmptyState } from '@/components/ui/VisualizerEmptyState';
 import { RefreshCcw } from 'lucide-react';
 
-import { mapTypesToColors, textColorForBackground } from '../utils/objectColors';
+import { textColorForBackground } from '../utils/objectColors';
+import { useObjectTypeColors } from '@/hooks/useObjectTypeColors';
+
+const NO_TYPES: string[] = [];
 import OCDFGDetailVisualizer from './OCDFGDetailVisualizer';
 import type { OcdfgGraph, TraceVariantsMap } from './NewOCDFGVisualizer';
 import { HoverTooltip, type TooltipRow } from './MetricTooltip';
@@ -4945,10 +4948,8 @@ function TotemVisualizer({
     return Math.min(180, deficit * 60); // push down when few levels; capped
   }, [levelCount]);
   const contentPaddingTop = 32 + resolvedTopInset + extraTopPadding;
-  const typeColorMap = useMemo(
-    () => mapTypesToColors(shownTotem?.tempgraph?.nodes ?? []),
-    [shownTotem?.tempgraph?.nodes],
-  );
+  // From the log's full type list, so a filter doesn't shift the colors.
+  const typeColorMap = useObjectTypeColors(eventLogId, shownTotem?.tempgraph?.nodes ?? NO_TYPES);
   const areaAnchorMembers = useMemo(() => {
     const map: Record<string, string[]> = {};
     layers.forEach((layer) => {
