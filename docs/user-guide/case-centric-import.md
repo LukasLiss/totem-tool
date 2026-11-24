@@ -45,7 +45,17 @@ or milliseconds, one of the listed patterns, or **Custom pattern...** to type yo
 use the same letters as Disco and Java: `yyyy` year, `MM` month, `dd` day, `HH` hour (24h),
 `hh` hour (12h) with `a` for AM/PM, `mm` minutes, `ss` seconds, `SSS` fractions and `XXX` the
 time zone. Literal text goes in single quotes (`yyyy-MM-dd'T'HH:mm`). A `strftime` pattern
-such as `%d/%m/%Y %H:%M` works as well. Times without a time zone are read as UTC.
+such as `%d/%m/%Y %H:%M` works as well.
+
+### Time zone
+
+Most exports write local time without saying which zone (`01.03.2024 09:00`). Set **Time zone of
+values without an offset** to where the log was recorded, for example `Europe/Berlin`. The field
+suggests every zone name as you type, and a button sets your computer's zone. Summer time is
+handled: 09:00 in Berlin is 08:00 UTC in March and 07:00 UTC in July. The default is UTC.
+
+The zone applies only to values that carry no offset. A value like `2024-03-01T09:00:00+01:00`
+keeps its own offset, and Unix times are absolute, so the field is disabled for them.
 
 The format is checked against the sample as you choose it, with the same parser the import
 uses. A format that fits none of the values blocks the import and names an example that does not
@@ -65,8 +75,15 @@ it next to the status line and the table is read again. Files are read as UTF-8.
 ## What gets skipped
 
 Rows without an activity, without a value in any object id column, or with a timestamp that
-does not match the chosen format are left out. If **no** row can be imported, the upload fails
-with the reason and the dialog opens again with your mapping, so you can fix it.
+does not match the chosen format are left out. The dialog already warns when values in the
+sample do not match. Rows further down the file are only seen during the import, so afterwards
+TOTeM says how many rows it skipped and why, with an example of a timestamp that did not match:
+
+![A warning after the import: 8 events imported, 1 row skipped because its timestamp did not match](images/import-skipped-rows.png)
+
+To include those rows, upload the file again and pick a format that fits them. If **no** row can
+be imported, the upload fails with the reason and the dialog opens again with your mapping, so you
+can fix it.
 
 After the import the log behaves like any other: TOTeM opens the overview of the new project.
 
