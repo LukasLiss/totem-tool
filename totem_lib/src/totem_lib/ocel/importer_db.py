@@ -90,6 +90,7 @@ def import_ocel_db(
     strict_mode: bool = False,
     progress: Optional[ProgressCallback] = None,
     mapping=None,
+    import_report: Optional[dict] = None,
 ) -> OcelDuckDB:
     """
     Import an OCEL 2.0 file (or a mapped flat log) directly into a DuckDB database.
@@ -148,6 +149,10 @@ def import_ocel_db(
                                 CSV; an XES file without one gets the mapping
                                 the import dialog would suggest
                                 (``case:concept:name`` → case object, ...).
+        import_report:          Optional dict filled with what a mapped (flat)
+                                import kept and skipped — see
+                                ``flat_log.stage_flat_log`` — so callers can
+                                tell the user about rows that were left out.
 
     Returns:
         OcelDuckDB instance backed by the populated database.
@@ -176,7 +181,9 @@ def import_ocel_db(
         else:
             flat_mapping = FlatLogMapping.from_dict(mapping)
         if fmt in ("csv", "tsv", "txt", "xes"):
-            readers[fmt] = lambda path, stage, report, _t: _stage_flat(path, stage, report, flat_mapping)
+            readers[fmt] = lambda path, stage, report, _t: _stage_flat(
+                path, stage, report, flat_mapping, import_report
+            )
 
     if fmt not in readers:
         raise ValueError(
@@ -1267,13 +1274,15 @@ def _stage_csv(file_path: str, stage: _Staging, report: _Reporter, _threshold) -
 # Flat (case-centric) logs: XES, plain CSV — see flat_log.py
 # ---------------------------------------------------------------------------
 
-def _stage_flat(file_path: str, stage: _Staging, report: _Reporter, mapping) -> None:
+def _stage_flat(file_path: str, stage: _Staging, report: _Reporter, mapping, import_report=None) -> None:
     buffers = _RowBuffers(stage)
     size = os.path.getsize(file_path)
     with open(file_path, "rb") as raw:
         tick = _FileProgress(raw, size, report, 0.0, 0.5, "Reading event log")
         report(0.0, "Reading event log")
-        stage_flat_log(file_path, mapping, buffers, tick=tick, raw=raw)
+        counts = stage_flat_log(file_path, mapping, buffers, tick=tick, raw=raw)
+    if import_report is not None:
+        import_report.update(counts)
     report(0.5, "Reading event log")
 
 

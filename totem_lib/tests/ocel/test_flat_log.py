@@ -52,6 +52,29 @@ def test_parse_timestamp_formats():
     assert parse_timestamp("", FORMAT_AUTO) is None
 
 
+def test_parse_timestamp_time_zone():
+    # Values without a zone are read in the chosen one, summer time included.
+    berlin = "Europe/Berlin"
+    assert parse_timestamp("01.03.2024 09:00", "dd.MM.yyyy HH:mm", berlin) == "2024-03-01T09:00:00+01:00"
+    assert parse_timestamp("01.07.2024 09:00", "dd.MM.yyyy HH:mm", berlin) == "2024-07-01T09:00:00+02:00"
+    assert parse_timestamp("2024-03-01 09:00:00", "auto", "America/New_York") == "2024-03-01T09:00:00-05:00"
+    # An offset in the data wins; Unix time is absolute.
+    assert parse_timestamp("2024-03-01T09:00:00+00:00", "auto", berlin) == "2024-03-01T09:00:00+00:00"
+    assert parse_timestamp("1709283600", "unix_s", berlin) == "2024-03-01T09:00:00+00:00"
+    assert parse_timestamp("01.03.2024 09:00", "dd.MM.yyyy HH:mm", None) == "2024-03-01T09:00:00+00:00"
+
+
+def test_unknown_time_zone_is_rejected():
+    with pytest.raises(FlatLogMappingError, match="Unknown time zone"):
+        parse_timestamp("2024-03-01", "auto", "Mars/Olympus_Mons")
+    with pytest.raises(FlatLogMappingError, match="Unknown time zone"):
+        FlatLogMapping.from_dict({"columns": [
+            {"column": "c", "role": "object_id"},
+            {"column": "a", "role": "activity"},
+            {"column": "t", "role": "timestamp", "timezone": "Nowhere/Land"},
+        ]})
+
+
 def test_suggest_timestamp_format():
     assert suggest_timestamp_format(["2024-03-01 09:00:00", "2024-03-02T10:00:00Z"]) == FORMAT_AUTO
     assert suggest_timestamp_format(["13.03.2024 09:00", "01.04.2024 10:00"]) == "dd.MM.yyyy HH:mm"
@@ -212,6 +235,54 @@ def test_csv_auto_format_parses_what_the_preview_check_accepts(tmp_path):
         assert _rows(db, "SELECT MIN(timestamp_unix) FROM events") == [(1709283600,)]
     finally:
         db.close()
+
+
+def test_csv_import_in_a_time_zone(tmp_path):
+    path = tmp_path / "log.csv"
+    path.write_text(CSV_TEXT, encoding="utf-8")
+    mapping = {
+        "delimiter": ";",
+        "columns": [
+            {"column": "Case ID", "role": "object_id"},
+            {"column": "Activity", "role": "activity"},
+            {"column": "Start Time", "role": "timestamp", "format": "dd.MM.yyyy HH:mm",
+             "timezone": "Europe/Berlin"},
+        ],
+    }
+    db = import_ocel_db(str(path), mapping=mapping)
+    try:
+        # 01.03.2024 09:00 in Berlin is 08:00 UTC.
+        assert _rows(db, "SELECT MIN(timestamp_unix) FROM events") == [(1709280000,)]
+    finally:
+        db.close()
+
+
+def test_import_report_counts_what_was_skipped(tmp_path):
+    path = tmp_path / "log.csv"
+    path.write_text(
+        CSV_TEXT
+        + "c3;Register;2024-03-05 10:00;Alice;3\n"   # other format: skipped
+        + "c3;;05.03.2024 11:00;Alice;3\n",          # no activity: skipped
+        encoding="utf-8",
+    )
+    mapping = {
+        "delimiter": ";",
+        "columns": [
+            {"column": "Case ID", "role": "object_id"},
+            {"column": "Activity", "role": "activity"},
+            {"column": "Start Time", "role": "timestamp", "format": "dd.MM.yyyy HH:mm"},
+        ],
+    }
+    report = {}
+    import_ocel_db(str(path), mapping=mapping, import_report=report).close()
+    assert report["rows"] == 6
+    assert report["events"] == 3
+    assert report["skipped_no_object"] == 1
+    assert report["skipped_no_activity"] == 1
+    assert report["skipped_bad_timestamp"] == 1
+    assert report["bad_timestamp_example"] == "2024-03-05 10:00"
+    assert report["timestamp_format"] == "dd.MM.yyyy HH:mm"
+    assert report["timezone"] == "UTC"
 
 
 def test_csv_wrong_timestamp_format_names_an_example(tmp_path):

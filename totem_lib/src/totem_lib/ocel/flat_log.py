@@ -39,8 +39,10 @@ import re
 import xml.etree.ElementTree as ET
 import zlib
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, tzinfo
+from functools import lru_cache
 from typing import Iterable, Iterator, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 ROLE_OBJECT_ID = "object_id"
 ROLE_RESOURCE = "resource"
@@ -155,9 +157,30 @@ def pattern_to_strptime(pattern: str) -> str:
     return "".join(out)
 
 
-def _iso(dt: datetime) -> str:
+DEFAULT_TIMEZONE = "UTC"
+
+
+@lru_cache(maxsize=64)
+def resolve_timezone(name: Optional[str]) -> tzinfo:
+    """The ``tzinfo`` for an IANA name (``"Europe/Berlin"``); UTC for None/"UTC".
+
+    Raises ``FlatLogMappingError`` for a name the time zone database does
+    not know.
+    """
+    name = (name or DEFAULT_TIMEZONE).strip() or DEFAULT_TIMEZONE
+    if name.upper() in ("UTC", "Z", "GMT"):
+        return timezone.utc
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError) as e:
+        raise FlatLogMappingError(f"Unknown time zone '{name}'.") from e
+
+
+def _iso(dt: datetime, tz: tzinfo = timezone.utc) -> str:
+    # Only values that carry no zone of their own are placed in `tz`; an
+    # explicit offset in the data always wins.
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=tz)
     return dt.isoformat()
 
 
@@ -177,14 +200,21 @@ def _parse_auto(value: str) -> Optional[datetime]:
     return None
 
 
-def parse_timestamp(value: Optional[str], fmt: Optional[str] = FORMAT_AUTO) -> Optional[str]:
+def parse_timestamp(
+    value: Optional[str],
+    fmt: Optional[str] = FORMAT_AUTO,
+    tz: Optional[str] = None,
+) -> Optional[str]:
     """Parse ``value`` with ``fmt``; return an ISO 8601 string or None.
 
     ``fmt`` is ``"auto"`` (ISO 8601 and the common patterns in
     :data:`TIMESTAMP_PRESETS`), ``"unix_s"`` / ``"unix_ms"``, or a pattern
-    accepted by :func:`pattern_to_strptime`. Values without a time zone are
-    taken to be UTC.
+    accepted by :func:`pattern_to_strptime`. Values without a time zone of
+    their own are read in ``tz`` (an IANA name, UTC by default); Unix times
+    are absolute and ignore it. An unknown ``tz`` raises
+    ``FlatLogMappingError``.
     """
+    zone = resolve_timezone(tz)
     if value is None:
         return None
     text = str(value).strip()
@@ -201,7 +231,7 @@ def parse_timestamp(value: Optional[str], fmt: Optional[str] = FORMAT_AUTO) -> O
             dt = datetime.strptime(text, pattern_to_strptime(fmt))
     except (ValueError, OverflowError, OSError):
         return None
-    return None if dt is None else _iso(dt)
+    return None if dt is None else _iso(dt, zone)
 
 
 # Offered by the mapping dialog; also what "auto" and the suggestions try.
@@ -563,6 +593,7 @@ class ColumnMapping:
     role: str
     object_type: Optional[str] = None  # object_id / resource
     format: Optional[str] = None       # timestamp
+    timezone: Optional[str] = None     # timestamp: zone of values without an offset
     target: Optional[str] = None       # object_attribute: the object id column
     name: Optional[str] = None         # attribute name (defaults to the column)
 
@@ -593,6 +624,7 @@ class FlatLogMapping:
                 role=role,
                 object_type=(str(entry["object_type"]).strip() or None) if entry.get("object_type") else None,
                 format=(str(entry["format"]).strip() or None) if entry.get("format") else None,
+                timezone=(str(entry["timezone"]).strip() or None) if entry.get("timezone") else None,
                 target=str(entry["target"]) if entry.get("target") else None,
                 name=(str(entry["name"]).strip() or None) if entry.get("name") else None,
             ))
@@ -635,6 +667,11 @@ class FlatLogMapping:
         ts = self.by_role(ROLE_TIMESTAMP)
         if len(ts) != 1:
             problems.append("Choose exactly one timestamp column.")
+        for c in ts:
+            try:
+                resolve_timezone(c.timezone)
+            except FlatLogMappingError as e:
+                problems.append(str(e))
         object_cols = {c.column for c in self.by_role(ROLE_OBJECT_ID, ROLE_RESOURCE)}
         for c in self.by_role(ROLE_OBJECT_ATTRIBUTE):
             if c.target is not None and c.target not in object_cols:
@@ -662,15 +699,18 @@ def stage_flat_log(file_path: str, mapping: FlatLogMapping, buffers, tick=None, 
     every flush so the caller can report progress. Rows without an activity,
     without any object id or whose timestamp does not parse are skipped.
 
-    Returns counts: ``{"events", "skipped_no_activity", "skipped_no_object",
-    "skipped_bad_timestamp"}``. Raises ``FlatLogMappingError`` when no row at
-    all could be imported, with the reason that hit most.
+    Returns what happened, for the user: ``{"rows", "events",
+    "skipped_no_activity", "skipped_no_object", "skipped_bad_timestamp",
+    "bad_timestamp_example", "timestamp_format", "timezone"}``. Raises
+    ``FlatLogMappingError`` when no row at all could be imported, with the
+    reason that hit most.
     """
     from .importer_db import BATCH_SIZE  # local import: importer_db imports us
 
     activity_cols = [c.column for c in mapping.by_role(ROLE_ACTIVITY)]
     ts_col = mapping.by_role(ROLE_TIMESTAMP)[0]
     ts_fmt = ts_col.format or FORMAT_AUTO
+    ts_zone = ts_col.timezone or DEFAULT_TIMEZONE
     object_cols = [
         (c.column, c.object_type or (DEFAULT_RESOURCE_TYPE if c.role == ROLE_RESOURCE
                                      else _object_type_from_column(c.column)))
@@ -728,7 +768,7 @@ def stage_flat_log(file_path: str, mapping: FlatLogMapping, buffers, tick=None, 
         raw_ts = (row.get(ts_col.column) or "").strip()
         # Parsed here, with the parser the dialog's check uses, so "auto"
         # means the same thing in the preview and in the import.
-        ts_value = parse_timestamp(raw_ts, ts_fmt)
+        ts_value = parse_timestamp(raw_ts, ts_fmt, ts_zone)
         if ts_value is None:
             counts["skipped_bad_timestamp"] += 1
             if first_bad_ts is None:
@@ -770,6 +810,10 @@ def stage_flat_log(file_path: str, mapping: FlatLogMapping, buffers, tick=None, 
 
     buffers.flush()
     counts["events"] = n
+    counts["rows"] = n + counts["skipped_no_activity"] + counts["skipped_no_object"] + counts["skipped_bad_timestamp"]
+    counts["bad_timestamp_example"] = first_bad_ts
+    counts["timestamp_format"] = ts_fmt
+    counts["timezone"] = ts_zone
     if n == 0:
         if counts["skipped_bad_timestamp"] and first_bad_ts:
             raise FlatLogMappingError(
@@ -800,6 +844,7 @@ __all__ = [
     "iter_flat_rows",
     "parse_timestamp",
     "pattern_to_strptime",
+    "resolve_timezone",
     "preview_flat_log",
     "stage_flat_log",
     "suggest_timestamp_format",

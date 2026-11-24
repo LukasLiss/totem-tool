@@ -121,6 +121,24 @@ class FlatLogImportTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["results"], ["2024-03-01T09:00:00+00:00", None])
 
+    def test_parse_timestamps_in_a_time_zone(self):
+        response = self.client.post(
+            "/api/files/parse-timestamps/",
+            {"values": ["01.07.2024 09:00"], "format": "dd.MM.yyyy HH:mm", "timezone": "Europe/Berlin"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["results"], ["2024-07-01T09:00:00+02:00"])
+
+    def test_parse_timestamps_rejects_an_unknown_time_zone(self):
+        response = self.client.post(
+            "/api/files/parse-timestamps/",
+            {"values": ["2024-01-01"], "format": "auto", "timezone": "Nowhere/Land"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Unknown time zone", response.data["error"])
+
     # -- upload -------------------------------------------------------------
 
     def test_xes_upload_without_mapping_uses_the_suggestion(self):
@@ -137,6 +155,15 @@ class FlatLogImportTests(TestCase):
         types = self.client.get(f"/api/files/{event_log.pk}/object_types/").data
         self.assertIn("Claim", json.dumps(types))
         self.assertIn("resource", json.dumps(types))
+
+    def test_upload_reports_skipped_rows(self):
+        content = CSV_TEXT + "c3;Register;2024-03-05 10:00;Alice\n".encode()
+        response = self._upload("claims.csv", content, CSV_MAPPING)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        report = response.data["import_report"]
+        self.assertEqual(report["events"], 3)
+        self.assertEqual(report["skipped_bad_timestamp"], 1)
+        self.assertEqual(report["bad_timestamp_example"], "2024-03-05 10:00")
 
     def test_invalid_mapping_is_rejected_before_anything_is_stored(self):
         bad = {"columns": [{"column": "Activity", "role": "activity"}]}

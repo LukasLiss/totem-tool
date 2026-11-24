@@ -292,13 +292,15 @@ def _claim_storage_name(storage, name, max_length=None):
         return candidate, path
 
 
-def _convert_upload_to_duckdb(upload, progress=None, mapping=None):
+def _convert_upload_to_duckdb(upload, progress=None, mapping=None, import_report=None):
     """Convert an uploaded OCEL file to DuckDB beside it; return the new name.
 
     ``progress`` is handed to ``import_ocel_db`` (a ``callback(fraction,
     message)``), so the client can follow — and cancel — the conversion.
     ``mapping`` is the column mapping of a case-centric log (XES, plain CSV)
     chosen in the import dialog; see ``totem_lib.ocel.flat_log``.
+    ``import_report`` (a dict) is filled with what a mapped import kept and
+    skipped.
 
     The target must not simply be the upload's name with a `.duckdb`
     extension: Django de-duplicated the upload's name only against files
@@ -316,6 +318,7 @@ def _convert_upload_to_duckdb(upload, progress=None, mapping=None):
             strict_mode=False,
             progress=progress,
             mapping=mapping,
+            import_report=import_report,
         ).close()
         root, _ = os.path.splitext(upload.name)
         name, path = _claim_storage_name(
@@ -453,6 +456,7 @@ class EventLogViewSet(OCAlignmentActionsMixin, viewsets.ModelViewSet):
                 event_log.file,
                 progress=getattr(self, "_import_progress", None),
                 mapping=getattr(self, "_import_mapping", None),
+                import_report=getattr(self, "_import_report", None),
             )
         except JobCancelled:
             _discard_upload(event_log)
@@ -502,11 +506,14 @@ class EventLogViewSet(OCAlignmentActionsMixin, viewsets.ModelViewSet):
                 job.report(0.0, "Converting to DuckDB")
                 self._import_progress = job.report
                 self._import_mapping = mapping
+                import_report = {}
+                self._import_report = import_report
                 try:
                     self.perform_create(serializer)
                 finally:
                     self._import_progress = None
                     self._import_mapping = None
+                    self._import_report = None
                 user_file = serializer.instance
 
                 job.report(None, "Opening database")
@@ -534,7 +541,12 @@ class EventLogViewSet(OCAlignmentActionsMixin, viewsets.ModelViewSet):
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         headers = self.get_success_headers(serializer.data)
-        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+        data = dict(serializer.data)
+        if import_report:
+            # A mapped (XES / plain CSV) import: how many rows were kept and
+            # why the others were skipped, so the client can say so.
+            data["import_report"] = import_report
+        return Response(data, status=status.HTTP_201_CREATED, headers=headers)
 
     @action(detail=True, methods=["get"], url_path="export-project")
     def export_project(self, request, pk=None):
@@ -631,18 +643,24 @@ class EventLogViewSet(OCAlignmentActionsMixin, viewsets.ModelViewSet):
     def parse_timestamps(self, request):
         """Try a timestamp format on sample values, for the mapping dialog.
 
-        Body: ``{"values": [...], "format": "dd.MM.yyyy HH:mm"}``; answers
-        ``{"results": [iso string or null, ...]}`` using the very parser the
-        import uses, so what the dialog shows is what the import will do.
+        Body: ``{"values": [...], "format": "dd.MM.yyyy HH:mm",
+        "timezone": "Europe/Berlin"}`` (``timezone`` optional, UTC by
+        default); answers ``{"results": [iso string or null, ...]}`` using
+        the very parser the import uses, so what the dialog shows is what the
+        import will do.
         """
         values = request.data.get("values")
         fmt = request.data.get("format") or "auto"
-        if not isinstance(values, list) or not isinstance(fmt, str):
+        tz = request.data.get("timezone") or None
+        if not isinstance(values, list) or not isinstance(fmt, str) or not isinstance(tz, (str, type(None))):
             return Response(
-                {"error": "Send 'values' (a list) and 'format' (a string)."},
+                {"error": "Send 'values' (a list), 'format' and optionally 'timezone' (strings)."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        results = [parse_timestamp(None if v is None else str(v), fmt) for v in values[:500]]
+        try:
+            results = [parse_timestamp(None if v is None else str(v), fmt, tz) for v in values[:500]]
+        except FlatLogMappingError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         return Response({"results": results})
 
     @action(detail=False, methods=["post"], url_path="import-project")
