@@ -46,8 +46,8 @@ from totem_lib.ocel import FilterStack, apply_filter_stack, import_ocel_db
 from totem_lib.ocel.flat_log import (
     FlatLogMapping,
     FlatLogMappingError,
+    check_timestamp_format,
     flat_log_format,
-    parse_timestamp,
     preview_flat_log,
 )
 from totem_lib.ocel.event_columns import list_event_columns
@@ -619,6 +619,7 @@ class EventLogViewSet(OCAlignmentActionsMixin, viewsets.ModelViewSet):
         delimiter = request.data.get("delimiter") or None
         if delimiter is not None and len(delimiter) != 1:
             return Response({"error": "The delimiter must be a single character."}, status=status.HTTP_400_BAD_REQUEST)
+        encoding = request.data.get("encoding") or None
         try:
             result = preview_flat_log(
                 data[: self.PREVIEW_MAX_BYTES],
@@ -626,7 +627,10 @@ class EventLogViewSet(OCAlignmentActionsMixin, viewsets.ModelViewSet):
                 max_rows=self.PREVIEW_MAX_ROWS,
                 truncated=truncated,
                 delimiter=delimiter,
+                encoding=encoding,
             )
+        except FlatLogMappingError as e:  # an unknown encoding
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:  # malformed XML, undecodable gzip, ...
             return Response(
                 {"error": f"The file could not be read: {e}"},
@@ -645,8 +649,11 @@ class EventLogViewSet(OCAlignmentActionsMixin, viewsets.ModelViewSet):
 
         Body: ``{"values": [...], "format": "dd.MM.yyyy HH:mm",
         "timezone": "Europe/Berlin"}`` (``timezone`` optional, UTC by
-        default); answers ``{"results": [iso string or null, ...]}`` using
-        the very parser the import uses, so what the dialog shows is what the
+        default). Answers ``check_timestamp_format``'s ``{"format", "results",
+        "ambiguous_with"}``: the format the import would use ("auto" settled
+        on one for the column), an ISO string or null per value, and other
+        formats that read the values differently (day/month swapped). It is
+        the very code the import uses, so what the dialog shows is what the
         import will do.
         """
         values = request.data.get("values")
@@ -658,10 +665,9 @@ class EventLogViewSet(OCAlignmentActionsMixin, viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
-            results = [parse_timestamp(None if v is None else str(v), fmt, tz) for v in values[:500]]
+            return Response(check_timestamp_format(values[:500], fmt, tz))
         except FlatLogMappingError as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-        return Response({"results": results})
 
     @action(detail=False, methods=["post"], url_path="import-project")
     def import_project(self, request):

@@ -31,9 +31,11 @@ left out.
 
 from __future__ import annotations
 
+import codecs
 import csv
 import gzip
 import io
+import itertools
 import os
 import re
 import xml.etree.ElementTree as ET
@@ -64,6 +66,9 @@ ROLES = (
 
 # Timestamp "formats" that are not patterns.
 FORMAT_AUTO = "auto"
+# ISO 8601 only (any precision, "T" or space, optional offset or "Z"). What
+# "auto" settles on for a column of ISO values.
+FORMAT_ISO = "iso"
 FORMAT_UNIX_S = "unix_s"
 FORMAT_UNIX_MS = "unix_ms"
 
@@ -76,6 +81,25 @@ _EPOCH_ISO = "1970-01-01T00:00:00+00:00"
 _CSV_DELIMITERS = (",", ";", "\t", "|")
 _XES_ATTRIBUTE_TAGS = frozenset({"string", "date", "int", "float", "boolean", "id"})
 _XES_IGNORED_TAGS = frozenset({"list", "container"})
+
+# The csv module refuses cells over 128 KB by default; free-text columns
+# (notes, comments, JSON payloads) can be longer. Process-wide, which also
+# lifts the limit for the OCEL CSV reader.
+_CSV_FIELD_LIMIT = 64 * 1024 * 1024
+if csv.field_size_limit() < _CSV_FIELD_LIMIT:
+    csv.field_size_limit(_CSV_FIELD_LIMIT)
+
+# The preview never inflates a compressed sample beyond this: a 2 MB gzip
+# can otherwise expand to about 2 GB in memory (deflate reaches ~1000:1).
+PREVIEW_MAX_DECOMPRESSED = 32 * 1024 * 1024
+
+# Event ids are zero-padded so that sorting them as text (every analysis
+# breaks timestamp ties with ORDER BY timestamp_unix, event_id) keeps file
+# order: "e10" would otherwise sort before "e2".
+_EVENT_ID_DIGITS = 10
+
+# Rows "auto" looks at to choose the timestamp format for a column.
+_AUTO_SAMPLE_ROWS = 1000
 
 # Event attribute names that collide with the fixed schema columns.
 _RESERVED_EVENT_ATTRS = frozenset({"event_id", "activity", "timestamp_unix"})
@@ -184,14 +208,22 @@ def _iso(dt: datetime, tz: tzinfo = timezone.utc) -> str:
     return dt.isoformat()
 
 
-def _parse_auto(value: str) -> Optional[datetime]:
+def _parse_iso(value: str) -> Optional[datetime]:
     norm = value.strip()
     if norm.endswith(("Z", "z")):
         norm = norm[:-1] + "+00:00"
     try:
         return datetime.fromisoformat(norm)
     except ValueError:
-        pass
+        return None
+
+
+def _parse_auto(value: str) -> Optional[datetime]:
+    """One value on its own. Columns go through :func:`infer_timestamp_format`
+    instead, so that every row of a column is read the same way."""
+    dt = _parse_iso(value)
+    if dt is not None:
+        return dt
     for candidate in _AUTO_PATTERNS:
         try:
             return datetime.strptime(value.strip(), candidate)
@@ -224,6 +256,8 @@ def parse_timestamp(
     try:
         if fmt == FORMAT_AUTO:
             dt = _parse_auto(text)
+        elif fmt == FORMAT_ISO:
+            dt = _parse_iso(text)
         elif fmt in (FORMAT_UNIX_S, FORMAT_UNIX_MS):
             seconds = float(text) / (1000.0 if fmt == FORMAT_UNIX_MS else 1.0)
             dt = datetime.fromtimestamp(seconds, tz=timezone.utc)
@@ -281,6 +315,68 @@ def suggest_timestamp_format(values: Iterable[str]) -> Optional[str]:
         if all(parse_timestamp(s, preset) for s in samples):
             return preset
     return None
+
+
+# What "auto" chooses from, in order of preference: ISO first, then the
+# presets (day-first before month-first, as in the list).
+_AUTO_CANDIDATES = (FORMAT_ISO,) + tuple(p for p in TIMESTAMP_PRESETS if "XXX" not in p)
+
+
+def infer_timestamp_format(values: Iterable[str]) -> Optional[str]:
+    """The one format "auto" uses for a whole column, chosen from ``values``.
+
+    Reading every value with whichever pattern fits it would read
+    ``13/03/2024`` day-first and ``03/14/2024`` month-first in the same
+    column. Instead the candidate that parses the most samples wins (ties go
+    to the earlier one in :data:`_AUTO_CANDIDATES`), and every row is then
+    read with it. None when no candidate parses any sample.
+    """
+    samples = [str(v).strip() for v in values if v is not None and str(v).strip()]
+    best, best_count = None, 0
+    for candidate in _AUTO_CANDIDATES:
+        count = sum(1 for v in samples if parse_timestamp(v, candidate) is not None)
+        if count > best_count:
+            best, best_count = candidate, count
+            if count == len(samples):
+                break
+    return best
+
+
+def check_timestamp_format(values: list, fmt: Optional[str], tz: Optional[str] = None) -> dict:
+    """What the import would make of sample ``values`` with ``fmt`` and ``tz``.
+
+    Returns ``{"format", "results", "ambiguous_with"}``: ``format`` is the
+    format actually used ("auto" resolved to one for the whole column),
+    ``results`` an ISO string or None per value, and ``ambiguous_with`` the
+    other formats that read every sample too but give a different time for
+    at least one of them (``03/04/2024`` as 3 April or 4 March), with one
+    such value and both readings — so the user can check which is meant.
+    """
+    texts = [None if v is None else str(v) for v in values]
+    used = (fmt or FORMAT_AUTO).strip() or FORMAT_AUTO
+    if used == FORMAT_AUTO:
+        used = infer_timestamp_format(t for t in texts if t) or FORMAT_AUTO
+    results = [parse_timestamp(t, used, tz) for t in texts]
+    ambiguous = []
+    filled = [(t, r) for t, r in zip(texts, results) if t and t.strip()]
+    if filled and all(r is not None for _, r in filled) and used not in (FORMAT_UNIX_S, FORMAT_UNIX_MS):
+        for other in _AUTO_CANDIDATES:
+            if other == used:
+                continue
+            other_results = [parse_timestamp(t, other, tz) for t, _ in filled]
+            if any(r is None for r in other_results):
+                continue
+            differing = next(
+                ((t, r, o) for (t, r), o in zip(filled, other_results) if o != r), None
+            )
+            if differing:
+                ambiguous.append({
+                    "format": other,
+                    "value": differing[0].strip(),
+                    "as_chosen": differing[1],
+                    "as_other": differing[2],
+                })
+    return {"format": used, "results": results, "ambiguous_with": ambiguous}
 
 
 # ---------------------------------------------------------------------------
@@ -365,6 +461,41 @@ def _unique_names(header: list[str]) -> list[str]:
             seen[name] = 1
         out.append(name)
     return out
+
+
+# Offered by the dialog. Windows-1252 is what Excel writes for "CSV" on a
+# Western-European Windows; UTF-16 is its "Unicode text" export.
+ENCODINGS = ("utf-8", "windows-1252", "iso-8859-1", "utf-16")
+
+
+def normalize_encoding(name: Optional[str]) -> Optional[str]:
+    """A codec name Python knows, or None. UTF-8 always strips a BOM."""
+    if not name:
+        return None
+    try:
+        codec = codecs.lookup(name).name
+    except LookupError as e:
+        raise FlatLogMappingError(f"Unknown text encoding '{name}'.") from e
+    return "utf-8-sig" if codec in ("utf-8", "utf-8-sig") else codec
+
+
+def detect_encoding(sample: bytes) -> str:
+    """The encoding of a CSV sample: BOM, then valid UTF-8, else Windows-1252.
+
+    Windows-1252 decodes any byte sequence, so it is the fallback rather than
+    something we can test for; a file that is valid UTF-8 practically never
+    is anything else.
+    """
+    if sample.startswith(codecs.BOM_UTF8):
+        return "utf-8-sig"
+    if sample.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        return "utf-16"
+    try:
+        # final=False: a sample cut inside a multi-byte character is fine.
+        codecs.getincrementaldecoder("utf-8")().decode(sample, final=False)
+        return "utf-8-sig"
+    except UnicodeDecodeError:
+        return "cp1252"
 
 
 def detect_delimiter(sample: str) -> str:
@@ -473,12 +604,18 @@ def _suggest_roles(columns: list[str], rows: list[dict], fmt: str) -> dict[str, 
     return out
 
 
-def _decompress_prefix(data: bytes) -> bytes:
-    """Decompress as much of a (possibly truncated) gzip prefix as possible."""
+def _decompress_prefix(data: bytes, limit: int = PREVIEW_MAX_DECOMPRESSED) -> tuple[bytes, bool]:
+    """Inflate a (possibly truncated) gzip sample, at most ``limit`` bytes.
+
+    Returns ``(data, cut)`` where ``cut`` says the output was capped, so the
+    caller treats it as a truncated sample.
+    """
+    inflater = zlib.decompressobj(16 + zlib.MAX_WBITS)
     try:
-        return zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(data)
+        out = inflater.decompress(data, limit)
     except zlib.error:
-        return b""
+        return b"", True
+    return out, bool(inflater.unconsumed_tail)
 
 
 def preview_flat_log(
@@ -487,6 +624,7 @@ def preview_flat_log(
     max_rows: int = 100,
     truncated: bool = False,
     delimiter: Optional[str] = None,
+    encoding: Optional[str] = None,
 ) -> dict:
     """Describe the first rows of a flat log for the mapping dialog.
 
@@ -494,8 +632,10 @@ def preview_flat_log(
     the last, possibly cut-off CSV line is dropped and an XML parse error at
     the end of an XES sample is tolerated.
 
-    Returns ``{"format", "kind", "columns", "rows", "delimiter", "truncated",
-    "timestamp_presets"}`` where ``kind`` is ``"flat"`` or ``"ocel_csv"`` (an
+    ``encoding`` overrides the detected text encoding of a CSV.
+
+    Returns ``{"format", "kind", "columns", "rows", "delimiter", "encoding",
+    "truncated", "timestamp_presets", "encodings"}`` where ``kind`` is ``"flat"`` or ``"ocel_csv"`` (an
     OCEL 2.0 CSV, which needs no mapping) and every column is
     ``{"name", "suggestion": {...}, "empty": int, "distinct": int}``.
     """
@@ -506,10 +646,12 @@ def preview_flat_log(
     rows: list[dict] = []
     columns: list[str] = []
     used_delimiter: Optional[str] = None
+    used_encoding: Optional[str] = None
 
     if fmt == "xes":
         if _is_gz(file_name):
-            data = _decompress_prefix(data) if truncated else gzip.decompress(data)
+            data, cut = _decompress_prefix(data)
+            truncated = truncated or cut
         for row in _iter_xes(io.BytesIO(data), tolerate_truncation=True):
             rows.append(row)
             for key in row:
@@ -520,7 +662,8 @@ def preview_flat_log(
         # Case attributes first, like the trace/event nesting in the file.
         columns.sort(key=lambda c: 0 if c.startswith("case:") else 1)
     else:
-        text = data.decode("utf-8-sig", errors="replace")
+        used_encoding = normalize_encoding(encoding) or detect_encoding(data)
+        text = data.decode(used_encoding, errors="replace")
         if truncated and "\n" in text:
             text = text[: text.rfind("\n") + 1]
         used_delimiter = delimiter or detect_delimiter(text)
@@ -547,12 +690,30 @@ def preview_flat_log(
         "columns": column_info,
         "rows": [[r.get(c, "") for c in columns] for r in rows],
         "delimiter": used_delimiter,
+        "encoding": _display_encoding(used_encoding),
         "truncated": truncated,
         "timestamp_presets": list(TIMESTAMP_PRESETS),
+        "encodings": list(ENCODINGS),
     }
 
 
-def iter_flat_rows(file_path: str, delimiter: Optional[str] = None, raw=None) -> Iterator[dict]:
+def _display_encoding(codec: Optional[str]) -> Optional[str]:
+    """The :data:`ENCODINGS` entry a codec name corresponds to."""
+    if codec is None:
+        return None
+    name = codecs.lookup(codec).name
+    for option in ENCODINGS:
+        if codecs.lookup(option).name == name or (option == "utf-8" and name == "utf-8-sig"):
+            return option
+    return codec
+
+
+def iter_flat_rows(
+    file_path: str,
+    delimiter: Optional[str] = None,
+    raw=None,
+    encoding: Optional[str] = None,
+) -> Iterator[dict]:
     """Every event row of an XES or CSV file, as ``{column: value}``.
 
     ``raw`` is an optional binary handle on ``file_path`` to read from; the
@@ -568,8 +729,13 @@ def iter_flat_rows(file_path: str, delimiter: Optional[str] = None, raw=None) ->
             source = gzip.GzipFile(fileobj=raw) if _is_gz(file_path) else raw
             yield from _iter_xes(source)
             return
-        # utf-8-sig strips a BOM; undecodable bytes must not abort an import.
-        text = io.TextIOWrapper(raw, encoding="utf-8-sig", errors="replace", newline="")
+        codec = normalize_encoding(encoding)
+        if codec is None:
+            start = raw.tell()
+            codec = detect_encoding(raw.read(1024 * 1024))
+            raw.seek(start)
+        # Undecodable bytes must not abort an import.
+        text = io.TextIOWrapper(raw, encoding=codec, errors="replace", newline="")
         try:
             if delimiter is None:
                 delimiter = detect_delimiter(text.read(64 * 1024))
@@ -602,6 +768,7 @@ class ColumnMapping:
 class FlatLogMapping:
     columns: list[ColumnMapping] = field(default_factory=list)
     delimiter: Optional[str] = None
+    encoding: Optional[str] = None  # CSV text encoding; detected when None
 
     # -- construction -------------------------------------------------------
 
@@ -631,7 +798,10 @@ class FlatLogMapping:
         delimiter = data.get("delimiter") or None
         if delimiter is not None and (not isinstance(delimiter, str) or len(delimiter) != 1):
             raise FlatLogMappingError("The delimiter must be a single character.")
-        mapping = cls(columns=cols, delimiter=delimiter)
+        encoding = data.get("encoding") or None
+        if encoding is not None and not isinstance(encoding, str):
+            raise FlatLogMappingError("The encoding must be a string.")
+        mapping = cls(columns=cols, delimiter=delimiter, encoding=encoding)
         mapping.validate()
         return mapping
 
@@ -649,7 +819,7 @@ class FlatLogMapping:
                 column=col["name"], role=s.get("role", ROLE_IGNORE),
                 object_type=s.get("object_type"), format=s.get("format"), target=s.get("target"),
             ))
-        mapping = cls(columns=cols, delimiter=preview["delimiter"])
+        mapping = cls(columns=cols, delimiter=preview["delimiter"], encoding=preview["encoding"])
         mapping.validate()
         return mapping
 
@@ -672,6 +842,10 @@ class FlatLogMapping:
                 resolve_timezone(c.timezone)
             except FlatLogMappingError as e:
                 problems.append(str(e))
+        try:
+            normalize_encoding(self.encoding)
+        except FlatLogMappingError as e:
+            problems.append(str(e))
         object_cols = {c.column for c in self.by_role(ROLE_OBJECT_ID, ROLE_RESOURCE)}
         for c in self.by_role(ROLE_OBJECT_ATTRIBUTE):
             if c.target is not None and c.target not in object_cols:
@@ -691,6 +865,28 @@ class FlatLogMapping:
 # ---------------------------------------------------------------------------
 # Staging
 # ---------------------------------------------------------------------------
+
+def unique_attribute_names(names: list[str], reserved: Iterable[str] = ()) -> list[str]:
+    """``names`` made distinct ignoring case, and clear of ``reserved``.
+
+    DuckDB column names are case-insensitive, so "Status" and "status" (or an
+    attribute called "Activity" next to the fixed ``activity`` column) cannot
+    both be columns. A clash with a fixed column gets ``_attr``, a clash
+    between two attributes ``_2``, ``_3``, ...
+    """
+    fixed = {r.lower() for r in reserved}
+    taken = set(fixed)
+    out = []
+    for name in names:
+        candidate = f"{name}_attr" if name.lower() in fixed else name
+        k = 2
+        while candidate.lower() in taken:
+            candidate = f"{name}_{k}"
+            k += 1
+        taken.add(candidate.lower())
+        out.append(candidate)
+    return out
+
 
 def stage_flat_log(file_path: str, mapping: FlatLogMapping, buffers, tick=None, raw=None) -> dict:
     """Push the mapped rows of ``file_path`` into importer staging buffers.
@@ -719,21 +915,31 @@ def stage_flat_log(file_path: str, mapping: FlatLogMapping, buffers, tick=None, 
     first_object_col = mapping.by_role(ROLE_OBJECT_ID)[0].column
     case_cols = {c.column for c in mapping.by_role(ROLE_OBJECT_ID)}
 
-    def attr_name(c: ColumnMapping, reserved: frozenset) -> str:
-        name = c.name or c.column
-        return f"{name}_attr" if name in reserved else name
-
-    event_attrs = [(c.column, attr_name(c, _RESERVED_EVENT_ATTRS))
-                   for c in mapping.by_role(ROLE_EVENT_ATTRIBUTE)]
     def object_attr_name(c: ColumnMapping) -> str:
         # "case:customer" is the customer *of the case*; on the object the
         # prefix only gets in the way.
         if c.name is None and c.column.startswith("case:") and len(c.column) > 5:
-            c = ColumnMapping(c.column, c.role, name=c.column[5:])
-        return attr_name(c, _RESERVED_OBJECT_ATTRS)
+            return c.column[5:]
+        return c.name or c.column
 
-    object_attrs = [(c.column, c.target or first_object_col, object_attr_name(c))
-                    for c in mapping.by_role(ROLE_OBJECT_ATTRIBUTE)]
+    event_attr_cols = mapping.by_role(ROLE_EVENT_ATTRIBUTE)
+    object_attr_cols = mapping.by_role(ROLE_OBJECT_ATTRIBUTE)
+    wanted_event = [c.name or c.column for c in event_attr_cols]
+    wanted_object = [object_attr_name(c) for c in object_attr_cols]
+    stored_event = unique_attribute_names(wanted_event, _RESERVED_EVENT_ATTRS)
+    stored_object = unique_attribute_names(wanted_object, _RESERVED_OBJECT_ATTRS)
+
+    event_attrs = [(c.column, name) for c, name in zip(event_attr_cols, stored_event)]
+    object_attrs = [(c.column, c.target or first_object_col, name)
+                    for c, name in zip(object_attr_cols, stored_object)]
+    # Reported back so the user can find a column stored under a new name.
+    renamed = {
+        c.column: stored
+        for c, want, stored in zip(event_attr_cols + object_attr_cols,
+                                   wanted_event + wanted_object,
+                                   stored_event + stored_object)
+        if want != stored
+    }
 
     seen_objects: dict[tuple[str, str], None] = {}
     # (object type, object id) → {attribute: last value written}
@@ -749,8 +955,16 @@ def stage_flat_log(file_path: str, mapping: FlatLogMapping, buffers, tick=None, 
         owner = id_owner.setdefault(raw_id, obj_type)
         return raw_id if owner == obj_type else f"{obj_type}:{raw_id}"
 
+    rows = iter_flat_rows(file_path, mapping.delimiter, raw=raw, encoding=mapping.encoding)
+    if ts_fmt == FORMAT_AUTO:
+        # Settle "auto" on one format for the whole column, from the first
+        # rows, so no two rows are read with different day/month orders.
+        head = list(itertools.islice(rows, _AUTO_SAMPLE_ROWS))
+        ts_fmt = infer_timestamp_format(r.get(ts_col.column) for r in head) or FORMAT_AUTO
+        rows = itertools.chain(head, rows)
+
     n = 0
-    for row in iter_flat_rows(file_path, mapping.delimiter, raw=raw):
+    for row in rows:
         parts = [(row.get(c) or "").strip() for c in activity_cols]
         activity = ACTIVITY_SEPARATOR.join(p for p in parts if p)
         if not activity:
@@ -758,9 +972,9 @@ def stage_flat_log(file_path: str, mapping: FlatLogMapping, buffers, tick=None, 
             continue
         linked = []
         for col, obj_type in object_cols:
-            raw = (row.get(col) or "").strip()
-            if raw:
-                linked.append((col, obj_type, object_key(obj_type, raw)))
+            cell = (row.get(col) or "").strip()
+            if cell:
+                linked.append((col, obj_type, object_key(obj_type, cell)))
         # A resource alone does not make an event: it needs a case object.
         if not any(col in case_cols for col, _, _ in linked):
             counts["skipped_no_object"] += 1
@@ -776,7 +990,7 @@ def stage_flat_log(file_path: str, mapping: FlatLogMapping, buffers, tick=None, 
             continue
 
         n += 1
-        event_id = f"e{n}"
+        event_id = f"e{n:0{_EVENT_ID_DIGITS}d}"
         buffers.add_event(event_id, activity, ts_value)
         for col, name in event_attrs:
             value = (row.get(col) or "").strip()
@@ -814,6 +1028,7 @@ def stage_flat_log(file_path: str, mapping: FlatLogMapping, buffers, tick=None, 
     counts["bad_timestamp_example"] = first_bad_ts
     counts["timestamp_format"] = ts_fmt
     counts["timezone"] = ts_zone
+    counts["renamed_attributes"] = renamed
     if n == 0:
         if counts["skipped_bad_timestamp"] and first_bad_ts:
             raise FlatLogMappingError(
@@ -837,14 +1052,19 @@ __all__ = [
     "ColumnMapping",
     "FlatLogMapping",
     "FlatLogMappingError",
+    "ENCODINGS",
     "ROLES",
     "TIMESTAMP_PRESETS",
+    "detect_encoding",
     "flat_log_format",
     "is_ocel_csv_header",
     "iter_flat_rows",
+    "check_timestamp_format",
+    "infer_timestamp_format",
     "parse_timestamp",
     "pattern_to_strptime",
     "resolve_timezone",
+    "unique_attribute_names",
     "preview_flat_log",
     "stage_flat_log",
     "suggest_timestamp_format",

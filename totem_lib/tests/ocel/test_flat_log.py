@@ -309,3 +309,139 @@ def test_csv_wrong_timestamp_format_names_an_example(tmp_path):
 def test_invalid_mappings_are_rejected(columns, message):
     with pytest.raises(FlatLogMappingError, match=message):
         FlatLogMapping.from_dict({"columns": columns})
+
+
+# ---------------------------------------------------------------------------
+# Regressions found in review (#451)
+# ---------------------------------------------------------------------------
+
+def _csv(tmp_path, text, encoding="utf-8", name="log.csv"):
+    path = tmp_path / name
+    path.write_bytes(text.encode(encoding))
+    return str(path)
+
+
+BASE_COLS = [
+    {"column": "case", "role": "object_id"},
+    {"column": "act", "role": "activity"},
+    {"column": "ts", "role": "timestamp", "format": "auto"},
+]
+
+
+def test_events_with_equal_timestamps_keep_file_order(tmp_path):
+    # Analyses break ties with ORDER BY timestamp_unix, event_id; unpadded
+    # ids put "e10" before "e2".
+    rows = "".join(f"c1;Step{i};2024-01-01\n" for i in range(1, 13))
+    db = import_ocel_db(_csv(tmp_path, "case;act;ts\n" + rows),
+                        mapping={"delimiter": ";", "columns": BASE_COLS})
+    try:
+        order = [r[0] for r in _rows(db, "SELECT activity FROM events ORDER BY timestamp_unix, event_id")]
+        assert order == [f"Step{i}" for i in range(1, 13)]
+    finally:
+        db.close()
+
+
+def test_attribute_names_that_clash_ignoring_case_are_renamed(tmp_path):
+    path = _csv(tmp_path, "case;act;ts;Activity;Status;status\nc1;A;2024-01-01;x;open;o\n")
+    report = {}
+    mapping = {"delimiter": ";", "columns": BASE_COLS + [
+        {"column": "Activity", "role": "event_attribute"},
+        {"column": "Status", "role": "event_attribute"},
+        {"column": "status", "role": "event_attribute"},
+    ]}
+    db = import_ocel_db(path, mapping=mapping, import_report=report)
+    try:
+        assert _rows(db, 'SELECT activity, "Activity_attr", "Status", "status_2" FROM events') == [
+            ("A", "x", "open", "o")
+        ]
+    finally:
+        db.close()
+    assert report["renamed_attributes"] == {"Activity": "Activity_attr", "status": "status_2"}
+
+
+def test_auto_reads_the_whole_column_with_one_format(tmp_path):
+    # 13/03 only fits day-first, 03/14 only month-first; reading each row with
+    # whatever fits mixed both orders in one column.
+    path = _csv(tmp_path, "case;act;ts\nc1;A;13/03/2024 10:00:00\nc1;B;14/03/2024 10:00:00\nc1;C;03/15/2024 10:00:00\n")
+    report = {}
+    db = import_ocel_db(path, mapping={"delimiter": ";", "columns": BASE_COLS}, import_report=report)
+    try:
+        assert [r[0] for r in _rows(db, "SELECT activity FROM events ORDER BY 1")] == ["A", "B"]
+    finally:
+        db.close()
+    assert report["timestamp_format"] == "dd/MM/yyyy HH:mm:ss"
+    assert report["skipped_bad_timestamp"] == 1
+    assert report["bad_timestamp_example"] == "03/15/2024 10:00:00"
+
+
+def test_ambiguous_day_month_order_is_flagged():
+    from totem_lib.ocel.flat_log import check_timestamp_format
+
+    check = check_timestamp_format(["03/04/2024 10:00:00", "05/06/2024 11:00:00"], "auto")
+    assert check["format"] == "dd/MM/yyyy HH:mm:ss"
+    assert check["results"][0] == "2024-04-03T10:00:00+00:00"
+    (alt,) = check["ambiguous_with"]
+    assert alt["format"] == "MM/dd/yyyy HH:mm:ss"
+    assert alt["as_other"] == "2024-03-04T10:00:00+00:00"
+    # Unambiguous samples, and ISO read two equivalent ways, are not flagged.
+    assert check_timestamp_format(["13/04/2024 10:00:00"], "auto")["ambiguous_with"] == []
+    assert check_timestamp_format(["2024-03-01 10:00:00"], "auto")["ambiguous_with"] == []
+
+
+def test_windows_1252_csv_is_detected(tmp_path):
+    from totem_lib.ocel.flat_log import detect_encoding
+
+    text = "case;act;ts;Größe\nc1;Prüfung;2024-01-01;groß\n"
+    preview = preview_flat_log(text.encode("cp1252"), "x.csv")
+    assert preview["encoding"] == "windows-1252"
+    assert [c["name"] for c in preview["columns"]][-1] == "Größe"
+    db = import_ocel_db(_csv(tmp_path, text, "cp1252"), mapping={"delimiter": ";", "columns": BASE_COLS})
+    try:
+        assert _rows(db, "SELECT activity FROM events") == [("Prüfung",)]
+    finally:
+        db.close()
+    assert detect_encoding("Größe".encode("utf-8")) == "utf-8-sig"
+    assert detect_encoding("﻿a;b".encode("utf-16")) == "utf-16"
+    # A sample cut inside a multi-byte character is still UTF-8.
+    assert detect_encoding("aaö".encode("utf-8")[:-1]) == "utf-8-sig"
+
+
+def test_utf16_excel_export_and_explicit_encoding(tmp_path):
+    text = "case\tact\tts\nc1\tPrüfung\t2024-01-01\n"
+    path = _csv(tmp_path, text, "utf-16", name="log.txt")
+    db = import_ocel_db(path, mapping={"columns": BASE_COLS})
+    try:
+        assert _rows(db, "SELECT activity FROM events") == [("Prüfung",)]
+    finally:
+        db.close()
+    with pytest.raises(FlatLogMappingError, match="Unknown text encoding"):
+        FlatLogMapping.from_dict({"encoding": "klingon", "columns": BASE_COLS})
+
+
+def test_cells_over_128_kb_import(tmp_path):
+    path = _csv(tmp_path, "case;act;ts;note\nc1;A;2024-01-01;" + "x" * 300_000 + "\n")
+    mapping = {"delimiter": ";", "columns": BASE_COLS + [{"column": "note", "role": "event_attribute"}]}
+    db = import_ocel_db(path, mapping=mapping)
+    try:
+        assert _rows(db, "SELECT length(note) FROM events") == [(300_000,)]
+    finally:
+        db.close()
+
+
+def test_gzip_preview_does_not_inflate_without_limit():
+    from totem_lib.ocel import flat_log
+
+    # About 1 GB of zeros after a valid XES start compresses to ~1 MB.
+    header = XES.read_bytes()[:2000]
+    compressor = __import__("zlib").compressobj(9, 8, 31)
+    blob = compressor.compress(header)
+    chunk = b"\0" * (1 << 20)
+    for _ in range(1024):
+        blob += compressor.compress(chunk)
+    blob += compressor.flush()
+    assert len(blob) < 2 * 1024 * 1024
+
+    inflated, cut = flat_log._decompress_prefix(blob)
+    assert cut and len(inflated) <= flat_log.PREVIEW_MAX_DECOMPRESSED
+    preview = preview_flat_log(blob, "bomb.xes.gz")
+    assert preview["truncated"] is True

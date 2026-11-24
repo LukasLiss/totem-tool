@@ -17,7 +17,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from .models import EventLog
-from .views._ocel_db import _close_ocel_db
+from .views._ocel_db import _OCEL_DB_REGISTRY, _close_ocel_db
 
 XES_PATH = os.path.join(
     os.path.dirname(__file__), "..", "..", "totem_lib", "example_data", "order_handling_case_log.xes"
@@ -139,6 +139,34 @@ class FlatLogImportTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("Unknown time zone", response.data["error"])
 
+    def test_parse_timestamps_resolves_auto_and_flags_ambiguity(self):
+        response = self.client.post(
+            "/api/files/parse-timestamps/",
+            {"values": ["03/04/2024 10:00:00", "05/06/2024 11:00:00"], "format": "auto"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["format"], "dd/MM/yyyy HH:mm:ss")
+        self.assertEqual(response.data["ambiguous_with"][0]["format"], "MM/dd/yyyy HH:mm:ss")
+
+    def test_preview_detects_and_accepts_an_encoding(self):
+        content = "Fall;Tätigkeit;Zeit\nc1;Prüfung;2024-01-01\n".encode("cp1252")
+        response = self.client.post(
+            "/api/files/preview/",
+            {"file": SimpleUploadedFile("blob", content), "filename": "x.csv"},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(response.data["encoding"], "windows-1252")
+        self.assertEqual(response.data["columns"][1]["name"], "Tätigkeit")
+        bad = self.client.post(
+            "/api/files/preview/",
+            {"file": SimpleUploadedFile("blob", content), "filename": "x.csv", "encoding": "klingon"},
+            format="multipart",
+        )
+        self.assertEqual(bad.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Unknown text encoding", bad.data["error"])
+
     # -- upload -------------------------------------------------------------
 
     def test_xes_upload_without_mapping_uses_the_suggestion(self):
@@ -164,6 +192,19 @@ class FlatLogImportTests(TestCase):
         self.assertEqual(report["events"], 3)
         self.assertEqual(report["skipped_bad_timestamp"], 1)
         self.assertEqual(report["bad_timestamp_example"], "2024-03-05 10:00")
+
+    def test_windows_1252_upload_keeps_umlauts(self):
+        content = "Case ID;Activity;Start Time;Resource\nc1;Prüfung;01.03.2024 09:00;Jürgen\n".encode("cp1252")
+        mapping = json.loads(json.dumps(CSV_MAPPING))
+        mapping["encoding"] = "windows-1252"
+        response = self._upload("claims.csv", content, mapping)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        db = _OCEL_DB_REGISTRY[int(response.data["id"])]
+        self.assertEqual(db.conn.execute("SELECT activity FROM events").fetchall(), [("Prüfung",)])
+        self.assertEqual(
+            db.conn.execute("SELECT obj_id FROM objects WHERE obj_type = 'resource'").fetchall(),
+            [("Jürgen",)],
+        )
 
     def test_invalid_mapping_is_rejected_before_anything_is_stored(self):
         bad = {"columns": [{"column": "Activity", "role": "activity"}]}
