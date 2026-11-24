@@ -16,7 +16,7 @@ vi.mock("@/api/fileApi", async (importOriginal) => {
 });
 
 import { FlatLogMappingDialog } from "./FlatLogMappingDialog";
-import { defaultObjectType, mappingProblems } from "./flatLogMapping";
+import { defaultObjectType, mappingProblems, skippedRowsSummary } from "./flatLogMapping";
 
 const PREVIEW: FlatLogPreview = {
   format: "xes",
@@ -85,6 +85,29 @@ describe("mappingProblems", () => {
   });
 });
 
+describe("skippedRowsSummary", () => {
+  const base = {
+    rows: 10, events: 10, skipped_no_activity: 0, skipped_no_object: 0, skipped_bad_timestamp: 0,
+    bad_timestamp_example: null, timestamp_format: "dd.MM.yyyy HH:mm", timezone: "UTC",
+  };
+
+  it("says nothing when every row was imported", () => {
+    expect(skippedRowsSummary(base)).toBeNull();
+    expect(skippedRowsSummary(undefined)).toBeNull();
+  });
+
+  it("names each reason, with a timestamp that did not match", () => {
+    const summary = skippedRowsSummary({
+      ...base, events: 7, skipped_bad_timestamp: 2, skipped_no_object: 1, bad_timestamp_example: "2024-03-05",
+    });
+    expect(summary?.title).toBe("Imported 7 events; skipped 3 rows of 10");
+    expect(summary?.lines).toEqual([
+      "2 rows with a timestamp that does not match “dd.MM.yyyy HH:mm” (e.g. “2024-03-05”)",
+      "1 row without an object (case) id",
+    ]);
+  });
+});
+
 describe("FlatLogMappingDialog", () => {
   it("shows the sample with the suggested roles and imports them", async () => {
     const onConfirm = renderDialog();
@@ -101,9 +124,32 @@ describe("FlatLogMappingDialog", () => {
     expect(mapping.columns).toEqual([
       { column: "case:concept:name", role: "object_id", object_type: "case" },
       { column: "concept:name", role: "activity" },
-      { column: "time:timestamp", role: "timestamp", format: "auto" },
+      { column: "time:timestamp", role: "timestamp", format: "auto", timezone: "UTC" },
       { column: "org:resource", role: "resource", object_type: "resource" },
     ]);
+  });
+
+  it("checks and submits the chosen time zone", async () => {
+    const onConfirm = renderDialog();
+    fireEvent.change(screen.getByLabelText("Time zone"), { target: { value: "Europe/Berlin" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    expect(parseTimestamps).toHaveBeenLastCalledWith(expect.any(Array), "auto", "Europe/Berlin");
+    fireEvent.click(screen.getByTestId("start-import"));
+    const mapping = onConfirm.mock.calls[0][0] as FlatLogMapping;
+    expect(mapping.columns.find((c) => c.role === "timestamp")?.timezone).toBe("Europe/Berlin");
+  });
+
+  it("blocks the import for a time zone the backend does not know", async () => {
+    parseTimestamps.mockRejectedValue({ response: { data: { error: "Unknown time zone 'Nowhere/Land'." } } });
+    renderDialog();
+    fireEvent.change(screen.getByLabelText("Time zone"), { target: { value: "Nowhere/Land" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    expect((screen.getByTestId("start-import") as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId("mapping-problems").textContent).toMatch(/Unknown time zone/);
   });
 
   it("blocks the import until an object id column is chosen again", async () => {

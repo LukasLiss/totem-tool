@@ -100,6 +100,8 @@ const SPECIAL_FORMATS: { value: string; label: string }[] = [
   { value: "unix_ms", label: "Unix time (milliseconds)" },
 ];
 const CUSTOM_FORMAT = "__custom__";
+/** Zone for timestamps that carry none, unless the user picks another. */
+const DEFAULT_TIMEZONE = "UTC";
 
 const DELIMITERS: { value: string; label: string }[] = [
   { value: ",", label: "Comma ( , )" },
@@ -192,19 +194,23 @@ export function FlatLogMappingDialog({ open, file, preview: initialPreview, onCa
   );
   const [tsCheck, setTsCheck] = useState<{ ok: number; total: number; example?: [string, string]; firstBad?: string } | null>(null);
   const [tsChecking, setTsChecking] = useState(false);
+  const [tsError, setTsError] = useState<string | null>(null);
   const tsFormat = tsColumn?.format || "auto";
+  const tsZone = tsColumn?.timezone?.trim() || DEFAULT_TIMEZONE;
 
   useEffect(() => {
     if (!open || tsSamples.length === 0) {
       setTsCheck(null);
+      setTsError(null);
       return;
     }
     let cancelled = false;
     setTsChecking(true);
     const handle = window.setTimeout(async () => {
       try {
-        const results = await parseTimestamps(tsSamples, tsFormat);
+        const results = await parseTimestamps(tsSamples, tsFormat, tsZone);
         if (cancelled) return;
+        setTsError(null);
         const okIndex = results.findIndex((r) => r !== null);
         const badIndex = results.findIndex((r) => r === null);
         setTsCheck({
@@ -213,8 +219,14 @@ export function FlatLogMappingDialog({ open, file, preview: initialPreview, onCa
           example: okIndex >= 0 ? [tsSamples[okIndex], results[okIndex] as string] : undefined,
           firstBad: badIndex >= 0 ? tsSamples[badIndex] : undefined,
         });
-      } catch {
-        if (!cancelled) setTsCheck(null);
+      } catch (err: unknown) {
+        if (cancelled) return;
+        setTsCheck(null);
+        // A 400 names the problem (an unknown time zone); anything else is
+        // a hiccup the import itself will report.
+        setTsError(
+          (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? null,
+        );
       } finally {
         if (!cancelled) setTsChecking(false);
       }
@@ -223,9 +235,10 @@ export function FlatLogMappingDialog({ open, file, preview: initialPreview, onCa
       cancelled = true;
       window.clearTimeout(handle);
     };
-  }, [open, tsSamples, tsFormat]);
+  }, [open, tsSamples, tsFormat, tsZone]);
 
   const problems = mappingProblems(columns);
+  if (tsError) problems.push({ level: "error", text: tsError });
   if (tsCheck && tsCheck.total > 0 && tsCheck.ok === 0) {
     problems.push({ level: "error", text: `No sample timestamp matches “${tsFormat}” (e.g. “${tsCheck.firstBad}”).` });
   } else if (tsCheck && tsCheck.ok < tsCheck.total) {
@@ -243,7 +256,10 @@ export function FlatLogMappingDialog({ open, file, preview: initialPreview, onCa
       columns: columns.map((c) => {
         const out: FlatColumnMapping = { column: c.column, role: c.role };
         if (c.role === "object_id" || c.role === "resource") out.object_type = c.object_type?.trim();
-        if (c.role === "timestamp") out.format = c.format || "auto";
+        if (c.role === "timestamp") {
+          out.format = c.format || "auto";
+          out.timezone = c.timezone?.trim() || DEFAULT_TIMEZONE;
+        }
         if (c.role === "object_attribute") {
           const target = c.target && idColumns.some((i) => i.column === c.target) ? c.target : undefined;
           if (target) out.target = target;
@@ -336,6 +352,14 @@ export function FlatLogMappingDialog({ open, file, preview: initialPreview, onCa
                 value={selectedMapping.format || "auto"}
                 presets={preview?.timestamp_presets ?? []}
                 onChange={(format) => update(selectedMapping.column, { format })}
+              />
+            )}
+
+            {selectedMapping.role === "timestamp" && (
+              <TimeZoneField
+                value={selectedMapping.timezone ?? DEFAULT_TIMEZONE}
+                disabled={(selectedMapping.format ?? "").startsWith("unix_")}
+                onChange={(timezone) => update(selectedMapping.column, { timezone })}
               />
             )}
 
@@ -495,6 +519,60 @@ export function FlatLogMappingDialog({ open, file, preview: initialPreview, onCa
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** Every IANA zone the browser knows, the computer's own first. */
+function timeZoneOptions(): string[] {
+  const own = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  let all: string[] = [];
+  try {
+    const supported = (Intl as unknown as { supportedValuesOf?: (key: string) => string[] }).supportedValuesOf;
+    all = supported ? supported("timeZone") : [];
+  } catch {
+    all = [];
+  }
+  return Array.from(new Set([DEFAULT_TIMEZONE, own, ...all].filter(Boolean)));
+}
+
+function TimeZoneField({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: string;
+  disabled: boolean;
+  onChange: (timezone: string) => void;
+}) {
+  const options = useMemo(timeZoneOptions, []);
+  const own = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return (
+    <label className="flex flex-col gap-1" title="Values with their own offset (like +01:00) keep it; Unix times are absolute.">
+      <span className="text-xs text-muted-foreground">
+        {disabled ? "Time zone (not used for Unix time)" : "Time zone of values without an offset"}
+      </span>
+      <div className="flex items-center gap-1">
+        <Input
+          className="h-8 w-48 font-mono"
+          list="totem-time-zones"
+          value={value}
+          disabled={disabled}
+          placeholder={DEFAULT_TIMEZONE}
+          onChange={(e) => onChange(e.target.value)}
+          aria-label="Time zone"
+        />
+        {!disabled && own && own !== value && (
+          <Button type="button" variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={() => onChange(own)}>
+            Use {own}
+          </Button>
+        )}
+      </div>
+      <datalist id="totem-time-zones">
+        {options.map((zone) => (
+          <option key={zone} value={zone} />
+        ))}
+      </datalist>
+    </label>
   );
 }
 

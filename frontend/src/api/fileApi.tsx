@@ -37,6 +37,8 @@ export interface FlatColumnMapping {
   object_type?: string;
   /** timestamp: "auto", "unix_s", "unix_ms" or a pattern like "dd.MM.yyyy HH:mm". */
   format?: string;
+  /** timestamp: IANA zone ("Europe/Berlin") for values without an offset; UTC by default. */
+  timezone?: string;
   /** object_attribute: the object id column whose objects get the attribute. */
   target?: string;
 }
@@ -92,11 +94,27 @@ export async function previewFlatLog(file: File, delimiter?: string | null): Pro
   return data;
 }
 
+/** What a mapped import kept and skipped (`import_report` of the upload response). */
+export interface FlatLogImportReport {
+  rows: number;
+  events: number;
+  skipped_no_activity: number;
+  skipped_no_object: number;
+  skipped_bad_timestamp: number;
+  bad_timestamp_example: string | null;
+  timestamp_format: string;
+  timezone: string;
+}
+
 /** Parse sample values with a timestamp format, exactly as the import will. */
-export async function parseTimestamps(values: string[], format: string): Promise<(string | null)[]> {
+export async function parseTimestamps(
+  values: string[],
+  format: string,
+  timezone?: string,
+): Promise<(string | null)[]> {
   const { data } = await axios.post(
     "/api/files/parse-timestamps/",
-    { values, format },
+    { values, format, timezone },
     { _skipGlobalFilter: true },
   );
   return data.results;

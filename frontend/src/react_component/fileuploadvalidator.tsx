@@ -11,6 +11,7 @@ import {
   type FlatLogPreview,
 } from "../api/fileApi";
 import { FlatLogMappingDialog } from "./FlatLogMappingDialog";
+import { skippedRowsSummary } from "./flatLogMapping";
 import { Loader2, CheckCircle2, XCircle } from "lucide-react";
 import {useDropzone} from 'react-dropzone';
 import { Button } from "@/components/ui/button";
@@ -221,12 +222,36 @@ export function FileUploadValidator() {
           }
         }
       }, mapping);
-      setSelectedFile(response);
+      // `import_report` describes a mapped (XES / plain CSV) import; it is
+      // not part of the event log the rest of the app keeps.
+      const { import_report: importReport, ...eventLog } = response ?? {};
+      setSelectedFile(eventLog);
       setValidationStatus('success');
-      toast.success("Upload successful", {
-        description: file.name,
-      });
-      if (response?.id != null) await prepareLargeLogFilter(Number(response.id));
+      const skipped = skippedRowsSummary(importReport);
+      if (skipped) {
+        // Rows that did not fit the mapping are not an error, but the user
+        // must not have to discover them by counting events.
+        toast.warning(skipped.title, {
+          description: (
+            <div className="text-left space-y-1 mt-1">
+              <ul className="list-disc pl-4 space-y-0.5">
+                {skipped.lines.map((line, i) => (
+                  <li key={i} className="text-xs">{line}</li>
+                ))}
+              </ul>
+              <p className="text-xs text-muted-foreground">
+                Upload the file again with a different mapping to include them.
+              </p>
+            </div>
+          ),
+          duration: 15000,
+        });
+      } else {
+        toast.success("Upload successful", {
+          description: file.name,
+        });
+      }
+      if (eventLog?.id != null) await prepareLargeLogFilter(Number(eventLog.id));
       setFile(null);
       setFlatPreview(null);
       setShowConversionModal(false);

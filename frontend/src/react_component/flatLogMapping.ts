@@ -1,5 +1,5 @@
 /** Pure helpers of the column-mapping dialog (FlatLogMappingDialog.tsx). */
-import type { FlatColumnMapping, FlatLogPreview, FlatLogRole } from "@/api/fileApi";
+import type { FlatColumnMapping, FlatLogImportReport, FlatLogPreview, FlatLogRole } from "@/api/fileApi";
 
 export function initialMapping(preview: FlatLogPreview): FlatColumnMapping[] {
   return preview.columns.map((c) => ({ column: c.name, ...c.suggestion }));
@@ -33,4 +33,32 @@ export function mappingProblems(columns: FlatColumnMapping[]): MappingProblem[] 
     }
   }
   return problems;
+}
+
+const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
+
+/**
+ * What to tell the user about rows a mapped import left out, or null when
+ * every row became an event.
+ */
+export function skippedRowsSummary(report: FlatLogImportReport | null | undefined): { title: string; lines: string[] } | null {
+  if (!report) return null;
+  const skipped = report.skipped_bad_timestamp + report.skipped_no_object + report.skipped_no_activity;
+  if (skipped === 0) return null;
+  const lines: string[] = [];
+  if (report.skipped_bad_timestamp > 0) {
+    const example = report.bad_timestamp_example ? ` (e.g. “${report.bad_timestamp_example}”)` : "";
+    const format = report.timestamp_format === "auto" ? "any recognised format" : `“${report.timestamp_format}”`;
+    lines.push(`${plural(report.skipped_bad_timestamp, "row")} with a timestamp that does not match ${format}${example}`);
+  }
+  if (report.skipped_no_object > 0) {
+    lines.push(`${plural(report.skipped_no_object, "row")} without an object (case) id`);
+  }
+  if (report.skipped_no_activity > 0) {
+    lines.push(`${plural(report.skipped_no_activity, "row")} without an activity`);
+  }
+  return {
+    title: `Imported ${plural(report.events, "event")}; skipped ${plural(skipped, "row")} of ${report.rows.toLocaleString()}`,
+    lines,
+  };
 }
