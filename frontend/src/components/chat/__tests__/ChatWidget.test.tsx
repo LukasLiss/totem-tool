@@ -18,9 +18,12 @@ import {
   formatInline,
   repairMojibake,
   MarkdownRenderer,
+  applyAssistantEvent,
+  STORAGE_CONVERSATION_KEY,
 } from "../ChatWidget";
+import { runClientAction, viewFromArgs } from "../clientActions";
 import { TOUR_IDS } from "@/tour/tourIds";
-import { SSEEvent, TourStep } from "@/api/assistantApi";
+import { AssistantEvent, TourStep } from "@/api/assistantApi";
 
 // Mock localStorage for node test environment
 const mockStorage: Record<string, string> = {};
@@ -108,307 +111,120 @@ describe("ChatWidget contracts, state machine transitions, and tour integrations
   });
 
   describe("3. Quick suggestions catalog validation", () => {
-    it("provides 8 structured quick suggestions for Teach Mode", () => {
-      expect(QUICK_SUGGESTIONS.teach).toHaveLength(8);
-      for (const item of QUICK_SUGGESTIONS.teach) {
-        expect(item.label).toBeTypeOf("string");
-        expect(item.prompt).toBeTypeOf("string");
-        expect(item.label.length).toBeGreaterThan(0);
-        expect(item.prompt.length).toBeGreaterThan(0);
-      }
-    });
-
-    it("provides 8 structured quick suggestions for Act Mode", () => {
-      expect(QUICK_SUGGESTIONS.act).toHaveLength(8);
-      for (const item of QUICK_SUGGESTIONS.act) {
-        expect(item.label).toBeTypeOf("string");
-        expect(item.prompt).toBeTypeOf("string");
-        expect(item.label.length).toBeGreaterThan(0);
-        expect(item.prompt.length).toBeGreaterThan(0);
+    it("provides labelled prompts for both modes", () => {
+      for (const mode of ["teach", "act"] as ChatMode[]) {
+        expect(QUICK_SUGGESTIONS[mode].length).toBeGreaterThanOrEqual(5);
+        for (const s of QUICK_SUGGESTIONS[mode]) {
+          expect(s.label.length).toBeGreaterThan(0);
+          expect(s.prompt.length).toBeGreaterThan(s.label.length);
+        }
       }
     });
   });
 
-  describe("4. Streaming message state transitions", () => {
-    it("correctly appends tokens to active assistant message during stream", () => {
-      const messages: ChatMessage[] = [
-        {
-          id: "asst-1",
-          role: "assistant",
-          content: "",
-          timestamp: Date.now(),
-          isStreaming: true,
-        },
-      ];
+  describe("4. Streamed agent events update the assistant message", () => {
+    const base = (): ChatMessage => ({
+      id: "a1",
+      role: "assistant",
+      content: "",
+      timestamp: 0,
+      isStreaming: true,
+      isThinking: true,
+      toolExecutions: [],
+      pendingActions: [],
+    });
+    const run = (events: AssistantEvent[]) => events.reduce(applyAssistantEvent, base());
 
-      const tokenChunks = ["Hello ", "process ", "miner!"];
-      for (const token of tokenChunks) {
-        messages[0] = {
-          ...messages[0],
-          content: messages[0].content + token,
-        };
-      }
-
-      expect(messages[0].content).toBe("Hello process miner!");
-      expect(messages[0].isStreaming).toBe(true);
+    it("appends text and clears the thinking indicator", () => {
+      const msg = run([
+        { type: "text", text: "Hello " },
+        { type: "text", text: "world" },
+      ]);
+      expect(msg.content).toBe("Hello world");
+      expect(msg.isThinking).toBe(false);
     });
 
-    it("handles tool_call and tool_result events on assistant message", () => {
-      const msg: ChatMessage = {
-        id: "asst-2",
-        role: "assistant",
-        content: "Analyzing log...",
-        timestamp: Date.now(),
-        toolExecutions: [
-          {
-            id: "call-1",
-            name: "get_variants",
-            arguments: { limit: 5 },
-            status: "executing",
-          },
-        ],
-      };
-
-      expect(msg.toolExecutions![0].status).toBe("executing");
-      expect(msg.toolExecutions![0].arguments).toEqual({ limit: 5 });
-
-      // Tool completes
-      msg.toolExecutions = msg.toolExecutions!.map((te) =>
-        te.id === "call-1"
-          ? { ...te, result: { variant_count: 5 }, status: "completed" as const }
-          : te
-      );
-
-      expect(msg.toolExecutions[0].status).toBe("completed");
-      expect(msg.toolExecutions[0].result).toEqual({ variant_count: 5 });
+    it("tracks tool calls by id through start and end, including failures", () => {
+      const msg = run([
+        { type: "tool_start", id: "t1", name: "get_log_overview", summary: "Reading log overview", kind: "read" },
+        { type: "tool_start", id: "t2", name: "get_log_overview", summary: "Reading log overview", kind: "read" },
+        { type: "tool_end", id: "t2", name: "get_log_overview", ok: false, error: "No event log", duration_ms: 3 },
+        { type: "tool_end", id: "t1", name: "get_log_overview", ok: true, duration_ms: 1200 },
+      ]);
+      expect(msg.toolExecutions?.map((t) => [t.id, t.status])).toEqual([
+        ["t1", "completed"],
+        ["t2", "failed"],
+      ]);
+      expect(msg.toolExecutions?.[1].error).toBe("No event log");
+      expect(msg.toolExecutions?.[0].durationMs).toBe(1200);
     });
 
-    it("handles tool failure status transitions", () => {
-      const msg: ChatMessage = {
-        id: "asst-tool-fail",
-        role: "assistant",
-        content: "Running tool...",
-        timestamp: Date.now(),
-        toolExecutions: [
-          {
-            id: "call-err-1",
-            name: "calculate_bottlenecks",
-            arguments: {},
-            status: "executing",
-          },
-        ],
-      };
-
-      // Tool fails
-      msg.toolExecutions = msg.toolExecutions!.map((te) =>
-        te.id === "call-err-1"
-          ? { ...te, status: "failed" as const, result: "Failed to parse timestamp column" }
-          : te
-      );
-
-      expect(msg.toolExecutions[0].status).toBe("failed");
-      expect(msg.toolExecutions[0].result).toBe("Failed to parse timestamp column");
+    it("collects proposed changes for approval", () => {
+      const msg = run([
+        { type: "pending_action", id: "act_1", name: "create_dashboard", description: "Create dashboard", arguments: { name: "Ops" } },
+      ]);
+      expect(msg.pendingActions).toEqual([
+        { id: "act_1", name: "create_dashboard", description: "Create dashboard", arguments: { name: "Ops" } },
+      ]);
     });
 
-    it("handles multiple sequential tool executions", () => {
-      const toolExecutions: ToolExecution[] = [];
-
-      // Tool 1 start
-      toolExecutions.push({ id: "t1", name: "get_summary", status: "executing" });
-      expect(toolExecutions).toHaveLength(1);
-
-      // Tool 1 finish
-      toolExecutions[0] = { ...toolExecutions[0], status: "completed", result: { cases: 100 } };
-
-      // Tool 2 start
-      toolExecutions.push({ id: "t2", name: "get_variants", status: "executing" });
-      expect(toolExecutions).toHaveLength(2);
-      expect(toolExecutions[0].status).toBe("completed");
-      expect(toolExecutions[1].status).toBe("executing");
-
-      // Tool 2 finish
-      toolExecutions[1] = { ...toolExecutions[1], status: "completed", result: { variants: 12 } };
-      expect(toolExecutions[1].status).toBe("completed");
+    it("records guided tours, notices and errors", () => {
+      const msg = run([
+        { type: "client_action", id: "c", name: "start_tour", arguments: { steps: [{ tour_id: "nav-analysis", label: "Open" }] } },
+        { type: "notice", text: "Stopped after 12 steps." },
+        { type: "error", code: "rate_limit", message: "slow down", retryable: true },
+      ]);
+      expect(msg.tourPath).toHaveLength(1);
+      expect(msg.notices).toEqual(["Stopped after 12 steps."]);
+      expect(msg.error).toBe("slow down");
     });
 
-    it("handles pending_actions and resolves them correctly", () => {
-      let pending = [
-        {
-          id: "pa-1",
-          name: "create_dashboard",
-          description: "Create Summary Dashboard",
-          arguments: { name: "Summary" },
-        },
-        {
-          id: "pa-2",
-          name: "add_component",
-          description: "Add Variants Card",
-          arguments: { type: "variants" },
-        },
-      ];
-
-      // Resolve pa-1
-      pending = pending.filter((a) => a.id !== "pa-1");
-      expect(pending).toHaveLength(1);
-      expect(pending[0].id).toBe("pa-2");
-      expect(pending[0].name).toBe("add_component");
-
-      // Resolve pa-2
-      pending = pending.filter((a) => a.id !== "pa-2");
-      expect(pending).toHaveLength(0);
-    });
-
-    it("handles error events in SSE stream and sets error state", () => {
-      let assistantMsg: ChatMessage = {
-        id: "asst-err",
-        role: "assistant",
-        content: "Starting analysis...",
-        timestamp: Date.now(),
-        isStreaming: true,
-      };
-
-      const errorEvent: SSEEvent = {
-        type: "error",
-        error: "Rate limit exceeded on Gemini API",
-      };
-
-      if (errorEvent.type === "error") {
-        assistantMsg = {
-          ...assistantMsg,
-          error: errorEvent.error,
-          isStreaming: false,
-        };
-      }
-
-      expect(assistantMsg.error).toBe("Rate limit exceeded on Gemini API");
-      expect(assistantMsg.isStreaming).toBe(false);
-    });
-
-    it("finalizes isStreaming state when done event is received", () => {
-      let assistantMsg: ChatMessage = {
-        id: "asst-done",
-        role: "assistant",
-        content: "Here is your finished model.",
-        timestamp: Date.now(),
-        isStreaming: true,
-      };
-
-      const doneEvent: SSEEvent = {
-        type: "done",
-        usage: { prompt_tokens: 120, completion_tokens: 45 },
-      };
-
-      if (doneEvent.type === "done") {
-        assistantMsg = {
-          ...assistantMsg,
-          isStreaming: false,
-        };
-      }
-
-      expect(assistantMsg.isStreaming).toBe(false);
-      expect(assistantMsg.content).toBe("Here is your finished model.");
+    it("done ends streaming and marks unfinished tools as interrupted", () => {
+      const msg = run([
+        { type: "tool_start", id: "t1", name: "find_variants", summary: "Mining variants", kind: "read" },
+        { type: "done" },
+      ]);
+      expect(msg.isStreaming).toBe(false);
+      expect(msg.toolExecutions?.[0]).toMatchObject({ status: "failed", error: "Interrupted" });
     });
   });
 
-  describe("5. Teach Mode tour trigger integration", () => {
-    it("dispatches startTour with received steps when tour_path arrives in Teach Mode", () => {
-      const startTourMock = vi.fn();
-      const mockTourController = {
-        state: {
-          active: false,
-          steps: [],
-          currentIndex: 0,
-          currentTourId: null,
-          currentLabel: "",
-          isLastStep: true,
-        },
-        startTour: startTourMock,
-        nextStep: vi.fn(),
-        skipTour: vi.fn(),
-      };
-
-      const mode: ChatMode = "teach";
-      const tourEvent: SSEEvent = {
-        type: "tour_path",
-        steps: [
-          { tour_id: "nav-overview", label: "Overview Tab" },
-          { tour_id: "upload-button", label: "Upload Log Button" },
-        ],
-      };
-
-      if (mode === "teach" && mockTourController && tourEvent.steps.length > 0) {
-        mockTourController.startTour(tourEvent.steps);
-      }
-
-      expect(startTourMock).toHaveBeenCalledWith(tourEvent.steps);
-      expect(startTourMock).toHaveBeenCalledTimes(1);
+  describe("5. Browser-side assistant actions", () => {
+    it("open_view maps tool arguments to app views", () => {
+      expect(viewFromArgs({ view: "analysis", component: "dotted_chart" })).toEqual({ type: "analysis", component: "dottedChart" });
+      expect(viewFromArgs({ view: "conformance", component: "occn" })).toEqual({ type: "conformance", component: "occn" });
+      expect(viewFromArgs({ view: "dashboard", dashboard_id: 4 })).toEqual({ type: "dashboard", id: 4 });
+      expect(viewFromArgs({ view: "dashboard" })).toBeNull();
+      expect(viewFromArgs({ view: "nowhere" })).toBeNull();
     });
 
-    it("does not trigger startTour if mode is 'act'", () => {
-      const startTourMock = vi.fn();
-      const mockTourController = {
-        startTour: startTourMock,
-      };
-
-      const mode = "act" as ChatMode;
-      const tourEvent: SSEEvent = {
-        type: "tour_path",
-        steps: [{ tour_id: "nav-dashboard", label: "Dashboard" }],
-      };
-
-      if ((mode as string) === "teach" && tourEvent.steps.length > 0) {
-        mockTourController.startTour(tourEvent.steps);
-      }
-
-      expect(startTourMock).not.toHaveBeenCalled();
+    it("open_view navigates and switches the view", () => {
+      const setViewMode = vi.fn();
+      const navigate = vi.fn();
+      expect(runClientAction("open_view", { view: "analysis", component: "variants" }, { setViewMode, navigate })).toBe(true);
+      expect(navigate).toHaveBeenCalledWith("/overview");
+      expect(setViewMode).toHaveBeenCalledWith({ type: "analysis", component: "variants" });
     });
 
-    it("does not trigger startTour if steps array is empty", () => {
-      const startTourMock = vi.fn();
-      const mockTourController = {
-        startTour: startTourMock,
-      };
+    it("start_tour closes the drawer and starts the tour in any mode", () => {
+      const startTour = vi.fn();
+      const onTourStart = vi.fn();
+      const steps: TourStep[] = [{ tour_id: TOUR_IDS.NAV_DASHBOARD, label: "Open dashboards" }];
+      expect(runClientAction("start_tour", { steps }, { startTour, onTourStart })).toBe(true);
+      expect(onTourStart).toHaveBeenCalled();
+      expect(startTour).toHaveBeenCalledWith(steps);
+    });
 
-      const mode: ChatMode = "teach";
-      const tourEvent: SSEEvent = {
-        type: "tour_path",
-        steps: [],
-      };
-
-      if (mode === "teach" && tourEvent.steps.length > 0) {
-        mockTourController.startTour(tourEvent.steps);
-      }
-
-      expect(startTourMock).not.toHaveBeenCalled();
+    it("reports actions it cannot apply", () => {
+      expect(runClientAction("start_tour", { steps: [] }, { startTour: vi.fn() })).toBe(false);
+      expect(runClientAction("open_view", { view: "overview" }, {})).toBe(false);
+      expect(runClientAction("rm_rf", {}, {})).toBe(false);
     });
   });
 
-  describe("6. AbortController stream cancellation", () => {
-    it("properly signals abort when user stops generation or clears conversation", () => {
-      const controller = new AbortController();
-      expect(controller.signal.aborted).toBe(false);
-
-      controller.abort();
-      expect(controller.signal.aborted).toBe(true);
-    });
-
-    it("resets isStreaming on all streaming messages when generation is stopped", () => {
-      const msgs: ChatMessage[] = [
-        {
-          id: "msg-1",
-          role: "assistant",
-          content: "Partial stream...",
-          timestamp: Date.now(),
-          isStreaming: true,
-        },
-      ];
-
-      const stoppedMsgs = msgs.map((msg) =>
-        msg.isStreaming ? { ...msg, isStreaming: false } : msg
-      );
-
-      expect(stoppedMsgs[0].isStreaming).toBe(false);
-      expect(stoppedMsgs[0].content).toBe("Partial stream...");
+  describe("6. Per-mode conversation ids", () => {
+    it("uses one storage key per mode", () => {
+      expect(STORAGE_CONVERSATION_KEY("teach")).not.toBe(STORAGE_CONVERSATION_KEY("act"));
     });
   });
 

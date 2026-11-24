@@ -106,6 +106,25 @@ async function performRefresh() {
   return newAccess;
 }
 
+/**
+ * Refresh the access token for callers that bypass axios (e.g. fetch-based
+ * streaming). Shares the in-flight refresh with the interceptor; in local
+ * mode falls back to re-authenticating as Guest. Resolves to the new token.
+ */
+export async function refreshAccessToken() {
+  if (!refreshInFlight) {
+    refreshInFlight = performRefresh().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  try {
+    return await refreshInFlight;
+  } catch (err) {
+    if (import.meta.env.VITE_LOCAL_MODE) return guestReAuth();
+    throw err;
+  }
+}
+
 async function guestReAuth() {
   const resp = await axios.post(
     getApiUrl("/token/"),

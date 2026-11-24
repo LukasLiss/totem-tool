@@ -1,5 +1,8 @@
-/* eslint-disable react-refresh/only-export-components, @typescript-eslint/no-explicit-any, no-useless-escape, no-empty */
-import React, { useState, useEffect, useRef } from "react";
+/* eslint-disable react-refresh/only-export-components, no-useless-escape, no-empty */
+import React, { useState, useEffect, useRef, useContext } from "react";
+import { useNavigate } from "react-router-dom";
+import { DashboardContext } from "@/contexts/DashboardContext";
+import { runClientAction } from "./clientActions";
 import {
   Bot,
   User,
@@ -29,11 +32,15 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
-import { PendingActions, PendingActionItem } from "./PendingActions";
+import { PendingActions, PendingActionItem, ActionOutcome } from "./PendingActions";
 import {
   streamChat,
   validateApiKey,
+  resetConversation,
   AssistantContext,
+  AssistantEvent,
+  STORAGE_KEY_API_KEY,
+  STORAGE_KEY_PROVIDER,
   TourStep,
 } from "@/api/assistantApi";
 import { ApiKeyModal } from "./ApiKeyModal";
@@ -44,11 +51,19 @@ import { cn } from "@/lib/utils";
 export type ChatMode = "teach" | "act";
 
 export interface ToolExecution {
-  id?: string;
+  id: string;
   name: string;
-  arguments?: Record<string, unknown>;
-  result?: unknown;
+  summary: string;
   status: "executing" | "completed" | "failed";
+  error?: string;
+  durationMs?: number;
+}
+
+export interface ResolvedAction {
+  id: string;
+  description: string;
+  outcome: ActionOutcome;
+  detail?: string;
 }
 
 export interface ChatMessage {
@@ -58,13 +73,73 @@ export interface ChatMessage {
   timestamp: number;
   mode?: ChatMode;
   isStreaming?: boolean;
+  isThinking?: boolean;
   toolExecutions?: ToolExecution[];
   pendingActions?: PendingActionItem[];
+  resolvedActions?: ResolvedAction[];
   tourPath?: TourStep[];
+  notices?: string[];
   error?: string;
 }
 
+/** Apply one streamed assistant event to the assistant message it belongs to. */
+export function applyAssistantEvent(msg: ChatMessage, event: AssistantEvent): ChatMessage {
+  switch (event.type) {
+    case "text":
+      return { ...msg, content: msg.content + event.text, isThinking: false };
+    case "status":
+      return { ...msg, isThinking: true };
+    case "tool_start":
+      return {
+        ...msg,
+        isThinking: false,
+        toolExecutions: [
+          ...(msg.toolExecutions || []),
+          { id: event.id, name: event.name, summary: event.summary, status: "executing" },
+        ],
+      };
+    case "tool_end":
+      return {
+        ...msg,
+        toolExecutions: (msg.toolExecutions || []).map((t) =>
+          t.id === event.id
+            ? { ...t, status: event.ok ? "completed" : "failed", error: event.error, durationMs: event.duration_ms }
+            : t
+        ),
+      };
+    case "pending_action":
+      return {
+        ...msg,
+        pendingActions: [
+          ...(msg.pendingActions || []),
+          { id: event.id, name: event.name, description: event.description, arguments: event.arguments },
+        ],
+      };
+    case "client_action":
+      if (event.name === "start_tour" && Array.isArray(event.arguments.steps)) {
+        return { ...msg, tourPath: event.arguments.steps as TourStep[] };
+      }
+      return msg;
+    case "notice":
+      return { ...msg, notices: [...(msg.notices || []), event.text] };
+    case "error":
+      return { ...msg, error: event.message, isThinking: false };
+    case "done":
+      return {
+        ...msg,
+        isStreaming: false,
+        isThinking: false,
+        toolExecutions: (msg.toolExecutions || []).map((t) =>
+          t.status === "executing" ? { ...t, status: "failed", error: "Interrupted" } : t
+        ),
+      };
+    default:
+      return msg;
+  }
+}
+
 export const STORAGE_MODE_KEY = "totem_chat_mode";
+export const STORAGE_CONVERSATION_KEY = (mode: ChatMode) => `totem_chat_conversation_${mode}`;
 export const STORAGE_MESSAGES_KEY = "totem_chat_messages";
 export const STORAGE_MESSAGES_KEY_TEACH = "totem_chat_messages_teach";
 export const STORAGE_MESSAGES_KEY_ACT = "totem_chat_messages_act";
@@ -110,36 +185,32 @@ export const QUICK_SUGGESTIONS: Record<ChatMode, { label: string; prompt: string
   ],
   act: [
     {
-      label: "Create summary dashboard",
-      prompt: "Create a new process overview dashboard with variant distribution and throughput cards.",
+      label: "Summarize this log",
+      prompt: "Give me an overview of the selected event log: size, time range, object types and the main activities.",
     },
     {
-      label: "Show top 5 process variants",
-      prompt: "Analyze the active log and show me the top 5 most frequent process variants.",
+      label: "Find the bottlenecks",
+      prompt: "Where are the longest waiting times in this process? Break it down per object type.",
     },
     {
-      label: "Analyze bottleneck activities",
-      prompt: "Identify activities with the longest waiting times and highest bottleneck risk.",
+      label: "Top process variants",
+      prompt: "What are the most frequent process variants, and how much of the behaviour do the top 5 cover?",
     },
     {
-      label: "Calculate case durations",
-      prompt: "Calculate the average, median, minimum, and maximum case durations for this log.",
+      label: "Lifecycle durations",
+      prompt: "How long does each object type take from its first to its last event (median and worst case)?",
     },
     {
-      label: "Summarize log metrics",
-      prompt: "Extract and summarize total events, activities, objects, and object types for this log.",
+      label: "How do object types relate?",
+      prompt: "Discover the TOTeM model and explain how the object types relate in time and cardinality.",
     },
     {
-      label: "Discover causal net (OCCN)",
-      prompt: "Discover the Object-Centric Causal Net (OCCN) model for the active event log.",
+      label: "Build an overview dashboard",
+      prompt: "Create a dashboard that gives a good overview of this log.",
     },
     {
-      label: "Inspect object type breakdown",
-      prompt: "Analyze the object types and their entity counts across all recorded events.",
-    },
-    {
-      label: "Throughput dotted chart",
-      prompt: "Analyze event throughput and activity time distribution using the dotted chart.",
+      label: "Open the process map",
+      prompt: "Open the object-centric process map for this log.",
     },
   ],
 };
@@ -648,6 +719,22 @@ export interface ChatWidgetProps {
   defaultOpen?: boolean;
 }
 
+function readStorage(key: string): string | null {
+  try {
+    return typeof localStorage !== "undefined" ? localStorage.getItem(key) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStorage(key: string, value: string | null) {
+  try {
+    if (typeof localStorage === "undefined") return;
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+  } catch {}
+}
+
 function loadStoredMessages(key: string, fallbackKey?: string): ChatMessage[] {
   try {
     if (typeof localStorage !== "undefined") {
@@ -712,11 +799,24 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
   const [isStreaming, setIsStreaming] = useState(false);
   const [abortController, setAbortController] = useState<AbortController | null>(null);
 
+  // Server-side conversation per mode: the backend keeps the full transcript
+  // (tool calls and results), the browser only keeps the id and what it renders.
+  const conversationIds = useRef<Record<ChatMode, string | null>>({
+    teach: readStorage(STORAGE_CONVERSATION_KEY("teach")),
+    act: readStorage(STORAGE_CONVERSATION_KEY("act")),
+  });
+  const setConversationId = (forMode: ChatMode, id: string | null) => {
+    conversationIds.current[forMode] = id;
+    writeStorage(STORAGE_CONVERSATION_KEY(forMode), id);
+  };
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Optional TourController integration
   const tourController = useOptionalTourController();
+  const dashboardCtx = useContext(DashboardContext);
+  const navigate = useNavigate();
 
   // Resizable drawer width (persisted in localStorage)
   const [drawerWidth, setDrawerWidth] = useState<number>(() => {
@@ -861,9 +961,11 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
   useEffect(() => {
     if (isOpen) {
       if (typeof localStorage !== "undefined") {
-        const savedKey = localStorage.getItem("totem_llm_api_key");
-        const savedProvider = localStorage.getItem("totem_llm_provider") || "gemini";
-        if (!savedKey) {
+        const savedKey = localStorage.getItem(STORAGE_KEY_API_KEY);
+        const savedProvider = localStorage.getItem(STORAGE_KEY_PROVIDER) || "";
+        if (savedProvider === "demo") {
+          // Offline demo mode needs no key.
+        } else if (!savedKey) {
           setIsApiKeyModalOpen(true);
         } else {
           // Probe key validity in background
@@ -899,7 +1001,12 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
       abortController.abort();
       setAbortController(null);
     }
-    // Clear both conversation histories (the whole chat history)
+    // Clear both conversation histories, on the server too
+    (["teach", "act"] as ChatMode[]).forEach((m) => {
+      const id = conversationIds.current[m];
+      if (id) void resetConversation(id);
+      setConversationId(m, null);
+    });
     setMessagesByMode({ teach: [], act: [] });
     setIsStreaming(false);
     try {
@@ -914,13 +1021,13 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
   };
 
   const handleStopStreaming = () => {
-    if (abortController) {
-      abortController.abort();
-      setAbortController(null);
-    }
+    // Aborting the fetch closes the stream; the server stops the agent loop and
+    // records the interrupted tool calls so the conversation stays consistent.
+    abortController?.abort();
+    setAbortController(null);
     setIsStreaming(false);
     setMessages((prev) =>
-      prev.map((msg) => (msg.isStreaming ? { ...msg, isStreaming: false } : msg))
+      prev.map((msg) => (msg.isStreaming ? applyAssistantEvent({ ...msg, notices: [...(msg.notices || []), "Stopped."] }, { type: "done" }) : msg))
     );
   };
 
@@ -928,175 +1035,104 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
     const text = (promptToSend ?? inputValue).trim();
     if (!text || isStreaming) return;
 
-    // Verify user has an API key configured before starting request
-    const savedKey = typeof localStorage !== "undefined" ? localStorage.getItem("totem_llm_api_key") : null;
-    if (!savedKey) {
+    if (!readStorage(STORAGE_KEY_API_KEY) && readStorage(STORAGE_KEY_PROVIDER) !== "demo") {
       setIsApiKeyModalOpen(true);
       return;
     }
 
     if (!promptToSend) {
       setInputValue("");
-      if (textareaRef.current) {
-        textareaRef.current.style.height = "auto";
-      }
+      if (textareaRef.current) textareaRef.current.style.height = "auto";
     }
 
-    const userMessageId = `usr-${Date.now()}`;
-    const assistantMessageId = `asst-${Date.now()}`;
+    // Bind the whole turn to the mode it started in, even if the user switches tabs.
+    const turnMode = mode;
+    const stamp = Date.now();
+    const assistantMessageId = `asst-${stamp}`;
+    const updateAssistant = (fn: (msg: ChatMessage) => ChatMessage) =>
+      setMessagesByMode((prev) => ({
+        ...prev,
+        [turnMode]: (prev[turnMode] || []).map((m) => (m.id === assistantMessageId ? fn(m) : m)),
+      }));
 
-    const userMessage: ChatMessage = {
-      id: userMessageId,
-      role: "user",
-      content: text,
-      timestamp: Date.now(),
-      mode,
-    };
-
-    const initialAssistantMessage: ChatMessage = {
-      id: assistantMessageId,
-      role: "assistant",
-      content: "",
-      timestamp: Date.now(),
-      mode,
-      isStreaming: true,
-      toolExecutions: [],
-      pendingActions: [],
-    };
-
-    setMessages((prev) => [...prev, userMessage, initialAssistantMessage]);
+    setMessagesByMode((prev) => ({
+      ...prev,
+      [turnMode]: [
+        ...(prev[turnMode] || []),
+        { id: `usr-${stamp}`, role: "user", content: text, timestamp: stamp, mode: turnMode },
+        {
+          id: assistantMessageId,
+          role: "assistant",
+          content: "",
+          timestamp: stamp,
+          mode: turnMode,
+          isStreaming: true,
+          isThinking: true,
+          toolExecutions: [],
+          pendingActions: [],
+        },
+      ],
+    }));
     setIsStreaming(true);
 
     const controller = new AbortController();
     setAbortController(controller);
 
     try {
-      const activeContext: AssistantContext = context ?? {};
-      const streamGenerator = streamChat(text, activeContext, mode);
-
-      for await (const event of streamGenerator) {
-        if (controller.signal.aborted) {
-          break;
+      const events = streamChat({
+        message: text,
+        mode: turnMode,
+        context: context ?? {},
+        conversationId: conversationIds.current[turnMode],
+        signal: controller.signal,
+      });
+      for await (const event of events) {
+        if (controller.signal.aborted) break;
+        if (event.type === "conversation" || (event.type === "done" && event.conversation_id)) {
+          setConversationId(turnMode, (event as { conversation_id: string }).conversation_id);
         }
-
-        setMessages((prev) =>
-          prev.map((msg) => {
-            if (msg.id !== assistantMessageId) return msg;
-
-            switch (event.type) {
-              case "text":
-                return {
-                  ...msg,
-                  content: msg.content + event.content,
-                };
-
-              case "tool_call":
-                return {
-                  ...msg,
-                  toolExecutions: [
-                    ...(msg.toolExecutions || []),
-                    {
-                      id: event.id,
-                      name: event.name,
-                      arguments: event.arguments,
-                      status: "executing",
-                    },
-                  ],
-                };
-
-              case "tool_result":
-                return {
-                  ...msg,
-                  toolExecutions: (msg.toolExecutions || []).map((te) =>
-                    te.id === event.id || te.name === event.name
-                      ? { ...te, result: event.result, status: "completed" }
-                      : te
-                  ),
-                };
-
-              case "pending_action":
-                return {
-                  ...msg,
-                  pendingActions: [
-                    ...(msg.pendingActions || []),
-                    {
-                      id: event.id,
-                      name: event.name,
-                      description: event.description,
-                      arguments: event.arguments,
-                    },
-                  ],
-                };
-
-              case "tour_path": {
-                // If in Teach Mode, launch guided tour
-                if (mode === "teach" && tourController && event.steps.length > 0) {
-                  tourController.startTour(event.steps);
-                  setIsOpen(false);
-                }
-                return {
-                  ...msg,
-                  tourPath: event.steps,
-                };
-              }
-
-              case "key_error": {
-                const keyErrMsg = (event as any).message || "Invalid or missing API key. Please configure your credentials.";
-                setApiKeyError(keyErrMsg);
-                setIsApiKeyModalOpen(true);
-                return {
-                  ...msg,
-                  error: keyErrMsg,
-                  isStreaming: false,
-                };
-              }
-
-              case "error":
-                return {
-                  ...msg,
-                  error: (event as any).error || (event as any).message || "An error occurred during generation",
-                };
-
-              case "done":
-                return {
-                  ...msg,
-                  isStreaming: false,
-                };
-
-              default:
-                return msg;
-            }
-          })
-        );
+        if (event.type === "client_action") {
+          const applied = runClientAction(event.name, event.arguments, {
+            setViewMode: dashboardCtx?.setViewMode,
+            navigate,
+            startTour: tourController?.startTour,
+            onTourStart: () => setIsOpen(false),
+          });
+          if (!applied) {
+            updateAssistant((m) => ({ ...m, notices: [...(m.notices || []), `Could not run ${event.name} in this view.`] }));
+          }
+        }
+        if (event.type === "error" && (event.code === "auth" || event.code === "session")) {
+          if (event.code === "auth") {
+            setApiKeyError(event.message);
+            setIsApiKeyModalOpen(true);
+          }
+        }
+        updateAssistant((m) => applyAssistantEvent(m, event));
       }
     } catch (err: unknown) {
       if (!controller.signal.aborted) {
-        const errorMsg = err instanceof Error ? err.message : "An unexpected error occurred";
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === assistantMessageId
-              ? { ...msg, error: errorMsg, isStreaming: false }
-              : msg
-          )
-        );
+        const message = err instanceof Error ? err.message : "Connection to the assistant failed.";
+        updateAssistant((m) => applyAssistantEvent({ ...m, error: message }, { type: "done" }));
       }
     } finally {
       setIsStreaming(false);
       setAbortController(null);
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === assistantMessageId ? { ...msg, isStreaming: false } : msg
-        )
-      );
+      updateAssistant((m) => (m.isStreaming ? applyAssistantEvent(m, { type: "done" }) : m));
     }
   };
 
-  const handleActionResolved = (actionId: string) => {
+  const handleActionResolved = (actionId: string, outcome: ActionOutcome, detail?: string) => {
     setMessages((prev) =>
-      prev.map((msg) => ({
-        ...msg,
-        pendingActions: msg.pendingActions?.filter((a) => a.id !== actionId),
-      }))
+      prev.map((msg) => {
+        const action = msg.pendingActions?.find((a) => a.id === actionId);
+        if (!action) return msg;
+        return {
+          ...msg,
+          pendingActions: msg.pendingActions?.filter((a) => a.id !== actionId),
+          resolvedActions: [...(msg.resolvedActions || []), { id: actionId, description: action.description, outcome, detail }],
+        };
+      })
     );
   };
 
@@ -1116,7 +1152,11 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
             size="icon"
             data-tour-id={TOUR_IDS.CHAT_TOGGLE}
             aria-label="Open AI Assistant"
-            className="fixed bottom-6 right-6 z-40 size-12 rounded-full shadow-xl bg-primary text-primary-foreground hover:scale-105 active:scale-95 transition-all duration-200"
+            // Above in-page overlays (graph controls use z-50); hidden while the drawer is open.
+            className={cn(
+              "fixed bottom-6 right-6 z-[60] size-12 rounded-full shadow-xl bg-primary text-primary-foreground hover:scale-105 active:scale-95 transition-all duration-200",
+              isOpen && "hidden"
+            )}
           >
             <Bot className="size-6" />
             <span className="sr-only">Toggle AI Assistant</span>
@@ -1329,29 +1369,28 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
                         </p>
                       ) : (
                         <div>
-                          {/* Tool Execution Badges */}
+                          {/* Tool activity */}
                           {msg.toolExecutions && msg.toolExecutions.length > 0 && (
-                            <div className="space-y-1 mb-2">
-                              {msg.toolExecutions.map((tool, idx) => (
+                            <div className="space-y-1 mb-2" data-testid="tool-activity">
+                              {msg.toolExecutions.map((tool) => (
                                 <div
-                                  key={idx}
+                                  key={tool.id}
+                                  title={tool.error || tool.name}
                                   className="flex items-center gap-1.5 text-xs text-muted-foreground bg-background/80 px-2 py-1 rounded border"
                                 >
                                   {tool.status === "executing" ? (
-                                    <>
-                                      <Loader2 className="size-3 animate-spin text-primary" />
-                                      <span>Executing tool: <code>{tool.name}</code></span>
-                                    </>
+                                    <Loader2 className="size-3 shrink-0 animate-spin text-primary" />
                                   ) : tool.status === "completed" ? (
-                                    <>
-                                      <CheckCircle2 className="size-3 text-emerald-500" />
-                                      <span>Executed: <code>{tool.name}</code></span>
-                                    </>
+                                    <CheckCircle2 className="size-3 shrink-0 text-emerald-500" />
                                   ) : (
-                                    <>
-                                      <AlertCircle className="size-3 text-destructive" />
-                                      <span>Tool error: <code>{tool.name}</code></span>
-                                    </>
+                                    <AlertCircle className="size-3 shrink-0 text-amber-500" />
+                                  )}
+                                  <span className="truncate">{tool.summary || tool.name}</span>
+                                  {tool.status === "failed" && tool.error && (
+                                    <span className="truncate text-amber-600 dark:text-amber-400">· {tool.error}</span>
+                                  )}
+                                  {tool.durationMs !== undefined && tool.durationMs >= 1000 && (
+                                    <span className="ml-auto shrink-0 tabular-nums">{(tool.durationMs / 1000).toFixed(1)}s</span>
                                   )}
                                 </div>
                               ))}
@@ -1363,20 +1402,37 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
                             <ChatErrorBoundary fallbackText={msg.content}>
                               <MarkdownRenderer content={msg.content} />
                             </ChatErrorBoundary>
-                          ) : msg.isStreaming ? (
+                          ) : null}
+                          {msg.isStreaming && (msg.isThinking || !msg.content) && (
                             <div className="flex items-center gap-1.5 py-1 text-muted-foreground text-xs">
                               <Loader2 className="size-3.5 animate-spin" />
-                              <span>Thinking...</span>
+                              <span>{msg.toolExecutions?.some((t) => t.status === "executing") ? "Working…" : "Thinking…"}</span>
                             </div>
-                          ) : msg.pendingActions && msg.pendingActions.length > 0 ? (
-                            <p className="text-xs text-muted-foreground">
-                              Action prepared. Please review and confirm the action chip below:
+                          )}
+
+                          {/* Notices from the harness (stopped, step limit, declined, ...) */}
+                          {msg.notices?.map((notice, i) => (
+                            <p key={i} className="mt-1 text-xs italic text-muted-foreground">
+                              {notice}
                             </p>
-                          ) : !msg.error ? (
-                            <p className="text-xs text-muted-foreground italic">
-                              Process mining co-pilot ready.
-                            </p>
-                          ) : null}
+                          ))}
+
+                          {/* Outcomes of approvals */}
+                          {msg.resolvedActions?.map((ra) => (
+                            <div key={ra.id} className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+                              {ra.outcome === "executed" ? (
+                                <CheckCircle2 className="size-3.5 text-emerald-500" />
+                              ) : ra.outcome === "cancelled" ? (
+                                <Square className="size-3 text-muted-foreground" />
+                              ) : (
+                                <AlertCircle className="size-3.5 text-destructive" />
+                              )}
+                              <span>
+                                {ra.outcome === "executed" ? "Applied" : ra.outcome === "cancelled" ? "Declined" : "Failed"}: {ra.description}
+                                {ra.detail ? ` — ${ra.detail}` : ""}
+                              </span>
+                            </div>
+                          ))}
 
                           {/* Error Banner */}
                           {msg.error && (
@@ -1390,7 +1446,7 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
                           {msg.tourPath && msg.tourPath.length > 0 && (
                             <div className="mt-2 flex items-center gap-1.5 text-xs text-blue-600 bg-blue-50 dark:bg-blue-950/40 p-2 rounded border border-blue-200 dark:border-blue-900">
                               <GraduationCap className="size-3.5 shrink-0" />
-                              <span>Guided tour initiated ({msg.tourPath.length} steps).</span>
+                              <span>Guided tour started ({msg.tourPath.length} steps).</span>
                             </div>
                           )}
                         </div>

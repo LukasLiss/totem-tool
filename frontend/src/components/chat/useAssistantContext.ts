@@ -4,7 +4,8 @@ import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import { DashboardContext } from "@/contexts/DashboardContext";
 import { AssistantContext } from "@/api/assistantApi";
 
-export function useAssistantContext(overrides?: Partial<AssistantContext>): AssistantContext {
+/** What the assistant should know about the screen: selected log, view and open dashboard. */
+export function useAssistantContext(): AssistantContext {
   const fileContext = useContext(SelectedFileContext);
   const dashboardContext = useContext(DashboardContext);
   const location = useLocation();
@@ -13,31 +14,25 @@ export function useAssistantContext(overrides?: Partial<AssistantContext>): Assi
     const selectedFile = fileContext?.selectedFile;
     const viewMode = dashboardContext?.viewMode;
 
-    let viewModeStr = "overview";
-    let currentDashboardId: number | undefined = undefined;
-
+    let view = "overview";
+    let dashboardId: number | undefined;
     if (viewMode) {
-      if (viewMode.type === "dashboard" && "id" in viewMode) {
-        viewModeStr = `dashboard:${viewMode.id}`;
-        currentDashboardId = viewMode.id;
-      } else if (viewMode.type === "analysis" && "component" in viewMode) {
-        viewModeStr = `analysis:${viewMode.component}`;
+      if (viewMode.type === "dashboard") {
+        view = `dashboard:${viewMode.id}`;
+        dashboardId = viewMode.id;
+      } else if ("component" in viewMode) {
+        view = `${viewMode.type}:${viewMode.component}`;
       } else {
-        viewModeStr = viewMode.type;
+        view = viewMode.type;
       }
     }
 
-    const payload: AssistantContext = {
+    return {
       active_file_id: selectedFile?.id ?? undefined,
-      selected_file_id: selectedFile?.id ?? undefined,
       project_id: selectedFile?.project ?? undefined,
-      view_mode: viewModeStr,
+      view_mode: view,
       pathname: location?.pathname || "/",
-      current_dashboard_id: currentDashboardId,
-      session_id: localStorage.getItem("totem_chat_session_id") || "active-session",
-      ...overrides,
+      current_dashboard_id: dashboardId,
     };
-
-    return payload;
-  }, [fileContext?.selectedFile, dashboardContext?.viewMode, location?.pathname, overrides]);
+  }, [fileContext?.selectedFile, dashboardContext?.viewMode, location?.pathname]);
 }

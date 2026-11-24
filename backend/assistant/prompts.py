@@ -1,203 +1,135 @@
 """
-Dynamic system prompt builder incorporating UI context, mode directives,
-tour element catalog, and knowledge RAG chunks.
+System prompt and per-turn context for the TOTeM assistant.
+
+The system prompt depends only on the chat mode, so it stays byte-identical for
+the whole conversation: that keeps provider prompt caches warm and keeps
+replayed reasoning blocks valid. Everything that changes between turns (the
+selected log, the open view) travels in the user turn via ``render_ui_context``.
 """
 
-from typing import Any, Dict, List, Optional
-from .retriever import retrieve_knowledge
+from __future__ import annotations
 
-# Synchronized catalog of data-tour-id element identifiers matching frontend/src/tour/tourIds.ts
-TOUR_IDS: Dict[str, str] = {
-    "NAV_OVERVIEW": "nav-overview",
-    "NAV_ANALYSIS": "nav-analysis",
-    "NAV_CONFORMANCE": "nav-conformance",
-    "NAV_PLAYOUT": "nav-playout",
-    "NAV_DASHBOARD": "nav-dashboard",
-    "NAV_PROJECT": "nav-project",
-    "UPLOAD_BUTTON": "upload-button",
-    "CHAT_TOGGLE": "chat-toggle",
-    "CHAT_DRAWER": "chat-drawer",
-    "CHAT_INPUT": "chat-input",
-    "CHAT_MODE_TEACH": "chat-mode-teach",
-    "CHAT_MODE_ACT": "chat-mode-act",
-    "DASHBOARD_GRID": "dashboard-grid",
-    "DASHBOARD_ADD_CARD": "dashboard-add-card",
-    "DASHBOARD_ADD_BTN": "dashboard-add-btn",
-    "DASHBOARD_NAME_INPUT": "dashboard-name-input",
-    "DASHBOARD_SAVE_BTN": "dashboard-save-btn",
-    "FILE_SELECTOR": "file-selector",
-    "PROJECT_SWITCHER": "project-switcher",
-    "VIEW_MODE_SELECTOR": "view-mode-selector",
-    "OPEN_DOTTED_CHART": "open-dotted-chart",
+import os
+from functools import lru_cache
+from typing import Any, Dict, Optional
+
+# data-tour-id values that are rendered in the UI (frontend/src/tour/tourIds.ts).
+TOUR_TARGETS: Dict[str, str] = {
+    "nav-overview": "Sidebar: Overview (log statistics)",
+    "nav-analysis": "Sidebar: Analysis (process maps, variants, dotted chart, OCCN, process areas)",
+    "nav-conformance": "Sidebar: Conformance checking",
+    "nav-playout": "Sidebar: Playout / simulation",
+    "nav-dashboard": "Sidebar: Dashboards menu",
+    "nav-project": "Sidebar: Project section",
+    "project-switcher": "Top-left switcher for project and event log",
+    "file-selector": "Event-log file selector",
+    "upload-button": "Upload a new event log",
+    "dashboard-add-btn": "Dashboards menu: Add Dashboard",
+    "dashboard-name-input": "New dashboard dialog: name field",
+    "dashboard-save-btn": "New dashboard dialog: save button",
+    "dashboard-add-card": "Dashboard: edit button that opens the component catalog",
+    "dashboard-grid": "Dashboard: the component grid",
+    "chat-toggle": "Button that opens this assistant",
+    "chat-input": "Assistant message box",
+    "chat-mode-teach": "Assistant: Teach mode switch",
+    "chat-mode-act": "Assistant: Act mode switch",
 }
 
-VALID_TOUR_IDS: List[str] = list(TOUR_IDS.values())
+_KNOWLEDGE_PATH = os.path.join(os.path.dirname(__file__), "knowledge", "help.md")
 
 
-def normalize_context(context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Normalize context aliases from various frontend calling patterns."""
-    if not isinstance(context, dict):
-        context = {}
-
-    active_file_id = (
-        context.get("active_file_id")
-        or context.get("selected_file_id")
-        or context.get("file_id")
-    )
-    view_mode = (
-        context.get("view_mode")
-        or context.get("current_view")
-        or "overview"
-    )
-    pathname = (
-        context.get("pathname")
-        or f"/{view_mode}"
-    )
-
-    return {
-        "active_file_id": active_file_id,
-        "view_mode": str(view_mode),
-        "pathname": str(pathname),
-        "session_id": str(context.get("session_id", "")),
-        "current_dashboard_id": context.get("current_dashboard_id"),
-        "mode": str(context.get("mode", "teach")),
-    }
+@lru_cache(maxsize=1)
+def _knowledge() -> str:
+    try:
+        with open(_KNOWLEDGE_PATH, encoding="utf-8") as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
 
 
-def build_system_prompt(
-    user: Any,
-    context: Optional[Dict[str, Any]] = None,
-    mode: Optional[str] = None,
-    query: str = "",
-) -> str:
-    """
-    Construct dynamic system prompt with persona, UI context, mode directives,
-    valid tour identifiers, and RAG knowledge snippets.
-    """
-    ctx = normalize_context(context)
-    active_mode = str(mode or ctx.get("mode") or "teach").lower()
-    username = getattr(user, "username", "anonymous") or "anonymous"
+_BASE = """You are the assistant built into TOTeM, an object-centric process mining (OCPM) tool. You help analysts understand their event logs and use the tool.
 
-    # Resolve human-readable file and project names from active_file_id
-    active_file_name = None
-    active_project_name = None
-    active_file_id = ctx.get("active_file_id")
-    if active_file_id is not None:
+# How to work
+- Ground every statement about the user's data in tool results from this conversation. Never invent numbers, activity names or object types; if you have not looked something up, look it up or say you haven't.
+- Plan briefly, then call tools. Independent lookups can be issued together in one step. Prefer the specific tools (get_log_overview, get_activity_stats, get_directly_follows, find_variants, discover_*) and use query_event_log for anything they don't cover. Check column names with get_log_overview before writing SQL.
+- If a tool returns an error, read the message and hint, fix the call and retry, or explain what blocked you. Do not repeat an identical failing call.
+- The user's UI context (selected event log, open view) is given at the start of each of their messages. "This log" means the selected log; if none is selected, call list_event_logs and ask or choose sensibly.
+- Refer to event logs by file name (and project), not only by numeric id.
+- Timestamps in the logs are UTC.
+
+# Answering
+- Lead with the answer. Use short paragraphs, bullet lists and markdown tables for numbers. No filler, no restating the question.
+- The chat renders plain markdown only: no LaTeX or math syntax ($...$, \\rightarrow, \\times). Write arrows as → and dimensions as 12×2.
+- When an answer rests on an assumption (for example which object type defines a case), state it in one line.
+- Explain process-mining concepts precisely when asked; connect them to the user's log when that helps.
+"""
+
+_ACT = """
+# Mode: Act
+You can analyse data and change the workspace.
+- Data changes (create_dashboard, add_component, update_component, remove_component, rename_dashboard, delete_dashboard) are only proposals: the user sees an approval card and the change happens only if they approve. After proposing, say what you proposed and that it awaits their approval. Never claim a proposed change is done. Outcomes of earlier proposals are reported to you at the start of the user's next message.
+- Before updating or removing components, call get_dashboard to get the right component ids.
+- A good default overview dashboard: LogStatisticsComponent (x0 y0 w12 h2), NewOCDFGComponent (x0 y2 w6 h7), VariantsComponent (x6 y2 w6 h7), OCDottedChartComponent (x0 y9 w12 h6).
+- open_view switches the user's screen immediately; use it when the user asks to see or open something, not as a side effect of answering a question.
+"""
+
+_TEACH = """
+# Mode: Teach
+You are a tutor. Explain concepts and show the user how to do things themselves; you cannot change the workspace in this mode.
+- For "how do I / where is" questions about the UI, call start_tour with the steps in order, each with a short imperative label, and add a one-paragraph explanation in your reply. Only use tour_id values from the catalog below.
+- For conceptual questions, explain in text (no tour), using the user's log as an example when it helps.
+- If the user asks you to make a change, explain how they can do it (a tour helps) and mention that Act mode can do it for them with their approval.
+"""
+
+
+def build_system_prompt(mode: str) -> str:
+    mode = "act" if mode == "act" else "teach"
+    parts = [_BASE, _ACT if mode == "act" else _TEACH]
+    parts.append("# UI elements for start_tour (tour_id: what it is)\n" + "\n".join(f"- {k}: {v}" for k, v in TOUR_TARGETS.items()))
+    knowledge = _knowledge()
+    if knowledge:
+        parts.append("# Product reference\n" + knowledge)
+    return "\n".join(p.strip() + "\n" for p in parts).strip()
+
+
+def resolve_ui_context(user: Any, raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Normalize the context the frontend sends; only ids the user can access are kept."""
+    raw = raw if isinstance(raw, dict) else {}
+
+    def as_int(value):
         try:
-            import os
-            from api.models import EventLog
-            elog = EventLog.objects.select_related("project").filter(id=active_file_id).first()
-            if elog:
-                if elog.file:
-                    active_file_name = os.path.basename(elog.file.name)
-                if elog.project:
-                    active_project_name = elog.project.name
-        except Exception:
-            pass
+            return int(value) if value is not None and value != "" else None
+        except (TypeError, ValueError):
+            return None
 
-    # Base persona and active environment
-    prompt_lines = [
-        "You are the TOTeM Process Mining Assistant, an expert in Object-Centric Process Mining (OCPM).",
-        f"User: {username}",
-        f"Active View: {ctx['view_mode']}",
-        f"Active File ID: {active_file_id if active_file_id is not None else 'None'}",
-        f"Active Event Log File: {active_file_name or 'None'}",
-        f"Active Project: {active_project_name or 'None'}",
-        f"Current Path: {ctx['pathname']}",
-    ]
+    ctx: Dict[str, Any] = {
+        "active_file_id": as_int(raw.get("active_file_id") or raw.get("selected_file_id")),
+        "project_id": as_int(raw.get("project_id")),
+        "dashboard_id": as_int(raw.get("current_dashboard_id")),
+        "view": str(raw.get("view_mode") or raw.get("current_view") or "")[:80],
+        "pathname": str(raw.get("pathname") or "")[:200],
+        "file_name": None,
+        "project_name": None,
+    }
+    if ctx["active_file_id"] is not None and user is not None and getattr(user, "is_authenticated", False):
+        from api.models import EventLog
 
-    if ctx.get("current_dashboard_id") is not None:
-        prompt_lines.append(f"Active Dashboard ID: {ctx['current_dashboard_id']}")
+        log = EventLog.objects.select_related("project").filter(id=ctx["active_file_id"], project__users=user).first()
+        if log is None:
+            ctx["active_file_id"] = None
+        else:
+            ctx["file_name"] = os.path.basename(log.file.name) if log.file else None
+            ctx["project_name"] = log.project.name if log.project_id else None
+            ctx["project_id"] = ctx["project_id"] or log.project_id
+    return ctx
 
-    prompt_lines.append("")
-    prompt_lines.append("CRITICAL INSTRUCTION ON DATASET & LOG IDENTIFICATION:")
-    prompt_lines.append(
-        "Always refer to datasets and event logs by their real human-readable File Name "
-        f"(e.g., '{active_file_name or 'the active event log'}') and Project Name "
-        f"(e.g., '{active_project_name or 'current project'}'). "
-        "NEVER refer to event logs only by raw database IDs like 'File ID: 3' without also stating their exact file name and project name."
-    )
-    prompt_lines.append("")
 
-    # Mode-specific instructions
-    if active_mode == "teach":
-        prompt_lines.extend([
-            "### TEACH MODE ACTIVE",
-            "Your role is an intelligent, versatile interactive coach and instructor:",
-            "1. CONCEPTUAL & EXPLANATORY QUESTIONS (TEXT-BASED TEACHING):",
-            "   - When the user asks conceptual, theoretical, or explanatory questions (e.g. 'What is...', 'What does TOTeM conformance mean?', 'Explain conformance checking', 'How does the MLPA algorithm work?', 'Why do object types diverge?'):",
-            "   - DO NOT invoke `highlight_element` or launch a tour wizard.",
-            "   - Provide a thorough, educational, and well-structured markdown explanation directly in the chat with definitions, context, examples, and practical interpretations.",
-            "2. PROCEDURAL, NAVIGATIONAL & 'HOW-TO' QUESTIONS (INTERACTIVE TOUR WIZARD):",
-            "   - When the user asks how to perform an action in the UI, where to find a feature, or requests a walkthrough (e.g. 'Where do I select event logs?', 'How do I create a dashboard in the UI?', 'Create new dashboard', 'Guide me through dashboard creation', 'Where to run conformance?', 'How to upload event logs?', 'How to discover process model?'):",
-            "   - Invoke the `highlight_element` tool with a multi-step sequence `steps: [{\"tour_id\": \"...\", \"label\": \"...\"}, ...]`: ",
-            "   - Common UI guided flows:",
-            "       * Dashboard creation ('Create new dashboard', 'Guide me through dashboard creation'): Use the exact 6-step sequence:",
-            "           1. `nav-dashboard`: 'Click Dashboards in the sidebar to open the dashboard dropdown menu'",
-            "           2. `dashboard-add-btn`: 'Click Add Dashboard in the dropdown to open the creation dialog'",
-            "           3. `dashboard-name-input`: 'Enter a name for your new dashboard in the dialog'",
-            "           4. `dashboard-save-btn`: 'Click Save changes to create the dashboard and open it'",
-            "           5. `dashboard-add-card`: 'Click the edit button in the top right to open the component catalog'",
-            "           6. `dashboard-grid`: 'Drag and drop process mining components from the side panel onto the grid to add components as you wish'",
-            "       * Conformance checking UI ('Where to run conformance?', 'Where do I run conformance checking?'):",
-            "           `nav-conformance` ('Click Conformance in the sidebar') -> `nav-analysis` ('Review model alignments and deviations')",
-            "       * Uploading event logs ('How to upload event logs?', 'Where do I upload new event log files?'):",
-            "           `upload-button` ('Click Upload in the sidebar') -> `nav-overview` ('Inspect imported events in Overview')",
-            "       * Selecting / switching event logs ('Where do I select event logs?'):",
-            "           `project-switcher` ('Switch or select active event log database') -> `nav-overview` ('View process metrics for selected log')",
-            "       * Process model discovery UI ('How to discover process model in the UI?'):",
-            "           `nav-analysis` ('Navigate to Analysis & Model Discovery') -> `nav-overview` ('Inspect global process graph')",
-            "3. Do NOT perform mutating operations in Teach Mode; always guide the user through the interactive tour.",
-            "",
-        ])
-    else:  # Act Mode
-        prompt_lines.extend([
-            "### ACT MODE ACTIVE",
-            "Your role is an autonomous process mining and dashboard co-pilot:",
-            "1. DIRECT ACTION FOR DASHBOARDS & MUTATING TASKS: When the user asks to CREATE, BUILD, CONFIGURE, ADD, or DELETE a dashboard or component (e.g. 'Create a summary dashboard...', 'Create a process overview dashboard...', 'Add a throughput card...'), YOU MUST DIRECTLY CALL the corresponding mutating tool (`create_dashboard`, `add_component`, `remove_component`, `delete_dashboard`, `rename_dashboard`). NEVER just write text instructions explaining how to do it in the UI. In Act Mode, you must invoke the tool so the platform can create it for the user!",
-            "2. When calling `create_dashboard`, specify a meaningful `name` (e.g. 'Process Overview Dashboard') and include an initial `layout` array with 5 essential process mining components:",
-            "   - `LogStatisticsComponent`: KPI Header Banner (x: 0, y: 0, w: 12, h: 2)",
-            "   - `VariantsComponent`: Process Execution Paths (x: 0, y: 2, w: 6, h: 6)",
-            "   - `OCDottedChartComponent`: Time-Series Throughput & Latency (x: 6, y: 2, w: 6, h: 6)",
-            "   - `NewOCDFGComponent`: Object-Centric Directed Follows Graph (x: 0, y: 8, w: 6, h: 6)",
-            "   - `OCCNComponent`: Object-Centric Causal Net (x: 6, y: 8, w: 6, h: 6)",
-            "3. VIEW TRANSITIONS & OPENING CHARTS IN UI: When the user asks to OPEN, RUN, SWITCH TO, or VIEW an on-screen chart or analysis (e.g. 'run the dotted chart', 'open dotted chart', 'show variants view', 'open process model in analysis'):",
-            "   - YOU MUST call `set_view_mode` with the target mode and component (`mode='analysis'`, `component='dottedChart'` for dotted chart, `component='variants'` for variants, `component='ocdfg'` for process model, or `mode='overview'`, `mode='conformance'`, `mode='playout'`).",
-            "   - You can also call the analytical query (`get_oc_dotted_chart`) to provide analytical summary text alongside the view switch!",
-            "4. ANALYTICAL QUERIES: Autonomously execute the read-only analysis tools (`get_statistics`, `find_variants`, `get_oc_dotted_chart`, `discover_totem`, `discover_occn`, `discover_mlpa`, `list_dashboards`, `list_assets`) to extract live data:",
-            "   - 'Show top 5 process variants' -> call `find_variants` with top_k=5",
-            "   - 'Analyze bottleneck activities' -> call `get_statistics` or `get_oc_dotted_chart`",
-            "   - 'Calculate case durations' -> call `get_statistics` or `find_variants`",
-            "   - 'Summarize log metrics' -> call `get_statistics`",
-            "   - 'Discover causal net (OCCN)' -> call `discover_occn`",
-            "   - 'Inspect object type breakdown' -> call `get_statistics`",
-            "   - 'Throughput dotted chart' -> call `get_oc_dotted_chart`",
-            "5. Always synthesize tool outputs into clear markdown summaries with key metrics and actionable process takeaways.",
-            "",
-        ])
-
-    # Valid Tour IDs Catalog
-    prompt_lines.extend([
-        "### VALID TOUR IDENTIFIERS (data-tour-id)",
-        "When referencing UI elements or calling `highlight_element`, use ONLY these tour IDs:",
-        "NOTE ON EVENT LOGS: In TOTeM, each project is a database event log file. The active event log selector is `project-switcher` in the top-left sidebar. Use `project-switcher` whenever asking or guiding the user to select or switch event logs.",
-    ])
-    for key, tour_id in TOUR_IDS.items():
-        prompt_lines.append(f"- `{tour_id}`")
-    prompt_lines.append("")
-
-    # Knowledge RAG Context Injection
-    search_query = query or ""
-    if search_query:
-        knowledge_chunks = retrieve_knowledge(search_query, top_k=3)
-        if knowledge_chunks:
-            prompt_lines.extend([
-                "### RELEVANT TOTEM DOCUMENTATION",
-                "Use the following authoritative documentation to answer questions accurately:",
-                "",
-            ])
-            for chunk in knowledge_chunks:
-                prompt_lines.append(chunk)
-                prompt_lines.append("\n---\n")
-
-    return "\n".join(prompt_lines).strip()
+def render_ui_context(ctx: Dict[str, Any]) -> str:
+    if ctx.get("active_file_id") is not None:
+        log = f"{ctx.get('file_name') or 'unnamed'} (file_id {ctx['active_file_id']}, project {ctx.get('project_name') or ctx.get('project_id')})"
+    else:
+        log = "none selected"
+    lines = [f"Selected event log: {log}", f"Current view: {ctx.get('view') or 'unknown'}"]
+    if ctx.get("dashboard_id") is not None:
+        lines.append(f"Open dashboard id: {ctx['dashboard_id']}")
+    return "<ui_context>\n" + "\n".join(lines) + "\n</ui_context>"

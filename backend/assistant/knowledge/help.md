@@ -100,29 +100,21 @@ The following visualization cards can be added to any dashboard:
 
 ---
 
-## 6. Dual-Channel AI Assistant (Teach Mode vs. Act Mode)
+## 6. AI Assistant (Teach Mode vs. Act Mode)
 
-### Teach Mode (Guided Tours & Spotlight Highlighting)
-Teach Mode acts as an interactive coach:
-- Answers conceptual questions about process mining and TOTEM features.
-- Provides step-by-step instructions.
-- Uses the `highlight_element` tool to trigger visual spotlights and callout tooltips on specific UI elements using their `data-tour-id`.
-- Guides the user safely without making unexpected state changes.
+### Teach Mode
+Explains process-mining concepts and TOTeM features, and shows users where things are with guided spotlight tours (`start_tour`). It can read the user's data to give examples but cannot change anything.
 
-### Act Mode (Autonomous Execution & Safety Confirmations)
-Act Mode acts as an autonomous co-pilot:
-- Executes read-only analysis tools immediately (`get_statistics`, `find_variants`, `discover_totem`, etc.).
-- When a mutating tool (`create_dashboard`, `add_component`, `remove_component`, `update_component`, `rename_dashboard`) or frontend navigation is invoked, the assistant surfaces a **Pending Action Confirmation Chip**.
-- The action is only executed once the user explicitly clicks "Confirm" / "Approve".
+### Act Mode
+Analyses the selected event log with read-only tools (overview, activity statistics, directly-follows waiting times, variants, TOTeM / OCCN / process-area discovery, read-only SQL) and can switch the user's view (`open_view`). Dashboard changes (create, add/update/remove components, rename, delete) are proposals: the user approves or declines each one on an approval card before anything changes.
 
 ---
 
 ## 7. Filters & Thresholds
-- **DFG Threshold (`dfg_threshold`)**: Range [0.0, 1.0]. Filters out low-frequency directly-follows edges.
-- **Activity Threshold (`act_threshold`)**: Range [0.0, 1.0]. Prunes rare activities from discovery.
-- **OCCN Occurrence Threshold (`threshold`)**: Range [0.0, 1.0]. Minimum support for causal relations in C-Nets.
-- **MLPA Threshold (`threshold`)**: Range [0.0, 1.0]. Clustering threshold for process area grouping.
-- **Leading Object Type**: Sets the focal perspective for variant extraction and single-case projection.
+- **OCCN occurrence threshold**: Range [0.0, 1.0]. Minimum relative occurrence for causal relations in the C-Net.
+- **TOTeM tau**: Range [0.0, 1.0], default 0.9. Strictness used when deriving temporal relations between object types.
+- **Leading Object Type**: The case notion for variant extraction (which object type defines one case).
+- **Global filters**: Time range, activity and object-type filters in the filter bar apply to the analysis views.
 
 ---
 
@@ -141,25 +133,3 @@ Act Mode acts as an autonomous co-pilot:
 - **Project Switcher (`project-switcher`)**: Organize logs and dashboards into distinct project workspaces.
 - **Model Assets (`/analysis`)**: Save discovered TOTeM and OCCN models as reusable assets for playout simulation.
 - **Data Deletion (`/userdatadelete`)**: Manage and delete uploaded logs and user files.
-
----
-
-## 10. UI Navigation & Tour Identifier Catalog
-When using Teach Mode, visual spotlights target the following synchronized `data-tour-id` elements:
-- `nav-overview`: Navigation button for Process Overview.
-- `nav-analysis`: Navigation button for Model Assets and Analysis.
-- `nav-conformance`: Navigation button for Conformance Checking.
-- `nav-playout`: Navigation button for Playout & Simulation.
-- `nav-dashboard`: Navigation button for Dashboard Builder.
-- `nav-project`: Project management navigation.
-- `upload-button`: File upload trigger button.
-- `file-selector`: Active event log dropdown selector.
-- `project-switcher`: Project workspace switcher.
-- `view-mode-selector`: Tab selector for switching between OCDFG, OCCN, and Variants views.
-- `dashboard-grid`: Main GridStack dashboard canvas.
-- `dashboard-add-card`: Button to open the Add Component modal.
-- `chat-toggle`: Toggle button to open/close the AI Assistant drawer.
-- `chat-drawer`: Main AI Chat Assistant panel.
-- `chat-input`: Chat text input field.
-- `chat-mode-teach`: Switch to Teach Mode (guided tours).
-- `chat-mode-act`: Switch to Act Mode (tool execution co-pilot).

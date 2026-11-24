@@ -1,18 +1,25 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import axios from "axios";
 import { getApiUrl } from "@/config/api";
 
 const ASSISTANT_URL = getApiUrl("/api/assistant");
 
+export const STORAGE_KEY_API_KEY = "totem_llm_api_key";
+export const STORAGE_KEY_PROVIDER = "totem_llm_provider";
+
+export type ChatMode = "teach" | "act";
+
+/** UI state sent with every message. Never contains credentials. */
 export interface AssistantContext {
-  selected_file_id?: number;
   active_file_id?: number;
   project_id?: number;
-  current_view?: string;
   view_mode?: string;
   pathname?: string;
-  session_id?: string;
   current_dashboard_id?: number;
+}
+
+export interface TourStep {
+  tour_id: string;
+  label: string;
 }
 
 export interface PendingAction {
@@ -22,31 +29,18 @@ export interface PendingAction {
   arguments: Record<string, unknown>;
 }
 
-export interface TourStep {
-  tour_id: string;
-  label: string;
-}
-
-export interface ChatResponse {
-  text: string;
-  tool_calls: Array<{
-    id: string;
-    name: string;
-    result: unknown;
-  }>;
-  pending_actions: PendingAction[];
-  tour_path: TourStep[] | null;
-}
-
-export type SSEEvent =
-  | { type: "text"; content: string }
-  | { type: "tool_call"; id: string; name: string; arguments: Record<string, unknown> }
-  | { type: "tool_result"; id: string; name: string; result: unknown }
+/** Events streamed by POST /api/assistant/chat/ (see backend assistant/harness.py). */
+export type AssistantEvent =
+  | { type: "conversation"; conversation_id: string }
+  | { type: "text"; text: string }
+  | { type: "status"; status: "thinking" }
+  | { type: "tool_start"; id: string; name: string; summary: string; kind: "read" | "propose" | "client" }
+  | { type: "tool_end"; id: string; name: string; ok: boolean; error?: string; duration_ms: number }
   | { type: "pending_action"; id: string; name: string; description: string; arguments: Record<string, unknown> }
-  | { type: "tour_path"; steps: TourStep[] }
-  | { type: "done"; usage: Record<string, unknown> }
-  | { type: "key_error"; provider?: string; message?: string }
-  | { type: "error"; error?: string; message?: string };
+  | { type: "client_action"; id: string; name: string; arguments: Record<string, unknown> }
+  | { type: "notice"; text: string }
+  | { type: "error"; code: string; message: string; retryable?: boolean }
+  | { type: "done"; usage?: Record<string, number>; conversation_id?: string };
 
 export interface ValidateKeyResponse {
   valid: boolean;
@@ -55,169 +49,160 @@ export interface ValidateKeyResponse {
   error?: string;
 }
 
-/**
- * Validate an LLM API key against the backend validation probe.
- */
-export async function validateApiKey(
-  provider: string,
-  apiKey: string
-): Promise<ValidateKeyResponse> {
-  const token = typeof localStorage !== "undefined" ? localStorage.getItem("access_token") : null;
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (token && token !== "null" && token !== "undefined") {
-    headers["Authorization"] = `Bearer ${token}`;
+function storedCredentials(): { apiKey: string; provider: string } {
+  try {
+    return {
+      apiKey: localStorage.getItem(STORAGE_KEY_API_KEY) || "",
+      provider: localStorage.getItem(STORAGE_KEY_PROVIDER) || "",
+    };
+  } catch {
+    return { apiKey: "", provider: "" };
   }
+}
 
+function accessToken(): string | null {
+  try {
+    const token = localStorage.getItem("access_token");
+    return token && token !== "null" && token !== "undefined" ? token : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function validateApiKey(provider: string, apiKey: string): Promise<ValidateKeyResponse> {
   try {
     const res = await axios.post<ValidateKeyResponse>(
       `${ASSISTANT_URL}/validate-key/`,
       { provider, api_key: apiKey },
-      {
-        headers,
-        validateStatus: () => true, // resolve promise for 400s
-      }
+      { validateStatus: (s) => s < 500 }
     );
     return res.data;
-  } catch (err: any) {
-    return {
-      valid: false,
-      provider,
-      error: err?.response?.data?.error || err?.message || "Failed to validate API key.",
-    };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Failed to validate API key.";
+    return { valid: false, provider, error: message };
   }
 }
 
-/**
- * Send a chat message and return an async generator of SSE events.
- * Falls back to non-streaming if the server doesn't support SSE.
- */
-export async function* streamChat(
-  message: string,
-  context: AssistantContext,
-  mode: string = "teach",
-  apiKey?: string,
-  provider?: string
-): AsyncGenerator<SSEEvent> {
-  const token = typeof localStorage !== "undefined" ? localStorage.getItem("access_token") : null;
-  const storedKey = apiKey ?? (typeof localStorage !== "undefined" ? localStorage.getItem("totem_llm_api_key") || "" : "");
-  const storedProvider = provider ?? (typeof localStorage !== "undefined" ? localStorage.getItem("totem_llm_provider") || "gemini" : "gemini");
+/** Parse a text/event-stream body into JSON events. */
+export async function* parseEventStream(body: ReadableStream<Uint8Array>): AsyncGenerator<AssistantEvent> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true }).replace(/\r\n?/g, "\n");
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary !== -1) {
+        const frame = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const data = frame
+          .split("\n")
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).replace(/^ /, ""))
+          .join("\n");
+        if (data) {
+          try {
+            yield JSON.parse(data) as AssistantEvent;
+          } catch {
+            // ignore a malformed frame rather than abort the whole answer
+          }
+        }
+        boundary = buffer.indexOf("\n\n");
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
 
+export interface StreamChatOptions {
+  message: string;
+  mode: ChatMode;
+  context?: AssistantContext;
+  conversationId?: string | null;
+  signal?: AbortSignal;
+}
+
+async function postChat(opts: StreamChatOptions, token: string | null): Promise<Response> {
+  const { apiKey, provider } = storedCredentials();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "text/event-stream",
   };
-  if (token && token !== "null" && token !== "undefined") {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-
-  const response = await fetch(`${ASSISTANT_URL}/chat/`, {
+  if (token) headers.Authorization = `Bearer ${token}`;
+  // Credentials go in headers, never in the body that the server may log or store.
+  if (apiKey) headers["X-LLM-Key"] = apiKey;
+  if (provider) headers["X-LLM-Provider"] = provider;
+  return fetch(`${ASSISTANT_URL}/chat/`, {
     method: "POST",
     headers,
+    signal: opts.signal,
     body: JSON.stringify({
-      message,
-      context: { ...context, mode, api_key: storedKey, provider: storedProvider },
-      mode,
-      api_key: storedKey,
-      provider: storedProvider,
+      message: opts.message,
+      mode: opts.mode,
+      context: opts.context ?? {},
+      conversation_id: opts.conversationId || undefined,
     }),
   });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    yield { type: "error", error: `HTTP ${response.status}: ${errorText}` };
-    return;
-  }
-
-  const contentType = response.headers.get("content-type") || "";
-
-  // If server returned SSE, parse the stream
-  if (contentType.includes("text/event-stream") && response.body) {
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            const jsonStr = line.slice(6).trim();
-            if (!jsonStr) continue;
-            try {
-              const event = JSON.parse(jsonStr) as SSEEvent;
-              yield event;
-              if (event.type === "done" || event.type === "error") return;
-            } catch {
-              // Skip malformed JSON lines
-            }
-          }
-        }
-      }
-    } finally {
-      reader.releaseLock();
-    }
-    return;
-  }
-
-  // Non-streaming fallback: parse the JSON response
-  const data = (await response.json()) as ChatResponse;
-  yield { type: "text", content: data.text };
-  for (const tc of data.tool_calls) {
-    yield { type: "tool_result", id: tc.id, name: tc.name, result: tc.result };
-  }
-  for (const pa of data.pending_actions) {
-    yield {
-      type: "pending_action",
-      id: pa.id,
-      name: pa.name,
-      description: pa.description,
-      arguments: pa.arguments,
-    };
-  }
-  if (data.tour_path && data.tour_path.length > 0) {
-    yield { type: "tour_path", steps: data.tour_path };
-  }
-  yield { type: "done", usage: {} };
 }
 
 /**
- * Send a non-streaming chat message (JSON response).
+ * Run one assistant turn and yield its events. Non-2xx responses become a
+ * single `error` event; an expired session token is refreshed once.
  */
-export async function sendChat(
-  message: string,
-  context: AssistantContext
-): Promise<ChatResponse> {
-  const { data } = await axios.post<ChatResponse>(
-    `${ASSISTANT_URL}/chat/`,
-    { message, context },
-    { headers: { Accept: "application/json" } }
-  );
-  return data;
+export async function* streamChat(opts: StreamChatOptions): AsyncGenerator<AssistantEvent> {
+  let response = await postChat(opts, accessToken());
+  if (response.status === 401) {
+    const body = await response.clone().json().catch(() => ({}));
+    // A 401 with code "auth" means the LLM key is missing, not the session.
+    if (body?.code !== "auth") {
+      try {
+        // Loaded lazily: the interceptor module has import-time side effects.
+        const { refreshAccessToken } = await import("@/interceptors/axios");
+        response = await postChat(opts, await refreshAccessToken());
+      } catch {
+        // fall through and report the original 401
+      }
+    }
+  }
+
+  if (!response.ok || !response.body) {
+    const body = await response.json().catch(() => ({}) as Record<string, unknown>);
+    const code = typeof body?.code === "string" ? body.code : response.status === 401 ? "session" : "http";
+    const message =
+      (typeof body?.error === "string" && body.error) ||
+      (typeof body?.detail === "string" && body.detail) ||
+      `The assistant request failed (HTTP ${response.status}).`;
+    yield { type: "error", code, message, retryable: response.status >= 500 };
+    yield { type: "done" };
+    return;
+  }
+
+  yield* parseEventStream(response.body);
 }
 
 export interface ConfirmActionResponse {
-  status: "executed" | "cancelled" | string;
+  status: "executed" | "cancelled" | "failed" | "executing" | string;
   pending_action_id?: string;
-  result?: any;
+  tool_name?: string;
+  result?: Record<string, unknown> | null;
   error?: string;
 }
 
-/**
- * Confirm or reject a pending action.
- */
-export async function confirmAction(
-  pendingActionId: string,
-  approved: boolean
-): Promise<ConfirmActionResponse> {
-  const { data } = await axios.post<ConfirmActionResponse>(
+/** Approve or decline a proposed change. Resolves for every HTTP status. */
+export async function confirmAction(pendingActionId: string, approved: boolean): Promise<ConfirmActionResponse> {
+  const { data, status } = await axios.post<ConfirmActionResponse>(
     `${ASSISTANT_URL}/confirm/`,
-    { pending_action_id: pendingActionId, approved }
+    { pending_action_id: pendingActionId, approved },
+    { validateStatus: () => true }
   );
+  if (status === 404) return { status: "failed", error: data?.error || "This proposal expired. Ask the assistant again." };
+  if (status >= 500 && !data?.status) return { status: "failed", error: "The server could not apply the change." };
   return data;
+}
+
+export async function resetConversation(conversationId: string): Promise<void> {
+  await axios.post(`${ASSISTANT_URL}/reset/`, { conversation_id: conversationId }).catch(() => undefined);
 }

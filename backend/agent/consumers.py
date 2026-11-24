@@ -3,12 +3,15 @@ Django Channels WebSocket Consumer for bidirectional agent live-wire communicati
 """
 
 from urllib.parse import parse_qs
+import re
 import uuid
 import logging
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from .registry import session_registry
 
 logger = logging.getLogger(__name__)
+
+_SESSION_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 class AgentConsumer(AsyncJsonWebsocketConsumer):
@@ -19,49 +22,38 @@ class AgentConsumer(AsyncJsonWebsocketConsumer):
 
     async def connect(self):
         self.user = self.scope.get("user")
-        self.session_id = self.scope.get("session_id")
-
-        if not self.session_id:
-            query_string = self.scope.get("query_string", b"").decode("utf-8")
-            query_params = parse_qs(query_string)
-            if "session_id" in query_params and query_params["session_id"]:
-                self.session_id = query_params["session_id"][0]
-            elif "sessionId" in query_params and query_params["sessionId"]:
-                self.session_id = query_params["sessionId"][0]
-            else:
-                self.session_id = f"sess_{uuid.uuid4().hex[:12]}"
-            self.scope["session_id"] = self.session_id
-
         self.groups_joined = []
+        if not (self.user and self.user.is_authenticated):
+            # The bus can drive a user's UI: never open it to anonymous clients.
+            await self.close(code=4401)
+            return
 
-        # Join agent_broadcast
-        await self.channel_layer.group_add("agent_broadcast", self.channel_name)
-        self.groups_joined.append("agent_broadcast")
+        raw_session = self.scope.get("session_id")
+        if not raw_session:
+            query_params = parse_qs(self.scope.get("query_string", b"").decode("utf-8"))
+            raw_session = (query_params.get("session_id") or query_params.get("sessionId") or [None])[0]
+        if not raw_session or not _SESSION_RE.match(str(raw_session)):
+            raw_session = f"sess_{uuid.uuid4().hex[:12]}"
+        self.client_session_id = str(raw_session)
+        # Namespace by user so a client cannot join another user's session group
+        # by guessing or reusing its session id.
+        self.session_id = f"u{self.user.id}_{self.client_session_id}"
+        self.scope["session_id"] = self.session_id
 
-        # Join user group if authenticated
-        if self.user and self.user.is_authenticated:
-            user_group = f"user_{self.user.id}"
-            await self.channel_layer.group_add(user_group, self.channel_name)
-            self.groups_joined.append(user_group)
+        for group in ("agent_broadcast", f"user_{self.user.id}", f"session_{self.session_id}"):
+            await self.channel_layer.group_add(group, self.channel_name)
+            self.groups_joined.append(group)
 
-        # Join session group
-        if self.session_id:
-            session_group = f"session_{self.session_id}"
-            await self.channel_layer.group_add(session_group, self.channel_name)
-            self.groups_joined.append(session_group)
-
-        # Register channel in session registry
-        user_id = self.user.id if (self.user and self.user.is_authenticated) else None
-        session_registry.register_session(self.session_id, self.channel_name, user_id=user_id)
+        session_registry.register_session(self.session_id, self.channel_name, user_id=self.user.id)
 
         await self.accept()
 
         await self.send_json({
             "status": "connected",
             "message": "Connected to Totem Agent Live-Wire Bus",
-            "session_id": self.session_id,
-            "user_id": user_id,
-            "authenticated": bool(self.user and self.user.is_authenticated),
+            "session_id": self.client_session_id,
+            "user_id": self.user.id,
+            "authenticated": True,
         })
 
     async def disconnect(self, close_code):
@@ -88,13 +80,13 @@ class AgentConsumer(AsyncJsonWebsocketConsumer):
 
         # UI State Report Frame
         if content.get("type") == "ui_state_report":
-            session_id = content.get("session_id") or self.session_id
+            # A client may only report state for its own session.
             payload = content.get("payload", {})
-            session_registry.set_ui_state(session_id, payload)
+            session_registry.set_ui_state(self.session_id, payload if isinstance(payload, dict) else {})
             await self.send_json({
                 "status": "acknowledged",
                 "type": "ui_state_report",
-                "session_id": session_id,
+                "session_id": self.client_session_id,
             })
             return
 

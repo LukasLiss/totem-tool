@@ -1,956 +1,1026 @@
 """
-MCP Tool Server and Schema Catalog.
-Defines JSON Schema specifications for all 18 process mining & dashboard tools
-and routes tool execution to DuckDB analytics, totem_lib algorithms, and DashboardService.
+Assistant tool catalog and executor.
+
+Every tool the assistant can call is declared once in ``TOOLS`` with:
+
+* a JSON schema (validated before execution),
+* a ``kind`` that decides how the harness treats a call:
+    - ``READ``    runs immediately and its result goes back to the model;
+    - ``PROPOSE`` changes user data, so it is held for explicit approval;
+    - ``CLIENT``  is executed by the browser (navigation, guided tours);
+* the modes it is offered in (``teach`` / ``act``),
+* a handler returning a JSON-serializable dict sized for a model's context
+  (summaries, not raw algorithm output).
+
+Handlers raise ``ToolError`` for expected failures; the message is written for
+the model so it can recover (pick another log, fix an argument, ...).
 """
 
+from __future__ import annotations
+
+import datetime as _dt
+import enum
 import os
-from hashlib import sha1
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, FrozenSet, List, Optional
+
+import jsonschema
 
 from api.models import EventLog, ProjectAsset
 from api.services.dashboard import DashboardService
-from api.views import (
-    _layout_shim,
-    _object_types,
-    _serialize_mlpa,
-    _with_ocel_db,
+
+from .sql_guard import SqlRejected, describe_schema, run_select
+
+
+class ToolKind(str, enum.Enum):
+    READ = "read"
+    PROPOSE = "propose"
+    CLIENT = "client"
+
+
+class ToolError(Exception):
+    """An expected tool failure, reported to the model as an error result."""
+
+    def __init__(self, message: str, code: str = "TOOL_ERROR", hint: Optional[str] = None):
+        super().__init__(message)
+        self.code = code
+        self.hint = hint
+
+    def to_dict(self) -> Dict[str, Any]:
+        out: Dict[str, Any] = {"error": str(self), "code": self.code}
+        if self.hint:
+            out["hint"] = self.hint
+        return out
+
+
+@dataclass
+class ToolContext:
+    """What a tool may rely on besides its arguments."""
+
+    user: Any
+    active_file_id: Optional[int] = None
+    project_id: Optional[int] = None
+    dashboard_id: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class Tool:
+    name: str
+    description: str
+    parameters: Dict[str, Any]
+    kind: ToolKind
+    handler: Optional[Callable[[ToolContext, Dict[str, Any]], Dict[str, Any]]] = None
+    modes: FrozenSet[str] = field(default_factory=lambda: frozenset({"teach", "act"}))
+    describe: Optional[Callable[[Dict[str, Any]], str]] = None
+
+    def spec(self) -> Dict[str, Any]:
+        return {"name": self.name, "description": self.description, "parameters": self.parameters}
+
+    def summary(self, args: Dict[str, Any]) -> str:
+        if self.describe:
+            try:
+                return self.describe(args)
+            except Exception:
+                pass
+        return self.name.replace("_", " ")
+
+
+# -----------------------------------------------------------------------------
+# Shared helpers
+# -----------------------------------------------------------------------------
+
+_FILE_ID = {"type": "integer", "description": "Event log id (from list_event_logs). Defaults to the log selected in the UI."}
+
+
+def _obj(properties: Dict[str, Any], required: Optional[List[str]] = None) -> Dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": required or [],
+        "additionalProperties": False,
+    }
+
+
+def _iso(ts: Any) -> Optional[str]:
+    if ts is None:
+        return None
+    try:
+        value = float(ts)
+    except (TypeError, ValueError):
+        return None
+    if value > 1e11:  # milliseconds
+        value /= 1000.0
+    return _dt.datetime.fromtimestamp(value, tz=_dt.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _duration(seconds: Any) -> Optional[str]:
+    if seconds is None:
+        return None
+    s = float(seconds)
+    if s < 120:
+        return f"{s:.0f}s"
+    if s < 7200:
+        return f"{s / 60:.1f}min"
+    if s < 172800:
+        return f"{s / 3600:.1f}h"
+    return f"{s / 86400:.1f}d"
+
+
+def _log_label(log: EventLog) -> Dict[str, Any]:
+    return {
+        "file_id": log.id,
+        "file_name": os.path.basename(log.file.name) if log.file else None,
+        "project": log.project.name if log.project_id else None,
+    }
+
+
+def _require_user(ctx: ToolContext):
+    user = ctx.user
+    if not user or not getattr(user, "is_authenticated", False):
+        raise ToolError("Not signed in.", code="UNAUTHENTICATED")
+    return user
+
+
+def _resolve_log(ctx: ToolContext, args: Dict[str, Any]) -> EventLog:
+    user = _require_user(ctx)
+    file_id = args.get("file_id", ctx.active_file_id)
+    if file_id is None:
+        raise ToolError(
+            "No event log is selected in the UI and no file_id was given.",
+            code="NO_EVENT_LOG",
+            hint="Call list_event_logs and pass the file_id of the log the user means.",
+        )
+    try:
+        file_id = int(file_id)
+    except (TypeError, ValueError):
+        raise ToolError(f"file_id must be an integer, got {file_id!r}.", code="INVALID_ARGUMENT")
+
+    log = EventLog.objects.select_related("project").filter(id=file_id, project__users=user).first()
+    if log is None:
+        raise ToolError(
+            f"Event log {file_id} does not exist or is not accessible.",
+            code="FILE_NOT_FOUND",
+            hint="Call list_event_logs to see the logs this user can access.",
+        )
+    try:
+        path = log.file.path if log.file else None
+    except Exception:
+        path = None
+    if not path or not os.path.exists(path):
+        raise ToolError(f"The file of event log {file_id} is missing on disk.", code="FILE_MISSING")
+    return log
+
+
+def _ocel(log: EventLog):
+    # Imported lazily: api.views pulls in the whole view layer.
+    from api.views import _with_ocel_db
+
+    return _with_ocel_db(log)
+
+
+def _object_type_names(conn) -> List[str]:
+    return [r[0] for r in conn.execute("SELECT DISTINCT obj_type FROM objects ORDER BY 1").fetchall()]
+
+
+def _check_object_type(conn, object_type: Optional[str]) -> Optional[str]:
+    if object_type is None:
+        return None
+    types = _object_type_names(conn)
+    if object_type not in types:
+        raise ToolError(
+            f"Unknown object type '{object_type}'.",
+            code="INVALID_ARGUMENT",
+            hint=f"Object types in this log: {', '.join(types)}.",
+        )
+    return object_type
+
+
+# -----------------------------------------------------------------------------
+# Read tools
+# -----------------------------------------------------------------------------
+
+def list_event_logs(ctx: ToolContext, args: Dict[str, Any]) -> Dict[str, Any]:
+    user = _require_user(ctx)
+    logs = EventLog.objects.select_related("project").filter(project__users=user).order_by("-uploaded_at", "-id")[:100]
+    return {
+        "event_logs": [
+            {
+                **_log_label(log),
+                "uploaded_at": log.uploaded_at.isoformat() if getattr(log, "uploaded_at", None) else None,
+                "selected_in_ui": log.id == ctx.active_file_id,
+            }
+            for log in logs
+        ]
+    }
+
+
+def get_log_overview(ctx: ToolContext, args: Dict[str, Any]) -> Dict[str, Any]:
+    log = _resolve_log(ctx, args)
+    with _ocel(log) as db:
+        c = db.conn
+        n_events, n_acts, t_min, t_max = c.execute(
+            "SELECT COUNT(*), COUNT(DISTINCT activity), MIN(timestamp_unix), MAX(timestamp_unix) FROM events"
+        ).fetchone()
+        n_objects = c.execute("SELECT COUNT(*) FROM objects").fetchone()[0]
+        n_e2o = c.execute("SELECT COUNT(*) FROM event_object").fetchone()[0]
+        per_type = c.execute(
+            """
+            WITH life AS (
+                SELECT o.obj_type, o.obj_id, COUNT(*) AS n_events,
+                       MAX(e.timestamp_unix) - MIN(e.timestamp_unix) AS span
+                FROM objects o
+                JOIN event_object eo ON eo.obj_id = o.obj_id
+                JOIN events e ON e.event_id = eo.event_id
+                GROUP BY 1, 2
+            )
+            SELECT t.obj_type, t.n,
+                   AVG(l.n_events), MEDIAN(l.span), MAX(l.span)
+            FROM (SELECT obj_type, COUNT(*) AS n FROM objects GROUP BY 1) t
+            LEFT JOIN life l ON l.obj_type = t.obj_type
+            GROUP BY t.obj_type, t.n
+            ORDER BY t.n DESC
+            """
+        ).fetchall()
+        top_acts = c.execute(
+            "SELECT activity, COUNT(*) FROM events GROUP BY 1 ORDER BY 2 DESC LIMIT 15"
+        ).fetchall()
+        schema = describe_schema(c)
+
+    return {
+        **_log_label(log),
+        "events": n_events,
+        "activities": n_acts,
+        "objects": n_objects,
+        "event_object_links": n_e2o,
+        "time_range": {"start": _iso(t_min), "end": _iso(t_max), "span": _duration((t_max or 0) - (t_min or 0))},
+        "object_types": [
+            {
+                "object_type": t,
+                "objects": n,
+                "avg_events_per_object": round(avg or 0, 2),
+                "median_lifecycle": _duration(med),
+                "max_lifecycle": _duration(mx),
+            }
+            for t, n, avg, med, mx in per_type
+        ],
+        "most_frequent_activities": [{"activity": a, "events": k} for a, k in top_acts],
+        "schema": schema,
+        "timestamp_unit": "timestamp_unix is seconds since the Unix epoch (UTC)",
+    }
+
+
+def get_activity_stats(ctx: ToolContext, args: Dict[str, Any]) -> Dict[str, Any]:
+    log = _resolve_log(ctx, args)
+    limit = int(args.get("limit", 50))
+    with _ocel(log) as db:
+        c = db.conn
+        otype = _check_object_type(c, args.get("object_type"))
+        where = "WHERE e.event_id IN (SELECT eo.event_id FROM event_object eo JOIN objects o ON o.obj_id = eo.obj_id WHERE o.obj_type = ?)" if otype else ""
+        params = [otype] if otype else []
+        rows = c.execute(
+            f"""
+            WITH per_event AS (
+                SELECT e.event_id, e.activity, e.timestamp_unix, COUNT(eo.obj_id) AS n_obj
+                FROM events e LEFT JOIN event_object eo ON eo.event_id = e.event_id
+                {where}
+                GROUP BY 1, 2, 3
+            )
+            SELECT activity, COUNT(*), MIN(timestamp_unix), MAX(timestamp_unix), AVG(n_obj)
+            FROM per_event GROUP BY 1 ORDER BY 2 DESC LIMIT ?
+            """,
+            params + [limit],
+        ).fetchall()
+        types_per_activity = dict(
+            (a, ts)
+            for a, ts in c.execute(
+                """
+                SELECT e.activity, LIST(DISTINCT o.obj_type ORDER BY o.obj_type)
+                FROM events e JOIN event_object eo ON eo.event_id = e.event_id
+                JOIN objects o ON o.obj_id = eo.obj_id GROUP BY 1
+                """
+            ).fetchall()
+        )
+    total = sum(r[1] for r in rows) or 1
+    return {
+        **_log_label(log),
+        "object_type_filter": otype,
+        "activities": [
+            {
+                "activity": a,
+                "events": n,
+                "share_pct": round(100.0 * n / total, 1),
+                "first": _iso(t0),
+                "last": _iso(t1),
+                "avg_objects_per_event": round(avg or 0, 2),
+                "object_types": types_per_activity.get(a, []),
+            }
+            for a, n, t0, t1, avg in rows
+        ],
+    }
+
+
+def get_directly_follows(ctx: ToolContext, args: Dict[str, Any]) -> Dict[str, Any]:
+    log = _resolve_log(ctx, args)
+    limit = int(args.get("limit", 40))
+    with _ocel(log) as db:
+        c = db.conn
+        otype = _check_object_type(c, args.get("object_type"))
+        if otype is None:
+            raise ToolError(
+                "object_type is required: directly-follows relations are computed per object type.",
+                code="INVALID_ARGUMENT",
+                hint=f"Object types in this log: {', '.join(_object_type_names(c))}.",
+            )
+        base = """
+            WITH oe AS (
+                SELECT eo.obj_id, e.event_id, e.activity, e.timestamp_unix AS ts
+                FROM event_object eo
+                JOIN events e ON e.event_id = eo.event_id
+                JOIN objects o ON o.obj_id = eo.obj_id
+                WHERE o.obj_type = ?
+            ), seq AS (
+                SELECT obj_id, activity, ts,
+                       LEAD(activity) OVER w AS nxt, LEAD(ts) OVER w AS nxt_ts,
+                       ROW_NUMBER() OVER w AS pos,
+                       COUNT(*) OVER (PARTITION BY obj_id) AS len
+                FROM oe WINDOW w AS (PARTITION BY obj_id ORDER BY ts, event_id)
+            )
+        """
+        edges = c.execute(
+            base
+            + """
+            SELECT activity, nxt, COUNT(*), MEDIAN(nxt_ts - ts), AVG(nxt_ts - ts), MAX(nxt_ts - ts)
+            FROM seq WHERE nxt IS NOT NULL GROUP BY 1, 2 ORDER BY 3 DESC LIMIT ?
+            """,
+            [otype, limit],
+        ).fetchall()
+        starts = c.execute(
+            base + "SELECT activity, COUNT(*) FROM seq WHERE pos = 1 GROUP BY 1 ORDER BY 2 DESC LIMIT 10",
+            [otype],
+        ).fetchall()
+        ends = c.execute(
+            base + "SELECT activity, COUNT(*) FROM seq WHERE pos = len GROUP BY 1 ORDER BY 2 DESC LIMIT 10",
+            [otype],
+        ).fetchall()
+    return {
+        **_log_label(log),
+        "object_type": otype,
+        "edges": [
+            {
+                "from": a,
+                "to": b,
+                "frequency": n,
+                "median_wait": _duration(med),
+                "mean_wait": _duration(mean),
+                "max_wait": _duration(mx),
+                "median_wait_seconds": med,
+            }
+            for a, b, n, med, mean, mx in edges
+        ],
+        "start_activities": [{"activity": a, "objects": n} for a, n in starts],
+        "end_activities": [{"activity": a, "objects": n} for a, n in ends],
+    }
+
+
+def query_event_log(ctx: ToolContext, args: Dict[str, Any]) -> Dict[str, Any]:
+    log = _resolve_log(ctx, args)
+    max_rows = min(int(args.get("max_rows", 100)), 200)
+    with _ocel(log) as db:
+        try:
+            result = run_select(db.conn, args["sql"], max_rows=max_rows)
+        except SqlRejected as exc:
+            raise ToolError(
+                str(exc),
+                code="SQL_REJECTED",
+                hint="Use a single SELECT over events, event_object, objects, object_attribute_history, object_relations.",
+            )
+    return {**_log_label(log), **result}
+
+
+def find_variants_tool(ctx: ToolContext, args: Dict[str, Any]) -> Dict[str, Any]:
+    from totem_lib.variants import find_variants
+
+    log = _resolve_log(ctx, args)
+    extraction = args.get("extraction", "leading_1hop")
+    top_k = int(args.get("top_k", 10))
+    timeout_s = float(args.get("timeout_s", 20))
+    with _ocel(log) as db:
+        types = _object_type_names(db.conn)
+        leading = args.get("leading_object_type")
+        if extraction.startswith("leading"):
+            if leading is None:
+                raise ToolError(
+                    "leading_object_type is required for leading-type extraction.",
+                    code="INVALID_ARGUMENT",
+                    hint=f"Object types in this log: {', '.join(types)}. Pick the case notion the user cares about.",
+                )
+            _check_object_type(db.conn, leading)
+        else:
+            leading = None
+        try:
+            mined = find_variants(
+                db, extraction=extraction, leading_type=leading, iso="wl+vf2", timeout_s=timeout_s, verbose=False
+            )
+        except TimeoutError:
+            raise ToolError(
+                f"Variant mining did not finish within {timeout_s:.0f}s.",
+                code="TIMEOUT",
+                hint="Retry with extraction='leading_1hop' or a different leading_object_type.",
+            )
+
+    variants = sorted(mined, key=lambda v: v.support, reverse=True)
+    total = sum(v.support for v in variants) or 1
+    out = []
+    for rank, var in enumerate(variants[:top_k], 1):
+        nodes = sorted(var.graph.nodes(data=True), key=lambda x: x[1].get("timestamp", 0))
+        activities = [d.get("label", "") for _, d in nodes]
+        types_in = sorted({t for _, d in nodes for t in (d.get("types") or [])})
+        out.append(
+            {
+                "rank": rank,
+                "cases": var.support,
+                "share_pct": round(100.0 * var.support / total, 1),
+                "events": len(activities),
+                "activity_sequence": activities[:40] + (["..."] if len(activities) > 40 else []),
+                "object_types": types_in,
+            }
+        )
+    return {
+        **_log_label(log),
+        "extraction": extraction,
+        "leading_object_type": leading,
+        "total_cases": total,
+        "distinct_variants": len(variants),
+        "top_variants": out,
+        "coverage_of_top_pct": round(100.0 * sum(v["cases"] for v in out) / total, 1),
+    }
+
+
+def discover_totem(ctx: ToolContext, args: Dict[str, Any]) -> Dict[str, Any]:
+    from totem_lib.totem import totem_to_dict, totemDiscovery_db
+
+    log = _resolve_log(ctx, args)
+    tau = float(args.get("tau", 0.9))
+    with _ocel(log) as db:
+        try:
+            model = totem_to_dict(totemDiscovery_db(db, tau=tau))
+        except Exception as exc:
+            raise ToolError(f"TOTeM discovery failed: {exc}", code="EXECUTION_ERROR")
+    tg = model.get("tempgraph", {})
+
+    def pairs(key):
+        return [list(p) for p in tg.get(key, [])]
+
+    return {
+        **_log_label(log),
+        "tau": tau,
+        "object_types": tg.get("nodes", []),
+        "temporal_relations": {
+            "dependent (D, drawn as 'during')": pairs("D"),
+            "dependent_inverse (Di)": pairs("Di"),
+            "initiating (I, drawn as 'precedes')": pairs("I"),
+            "initiating_inverse (Ii)": pairs("Ii"),
+            "parallel (P)": pairs("P"),
+        },
+        "cardinalities": model.get("cardinalities", []),
+        "activities_per_object_type": model.get("object_type_to_event_types", {}),
+    }
+
+
+def discover_occn(ctx: ToolContext, args: Dict[str, Any]) -> Dict[str, Any]:
+    from totem_lib import discover_occn as _discover, serialize_occn
+
+    log = _resolve_log(ctx, args)
+    threshold = float(args.get("threshold", 0.0))
+    object_types = args.get("object_types") or None
+    with _ocel(log) as db:
+        for t in object_types or []:
+            _check_object_type(db.conn, t)
+        try:
+            base = _discover(db, relativeOccuranceThreshold=0.0, parameters={"object_types": object_types} if object_types else {})
+            occn = base.apply_relative_occurrence_threshold(threshold) if threshold > 0 else base
+            data = serialize_occn(occn)
+        except Exception as exc:
+            raise ToolError(f"OCCN discovery failed: {exc}", code="EXECUTION_ERROR")
+    edges = sorted(data.get("edges", []), key=lambda e: -float(e.get("dependence_measure") or 0))
+    return {
+        **_log_label(log),
+        "threshold": threshold,
+        "object_types": data.get("object_types", []),
+        "activities": sorted(data.get("activities", []), key=lambda a: -int(a.get("count") or 0)),
+        "edge_count": len(edges),
+        "edges": [
+            {
+                "from": e.get("source"),
+                "to": e.get("target"),
+                "object_type": e.get("object_type"),
+                "dependence": round(float(e.get("dependence_measure") or 0), 3),
+            }
+            for e in edges[:80]
+        ],
+        "edges_truncated": len(edges) > 80,
+        "input_binding_groups": {k: len(v) for k, v in (data.get("input_marker_groups") or {}).items()},
+        "output_binding_groups": {k: len(v) for k, v in (data.get("output_marker_groups") or {}).items()},
+    }
+
+
+def discover_process_areas(ctx: ToolContext, args: Dict[str, Any]) -> Dict[str, Any]:
+    from api.views import _serialize_mlpa
+    from totem_lib.totem import mlpaDiscovery, totemDiscovery_db
+
+    log = _resolve_log(ctx, args)
+    with _ocel(log) as db:
+        try:
+            totem = totemDiscovery_db(db)
+            data = _serialize_mlpa(mlpaDiscovery(totem), totem)
+        except Exception as exc:
+            raise ToolError(
+                f"Process-area (MLPA) discovery failed: {exc}",
+                code="EXECUTION_ERROR",
+                hint="This algorithm needs the CBC linear-programming solver on the server.",
+            )
+    return {**_log_label(log), "process_areas": data}
+
+
+def list_dashboards(ctx: ToolContext, args: Dict[str, Any]) -> Dict[str, Any]:
+    user = _require_user(ctx)
+    project_id = args.get("project_id", ctx.project_id)
+    dashboards = DashboardService.list_dashboards(user=user, project_id=project_id)
+    return {
+        "project_id": project_id,
+        "dashboards": [
+            {"dashboard_id": d["id"], "name": d["name"], "components": d["component_count"], "open_in_ui": d["id"] == ctx.dashboard_id}
+            for d in dashboards
+        ],
+    }
+
+
+def get_dashboard(ctx: ToolContext, args: Dict[str, Any]) -> Dict[str, Any]:
+    user = _require_user(ctx)
+    dashboard_id = args.get("dashboard_id", ctx.dashboard_id)
+    if dashboard_id is None:
+        raise ToolError("No dashboard is open and no dashboard_id was given.", code="INVALID_ARGUMENT", hint="Call list_dashboards.")
+    try:
+        d = DashboardService.get_dashboard(user, int(dashboard_id))
+    except PermissionError as exc:
+        raise ToolError(str(exc), code="NOT_FOUND")
+    keep = {"id", "component_name", "x", "y", "w", "h", "text", "file_id", "leading_object_type", "object_types"}
+    return {
+        "dashboard_id": d["id"],
+        "name": d["name"],
+        "project_id": d["project_id"],
+        "components": [
+            {("component_id" if k == "id" else k): v for k, v in comp.items() if k in keep}
+            for comp in d.get("components", [])
+        ],
+    }
+
+
+def list_assets(ctx: ToolContext, args: Dict[str, Any]) -> Dict[str, Any]:
+    user = _require_user(ctx)
+    qs = ProjectAsset.objects.filter(project__users=user)
+    project_id = args.get("project_id", ctx.project_id)
+    if project_id is not None:
+        qs = qs.filter(project_id=project_id)
+    if args.get("asset_type"):
+        qs = qs.filter(asset_type=args["asset_type"])
+    return {
+        "assets": [
+            {"asset_id": a.id, "name": a.name, "asset_type": a.asset_type, "project_id": a.project_id}
+            for a in qs.order_by("-id")[:100]
+        ]
+    }
+
+
+# -----------------------------------------------------------------------------
+# Proposed (approval-gated) dashboard changes
+# -----------------------------------------------------------------------------
+
+COMPONENT_CATALOG: Dict[str, str] = {
+    "LogStatisticsComponent": "KPI header: number of events, activities, objects, object types (good at w=12,h=2).",
+    "NewOCDFGComponent": "Object-centric directly-follows graph (process map).",
+    "VariantsComponent": "Process variants explorer. props: leading_object_type, extraction.",
+    "OCDottedChartComponent": "Dotted chart of events over time. props: file_id, x_axis, y_axis, color_by.",
+    "OCCNComponent": "Object-centric causal net. props: relative_occurrence_threshold, object_types.",
+    "ProcessAreaComponent": "TOTeM process areas (multi-level process architecture).",
+    "OCPNComponent": "Object-centric Petri net.",
+    "NumberofEventsComponent": "Single number: event count. props: color.",
+    "TextBoxComponent": "Markdown/text note. props: text, font_size.",
+    "ImageComponent": "Static image. props: image.",
+}
+
+_CATALOG_TEXT = "; ".join(f"{k}: {v}" for k, v in COMPONENT_CATALOG.items())
+
+_COMPONENT_ITEM = _obj(
+    {
+        "component_name": {"type": "string", "enum": list(COMPONENT_CATALOG)},
+        "x": {"type": "integer", "minimum": 0, "maximum": 11, "description": "Grid column (12 columns)."},
+        "y": {"type": "integer", "minimum": 0},
+        "w": {"type": "integer", "minimum": 1, "maximum": 12},
+        "h": {"type": "integer", "minimum": 1, "maximum": 20},
+        "props": {"type": "object", "description": "Component-specific settings."},
+    },
+    ["component_name"],
 )
-from totem_lib import discover_occn, serialize_occn
-from totem_lib.oc_dotted_chart import get_oc_dotted_chart_data
-from totem_lib.totem import mlpaDiscovery, totemDiscovery_db, totem_to_dict
-from totem_lib.variants import find_variants
-from totem_lib.variants.ocvariants import calculate_layout
-from .policy import ToolCategory, get_category
 
 
-TOOL_SPECS: List[Dict[str, Any]] = [
-    # -------------------------------------------------------------------------
-    # 1. get_statistics (Read-Only)
-    # -------------------------------------------------------------------------
-    {
-        "name": "get_statistics",
-        "description": "Get overall event log statistics (events, activities, objects, object types, time range).",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "file_id": {
-                    "type": "integer",
-                    "description": "Optional event log file ID. Defaults to active file."
-                }
+def _dashboard_project(ctx: ToolContext, args: Dict[str, Any]) -> Optional[int]:
+    if args.get("project_id") is not None:
+        return int(args["project_id"])
+    if ctx.project_id is not None:
+        return int(ctx.project_id)
+    if ctx.active_file_id is not None:
+        log = EventLog.objects.filter(id=ctx.active_file_id, project__users=ctx.user).first()
+        if log:
+            return log.project_id
+    return None
+
+
+def _service_call(fn, *a, **kw):
+    try:
+        return fn(*a, **kw)
+    except (PermissionError, ValueError) as exc:
+        raise ToolError(str(exc), code="REJECTED")
+
+
+def create_dashboard(ctx: ToolContext, args: Dict[str, Any]) -> Dict[str, Any]:
+    user = _require_user(ctx)
+    layout = []
+    for item in args.get("components") or []:
+        entry = dict(item)
+        props = dict(entry.pop("props", None) or {})
+        if entry["component_name"] == "OCDottedChartComponent" and "file_id" not in props and ctx.active_file_id:
+            props["file_id"] = ctx.active_file_id
+        layout.append({**{"x": 0, "y": 0, "w": 6, "h": 6}, **entry, "props": props})
+    d = _service_call(
+        DashboardService.create_dashboard,
+        user=user,
+        title=args["name"],
+        project_id=_dashboard_project(ctx, args),
+        layout=layout,
+    )
+    return {"dashboard_id": d["id"], "name": d["name"], "components": len(d.get("components", []))}
+
+
+def add_component(ctx: ToolContext, args: Dict[str, Any]) -> Dict[str, Any]:
+    user = _require_user(ctx)
+    props = dict(args.get("props") or {})
+    if args["component_name"] == "OCDottedChartComponent" and "file_id" not in props and ctx.active_file_id:
+        props["file_id"] = ctx.active_file_id
+    comp = _service_call(
+        DashboardService.add_component,
+        user=user,
+        dashboard_id=int(args["dashboard_id"]),
+        component_type=args["component_name"],
+        config=props,
+        position={k: args.get(k, d) for k, d in (("x", 0), ("y", 0), ("w", 6), ("h", 6))},
+    )
+    return {"dashboard_id": int(args["dashboard_id"]), "component_id": comp.get("id"), "component_name": comp.get("component_name")}
+
+
+def update_component(ctx: ToolContext, args: Dict[str, Any]) -> Dict[str, Any]:
+    user = _require_user(ctx)
+    position = {k: args[k] for k in ("x", "y", "w", "h") if k in args} or None
+    comp = _service_call(
+        DashboardService.update_component,
+        user=user,
+        dashboard_id=args.get("dashboard_id"),
+        component_id=int(args["component_id"]),
+        config=args.get("props"),
+        position=position,
+    )
+    return {"component_id": comp.get("id", args["component_id"]), "updated": True}
+
+
+def remove_component(ctx: ToolContext, args: Dict[str, Any]) -> Dict[str, Any]:
+    user = _require_user(ctx)
+    return _service_call(
+        DashboardService.remove_component,
+        user=user,
+        dashboard_id=args.get("dashboard_id"),
+        component_id=int(args["component_id"]),
+    )
+
+
+def rename_dashboard(ctx: ToolContext, args: Dict[str, Any]) -> Dict[str, Any]:
+    user = _require_user(ctx)
+    d = _service_call(DashboardService.rename_dashboard, user=user, dashboard_id=int(args["dashboard_id"]), title=args["name"])
+    return {"dashboard_id": d.get("id", args["dashboard_id"]), "name": d.get("name", args["name"])}
+
+
+def delete_dashboard(ctx: ToolContext, args: Dict[str, Any]) -> Dict[str, Any]:
+    user = _require_user(ctx)
+    return _service_call(DashboardService.delete_dashboard, user=user, dashboard_id=int(args["dashboard_id"]))
+
+
+# -----------------------------------------------------------------------------
+# Catalog
+# -----------------------------------------------------------------------------
+
+VIEWS = ["overview", "analysis", "conformance", "playout", "editor", "model_assets", "dashboard"]
+ANALYSIS_COMPONENTS = ["ocdfg", "variants", "dotted_chart", "occn", "process_area"]
+
+TOOLS: List[Tool] = [
+    Tool(
+        "list_event_logs",
+        "List the event logs (OCEL files) the user can access, with ids, file names and projects. "
+        "Use it to resolve which log the user means or when no log is selected.",
+        _obj({}),
+        ToolKind.READ,
+        list_event_logs,
+        describe=lambda a: "Listing event logs",
+    ),
+    Tool(
+        "get_log_overview",
+        "Summary of one event log: event/object/activity counts, time range, per-object-type counts and "
+        "lifecycle durations, most frequent activities, and the table schema for query_event_log. "
+        "Call this first when you need facts about a log.",
+        _obj({"file_id": _FILE_ID}),
+        ToolKind.READ,
+        get_log_overview,
+        describe=lambda a: "Reading log overview",
+    ),
+    Tool(
+        "get_activity_stats",
+        "Per-activity frequencies with share, first/last occurrence, average objects per event and the "
+        "object types involved. Optionally restricted to events touching one object type.",
+        _obj(
+            {
+                "file_id": _FILE_ID,
+                "object_type": {"type": "string", "description": "Only count events linked to this object type."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50},
+            }
+        ),
+        ToolKind.READ,
+        get_activity_stats,
+        describe=lambda a: "Computing activity statistics",
+    ),
+    Tool(
+        "get_directly_follows",
+        "Directly-follows relations for one object type: for each pair of consecutive activities in an "
+        "object's lifecycle, the frequency and the median/mean/max waiting time between them, plus start and "
+        "end activities. Use it for flow, rework and bottleneck questions.",
+        _obj(
+            {
+                "file_id": _FILE_ID,
+                "object_type": {"type": "string"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 40},
             },
-            "required": []
-        }
-    },
-    # -------------------------------------------------------------------------
-    # 2. get_object_types (Read-Only)
-    # -------------------------------------------------------------------------
-    {
-        "name": "get_object_types",
-        "description": "Retrieve the list of distinct object types present in the event log.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "file_id": {
-                    "type": "integer",
-                    "description": "Optional event log file ID."
-                }
+            ["object_type"],
+        ),
+        ToolKind.READ,
+        get_directly_follows,
+        describe=lambda a: f"Computing directly-follows for {a.get('object_type', '')}",
+    ),
+    Tool(
+        "query_event_log",
+        "Run one read-only DuckDB SELECT over the event log for questions the other tools don't answer. "
+        "Tables: events(event_id, activity, timestamp_unix BIGINT seconds UTC, ...attributes), "
+        "event_object(event_id, obj_id, qualifier), objects(obj_id, obj_type, ...attributes), "
+        "object_attribute_history(obj_id, timestamp_unix, ...), object_relations(source_obj_id, target_obj_id, qualifier). "
+        "Attribute columns differ per log; get_log_overview lists them. Aggregate in SQL; at most 200 rows come back.",
+        _obj(
+            {
+                "file_id": _FILE_ID,
+                "sql": {"type": "string", "description": "A single SELECT statement (CTEs allowed)."},
+                "max_rows": {"type": "integer", "minimum": 1, "maximum": 200, "default": 100},
             },
-            "required": []
-        }
-    },
-    # -------------------------------------------------------------------------
-    # 3. discover_totem (Read-Only)
-    # -------------------------------------------------------------------------
-    {
-        "name": "discover_totem",
-        "description": "Discover a TOTeM model graph with given thresholds and options.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "file_id": {
-                    "type": "integer",
-                    "description": "Event log file ID."
-                },
-                "dfg_threshold": {
-                    "type": "number",
-                    "description": "Directly-follows graph filtering threshold (0.0 to 1.0).",
-                    "default": 0.0
-                },
-                "act_threshold": {
-                    "type": "number",
-                    "description": "Activity frequency filtering threshold (0.0 to 1.0).",
-                    "default": 0.0
-                },
-                "leading_type": {
-                    "type": "string",
-                    "description": "Leading object type for discovery."
-                }
+            ["sql"],
+        ),
+        ToolKind.READ,
+        query_event_log,
+        describe=lambda a: "Querying the event log",
+    ),
+    Tool(
+        "find_variants",
+        "Mine object-centric process variants (distinct execution graphs) and return the most frequent ones "
+        "with case counts, share and activity sequence. Can take several seconds on large logs.",
+        _obj(
+            {
+                "file_id": _FILE_ID,
+                "leading_object_type": {"type": "string", "description": "Case notion; required for leading_* extraction."},
+                "extraction": {"type": "string", "enum": ["leading_1hop", "leading_bfs", "connected"], "default": "leading_1hop"},
+                "top_k": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10},
+                "timeout_s": {"type": "number", "minimum": 1, "maximum": 60, "default": 20},
+            }
+        ),
+        ToolKind.READ,
+        find_variants_tool,
+        describe=lambda a: f"Mining variants ({a.get('leading_object_type') or a.get('extraction', 'connected')})",
+    ),
+    Tool(
+        "discover_totem",
+        "Discover the TOTeM model: temporal relations between object types (during / initiating / parallel), "
+        "log and event cardinalities between object types, and the activities of each object type.",
+        _obj({"file_id": _FILE_ID, "tau": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.9}}),
+        ToolKind.READ,
+        discover_totem,
+        describe=lambda a: "Discovering the TOTeM model",
+    ),
+    Tool(
+        "discover_occn",
+        "Discover the object-centric causal net (OCCN): activity counts, the strongest causal dependencies "
+        "per object type, and binding group sizes. Slower on large logs.",
+        _obj(
+            {
+                "file_id": _FILE_ID,
+                "threshold": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.0},
+                "object_types": {"type": "array", "items": {"type": "string"}},
+            }
+        ),
+        ToolKind.READ,
+        discover_occn,
+        describe=lambda a: "Discovering the causal net",
+    ),
+    Tool(
+        "discover_process_areas",
+        "Discover TOTeM process areas (multi-level process architecture): object types grouped into levels.",
+        _obj({"file_id": _FILE_ID}),
+        ToolKind.READ,
+        discover_process_areas,
+        describe=lambda a: "Discovering process areas",
+    ),
+    Tool(
+        "list_dashboards",
+        "List dashboards of the current project (or a given project) with ids and component counts.",
+        _obj({"project_id": {"type": "integer"}}),
+        ToolKind.READ,
+        list_dashboards,
+        describe=lambda a: "Listing dashboards",
+    ),
+    Tool(
+        "get_dashboard",
+        "Components of one dashboard (ids, types, grid positions). Needed before updating or removing components.",
+        _obj({"dashboard_id": {"type": "integer", "description": "Defaults to the dashboard open in the UI."}}),
+        ToolKind.READ,
+        get_dashboard,
+        describe=lambda a: "Reading dashboard",
+    ),
+    Tool(
+        "list_assets",
+        "List saved model assets (TOTeM / OCCN models) of the project.",
+        _obj({"project_id": {"type": "integer"}, "asset_type": {"type": "string", "enum": ["TOTEM", "OCCN"]}}),
+        ToolKind.READ,
+        list_assets,
+        describe=lambda a: "Listing model assets",
+    ),
+    # --- approval-gated changes (act mode only) -------------------------------
+    Tool(
+        "create_dashboard",
+        "Propose creating a dashboard with initial components on a 12-column grid. The user must approve "
+        "before it is created. Components: " + _CATALOG_TEXT,
+        _obj(
+            {
+                "name": {"type": "string", "minLength": 1, "maxLength": 30},
+                "components": {"type": "array", "items": _COMPONENT_ITEM, "maxItems": 12},
+                "project_id": {"type": "integer"},
             },
-            "required": []
-        }
-    },
-    # -------------------------------------------------------------------------
-    # 4. discover_occn (Read-Only)
-    # -------------------------------------------------------------------------
-    {
-        "name": "discover_occn",
-        "description": "Discover an Object-Centric C-Net (OCCN) process model from an event log.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "file_id": {
-                    "type": "integer",
-                    "description": "Event log file ID."
-                },
-                "threshold": {
-                    "type": "number",
-                    "description": "Occurrence threshold for relations (0.0 to 1.0).",
-                    "default": 0.0
-                },
-                "object_types": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "List of object types to include."
-                }
+            ["name"],
+        ),
+        ToolKind.PROPOSE,
+        create_dashboard,
+        modes=frozenset({"act"}),
+        describe=lambda a: f"Create dashboard \"{a.get('name', '')}\" with {len(a.get('components') or [])} components",
+    ),
+    Tool(
+        "add_component",
+        "Propose adding one component to a dashboard (user approval required). Components: " + _CATALOG_TEXT,
+        _obj(
+            {
+                "dashboard_id": {"type": "integer"},
+                "component_name": {"type": "string", "enum": list(COMPONENT_CATALOG)},
+                "x": {"type": "integer", "minimum": 0, "maximum": 11},
+                "y": {"type": "integer", "minimum": 0},
+                "w": {"type": "integer", "minimum": 1, "maximum": 12},
+                "h": {"type": "integer", "minimum": 1, "maximum": 20},
+                "props": {"type": "object"},
             },
-            "required": []
-        }
-    },
-    # -------------------------------------------------------------------------
-    # 5. discover_mlpa (Read-Only)
-    # -------------------------------------------------------------------------
-    {
-        "name": "discover_mlpa",
-        "description": "Discover multi-level process architecture / process areas.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "file_id": {
-                    "type": "integer",
-                    "description": "Event log file ID."
-                },
-                "threshold": {
-                    "type": "number",
-                    "description": "Clustering threshold (0.0 to 1.0).",
-                    "default": 0.5
-                }
+            ["dashboard_id", "component_name"],
+        ),
+        ToolKind.PROPOSE,
+        add_component,
+        modes=frozenset({"act"}),
+        describe=lambda a: f"Add {a.get('component_name', 'component')} to dashboard {a.get('dashboard_id')}",
+    ),
+    Tool(
+        "update_component",
+        "Propose moving/resizing a component or changing its settings (user approval required).",
+        _obj(
+            {
+                "component_id": {"type": "integer"},
+                "dashboard_id": {"type": "integer"},
+                "x": {"type": "integer", "minimum": 0, "maximum": 11},
+                "y": {"type": "integer", "minimum": 0},
+                "w": {"type": "integer", "minimum": 1, "maximum": 12},
+                "h": {"type": "integer", "minimum": 1, "maximum": 20},
+                "props": {"type": "object"},
             },
-            "required": []
-        }
-    },
-    # -------------------------------------------------------------------------
-    # 6. find_variants (Read-Only)
-    # -------------------------------------------------------------------------
-    {
-        "name": "find_variants",
-        "description": "Extract and cluster execution trace variants from the event log.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "file_id": {
-                    "type": "integer",
-                    "description": "Event log file ID."
-                },
-                "leading_object_type": {
-                    "type": "string",
-                    "description": "Leading object type."
-                },
-                "extraction": {
-                    "type": "string",
-                    "description": "Extraction method (e.g. leading_1hop, leading_bfs, connected).",
-                    "default": "leading_1hop"
-                },
-                "iso": {
-                    "type": "string",
-                    "description": "Isomorphism checking algorithm (e.g. wl+vf2, trace, db_signature).",
-                    "default": "wl+vf2"
-                },
-                "timeout_s": {
-                    "type": "number",
-                    "description": "Timeout in seconds.",
-                    "default": 10.0
-                }
+            ["component_id"],
+        ),
+        ToolKind.PROPOSE,
+        update_component,
+        modes=frozenset({"act"}),
+        describe=lambda a: f"Update component {a.get('component_id')}",
+    ),
+    Tool(
+        "remove_component",
+        "Propose removing a component from a dashboard (user approval required).",
+        _obj({"component_id": {"type": "integer"}, "dashboard_id": {"type": "integer"}}, ["component_id"]),
+        ToolKind.PROPOSE,
+        remove_component,
+        modes=frozenset({"act"}),
+        describe=lambda a: f"Remove component {a.get('component_id')}",
+    ),
+    Tool(
+        "rename_dashboard",
+        "Propose renaming a dashboard (user approval required).",
+        _obj({"dashboard_id": {"type": "integer"}, "name": {"type": "string", "minLength": 1, "maxLength": 30}}, ["dashboard_id", "name"]),
+        ToolKind.PROPOSE,
+        rename_dashboard,
+        modes=frozenset({"act"}),
+        describe=lambda a: f"Rename dashboard {a.get('dashboard_id')} to \"{a.get('name', '')}\"",
+    ),
+    Tool(
+        "delete_dashboard",
+        "Propose deleting a dashboard and all its components (user approval required; cannot be undone).",
+        _obj({"dashboard_id": {"type": "integer"}}, ["dashboard_id"]),
+        ToolKind.PROPOSE,
+        delete_dashboard,
+        modes=frozenset({"act"}),
+        describe=lambda a: f"Delete dashboard {a.get('dashboard_id')}",
+    ),
+    # --- browser-side actions --------------------------------------------------
+    Tool(
+        "open_view",
+        "Switch the app to a view so the user can see it: overview, analysis (with component ocdfg / variants / "
+        "dotted_chart / occn / process_area), conformance (component totem / occn), playout, editor, model_assets, "
+        "or dashboard (with dashboard_id). Runs immediately in the user's browser. It only switches the view: it "
+        "cannot preselect object types, filters or other settings inside it, so tell the user what to pick there.",
+        _obj(
+            {
+                "view": {"type": "string", "enum": VIEWS},
+                "component": {"type": "string", "enum": ANALYSIS_COMPONENTS + ["totem", "ocpn"]},
+                "dashboard_id": {"type": "integer"},
             },
-            "required": []
-        }
-    },
-    # -------------------------------------------------------------------------
-    # 7. get_oc_dotted_chart (Read-Only)
-    # -------------------------------------------------------------------------
-    {
-        "name": "get_oc_dotted_chart",
-        "description": "Get OC dotted chart points and metadata for visual time-series inspection.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "file_id": {
-                    "type": "integer",
-                    "description": "Event log file ID."
-                },
-                "x_axis": {"type": "string", "default": "time"},
-                "y_axis": {"type": "string", "default": "activity"},
-                "color_by": {"type": "string", "default": "activity"},
-                "max_points": {"type": "integer", "default": 10000}
-            },
-            "required": []
-        }
-    },
-    # -------------------------------------------------------------------------
-    # 8. get_layout (Read-Only)
-    # -------------------------------------------------------------------------
-    {
-        "name": "get_layout",
-        "description": "Retrieve graph layout coordinates (ELK/Graphviz) for a process model.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "graph_type": {
-                    "type": "string",
-                    "enum": ["ocdfg", "occn", "totem"],
-                    "description": "Type of graph."
-                },
-                "graph_data": {
-                    "type": "object",
-                    "description": "Nodes and edges data."
-                },
-                "direction": {
-                    "type": "string",
-                    "enum": ["TB", "LR"],
-                    "default": "TB"
-                }
-            },
-            "required": ["graph_type"]
-        }
-    },
-    # -------------------------------------------------------------------------
-    # 9. list_dashboards (Read-Only)
-    # -------------------------------------------------------------------------
-    {
-        "name": "list_dashboards",
-        "description": "List all dashboards belonging to the current user/project.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "project_id": {
-                    "type": "integer",
-                    "description": "Optional project ID."
-                },
-                "file_id": {
-                    "type": "integer",
-                    "description": "Optional event log file ID."
-                }
-            },
-            "required": []
-        }
-    },
-    # -------------------------------------------------------------------------
-    # 10. list_assets (Read-Only)
-    # -------------------------------------------------------------------------
-    {
-        "name": "list_assets",
-        "description": "List saved process assets (TOTeM models, OCCN models, playout results).",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "project_id": {
-                    "type": "integer",
-                    "description": "Optional project ID."
-                },
-                "asset_type": {
-                    "type": "string",
-                    "enum": ["TOTEM", "OCCN"],
-                    "description": "Optional asset type filter."
-                }
-            },
-            "required": []
-        }
-    },
-    # -------------------------------------------------------------------------
-    # 11. create_dashboard (Mutating)
-    # -------------------------------------------------------------------------
-    {
-        "name": "create_dashboard",
-        "description": "Create a new dashboard with a specified name and layout.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string",
-                    "description": "Name of the new dashboard."
-                },
-                "project_id": {
-                    "type": "integer",
-                    "description": "Target project ID."
-                },
-                "layout": {
-                    "type": "array",
-                    "items": {"type": "object"},
-                    "description": "Optional list of initial component layouts."
-                }
-            },
-            "required": ["name"]
-        }
-    },
-    # -------------------------------------------------------------------------
-    # 12. add_component (Mutating)
-    # -------------------------------------------------------------------------
-    {
-        "name": "add_component",
-        "description": "Add a new component/card to an existing dashboard.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "dashboard_id": {
-                    "type": "integer",
-                    "description": "Target dashboard ID."
-                },
-                "component_name": {
-                    "type": "string",
-                    "description": "Component type name (e.g. LogStatisticsComponent, NewOCDFGComponent, VariantsComponent, OCDottedChartComponent, OCCNComponent, TextBoxComponent, OCPNComponent)."
-                },
-                "x": {"type": "integer", "default": 0},
-                "y": {"type": "integer", "default": 0},
-                "w": {"type": "integer", "default": 6},
-                "h": {"type": "integer", "default": 4},
-                "props": {
-                    "type": "object",
-                    "description": "Specific component configuration properties."
-                }
-            },
-            "required": ["dashboard_id", "component_name"]
-        }
-    },
-    # -------------------------------------------------------------------------
-    # 13. remove_component (Mutating)
-    # -------------------------------------------------------------------------
-    {
-        "name": "remove_component",
-        "description": "Remove a component card from a dashboard.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "dashboard_id": {
-                    "type": "integer",
-                    "description": "Dashboard ID."
-                },
-                "component_id": {
-                    "type": "integer",
-                    "description": "Component ID to remove."
-                }
-            },
-            "required": ["component_id"]
-        }
-    },
-    # -------------------------------------------------------------------------
-    # 14. update_component (Mutating)
-    # -------------------------------------------------------------------------
-    {
-        "name": "update_component",
-        "description": "Update geometry or configuration properties of a dashboard component.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "component_id": {
-                    "type": "integer",
-                    "description": "Component ID."
-                },
-                "dashboard_id": {
-                    "type": "integer",
-                    "description": "Optional dashboard ID."
-                },
-                "geometry": {
-                    "type": "object",
-                    "properties": {
-                        "x": {"type": "integer"},
-                        "y": {"type": "integer"},
-                        "w": {"type": "integer"},
-                        "h": {"type": "integer"}
-                    }
-                },
-                "props": {
-                    "type": "object",
-                    "description": "Component-specific properties to update."
-                }
-            },
-            "required": ["component_id"]
-        }
-    },
-    # -------------------------------------------------------------------------
-    # 15. rename_dashboard (Mutating)
-    # -------------------------------------------------------------------------
-    {
-        "name": "rename_dashboard",
-        "description": "Rename an existing dashboard.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "dashboard_id": {
-                    "type": "integer",
-                    "description": "Dashboard ID."
-                },
-                "name": {
-                    "type": "string",
-                    "description": "New dashboard name."
-                }
-            },
-            "required": ["dashboard_id", "name"]
-        }
-    },
-    # -------------------------------------------------------------------------
-    # 16. navigate (Requires Frontend)
-    # -------------------------------------------------------------------------
-    {
-        "name": "navigate",
-        "description": "Navigate the frontend UI to a specific route or view.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "route": {
-                    "type": "string",
-                    "description": "Target frontend path (e.g. '/dashboard', '/overview', '/analysis', '/conformance', '/playout')."
-                }
-            },
-            "required": ["route"]
-        }
-    },
-    # -------------------------------------------------------------------------
-    # 17. set_view_mode (Requires Frontend)
-    # -------------------------------------------------------------------------
-    {
-        "name": "set_view_mode",
-        "description": "Switch the active visualization or tab in the current view.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "mode": {
-                    "type": "string",
-                    "description": "Target view mode (e.g. 'ocdfg', 'occn', 'variants', 'dotted_chart')."
-                }
-            },
-            "required": ["mode"]
-        }
-    },
-    # -------------------------------------------------------------------------
-    # 18. highlight_element (Requires Frontend)
-    # -------------------------------------------------------------------------
-    {
-        "name": "highlight_element",
-        "description": "Trigger Teach Mode spotlight highlight on a DOM element by tour ID, or pass steps for a guided tour.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "tour_id": {
-                    "type": "string",
-                    "description": "The data-tour-id of the target element (for single-step highlights)."
-                },
-                "label": {
-                    "type": "string",
-                    "description": "Explanation text to show in the callout tooltip."
-                },
+            ["view"],
+        ),
+        ToolKind.CLIENT,
+        modes=frozenset({"act"}),
+        describe=lambda a: f"Open {a.get('view')}" + (f" › {a['component']}" if a.get("component") else ""),
+    ),
+    Tool(
+        "start_tour",
+        "Show the user where things are with a guided, step-by-step spotlight tour over UI elements. "
+        "Each step names a tour_id from the catalog in the instructions and a short instruction.",
+        _obj(
+            {
                 "steps": {
                     "type": "array",
-                    "description": "Optional list of multi-step tour items: [{'tour_id': 'nav-overview', 'label': '...'}, ...]",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "tour_id": {"type": "string"},
-                            "label": {"type": "string"}
-                        },
-                        "required": ["tour_id", "label"]
-                    }
+                    "minItems": 1,
+                    "maxItems": 10,
+                    "items": _obj(
+                        {"tour_id": {"type": "string"}, "label": {"type": "string", "maxLength": 200}},
+                        ["tour_id", "label"],
+                    ),
                 }
             },
-            "required": []
-        }
-    }
+            ["steps"],
+        ),
+        ToolKind.CLIENT,
+        describe=lambda a: f"Guided tour ({len(a.get('steps') or [])} steps)",
+    ),
 ]
 
-
-def get_tool_specs() -> List[Dict[str, Any]]:
-    """Return all 18 tool JSON schemas."""
-    return TOOL_SPECS
+TOOLS_BY_NAME: Dict[str, Tool] = {t.name: t for t in TOOLS}
 
 
-# -----------------------------------------------------------------------------
-# Helper Functions
-# -----------------------------------------------------------------------------
+def get_tools(mode: str) -> List[Tool]:
+    """Tools offered in a chat mode, in a stable order (keeps prompt caches warm)."""
+    return [t for t in TOOLS if mode in t.modes]
 
-def _clamp_float(val: Any, min_val: float, max_val: float, default: float = 0.0) -> float:
-    """Clamp float value within [min_val, max_val] safely."""
+
+def get_tool_specs(mode: str = "act") -> List[Dict[str, Any]]:
+    return [t.spec() for t in get_tools(mode)]
+
+
+def validate_arguments(tool: Tool, args: Any) -> Dict[str, Any]:
+    """Validate model-supplied arguments against the tool schema; raise ToolError on mismatch."""
+    if not isinstance(args, dict):
+        raise ToolError("Arguments must be a JSON object.", code="INVALID_ARGUMENT")
     try:
-        if val is None:
-            return default
-        f = float(val)
-        if f < min_val:
-            return min_val
-        if f > max_val:
-            return max_val
-        return f
-    except (ValueError, TypeError):
-        return default
+        jsonschema.validate(args, tool.parameters)
+    except jsonschema.ValidationError as exc:
+        where = "/".join(str(p) for p in exc.absolute_path) or "arguments"
+        raise ToolError(f"Invalid {where}: {exc.message}", code="INVALID_ARGUMENT")
+    return args
 
 
-def _log_meta(log: Any) -> Dict[str, Any]:
-    """Extract human-readable file name and project name alongside file_id."""
-    file_name = None
-    project_name = None
-    if log:
-        if getattr(log, "file", None) and getattr(log.file, "name", None):
-            file_name = os.path.basename(log.file.name)
-        if getattr(log, "project", None) and getattr(log.project, "name", None):
-            project_name = log.project.name
-    return {
-        "file_id": getattr(log, "id", None),
-        "file_name": file_name,
-        "project_name": project_name,
-    }
-
-
-def _resolve_event_log(arguments: dict, user=None, context=None):
-    """
-    Resolve target EventLog from arguments, context, or user projects.
-    Returns (event_log, error_dict).
-    """
-    file_id = arguments.get("file_id") if isinstance(arguments, dict) else None
-    if file_id is None and isinstance(context, dict):
-        file_id = context.get("active_file_id") or context.get("file_id")
-
-    if file_id is None:
-        if user and getattr(user, "is_authenticated", False):
-            log = EventLog.objects.select_related("project").filter(project__users=user).order_by("-uploaded_at", "-id").first()
-            if log:
-                return log, None
-        else:
-            log = EventLog.objects.select_related("project").order_by("-uploaded_at", "-id").first()
-            if log:
-                return log, None
-
-        return None, {
-            "error": "No event log specified and no active or uploaded event logs found.",
-            "code": "MISSING_FILE_ID",
-            "hint": "Provide a file_id parameter or select an active file in the sidebar.",
-        }
-
-    try:
-        file_id_int = int(file_id)
-    except (ValueError, TypeError):
-        return None, {
-            "error": f"Invalid file_id: {file_id}. Must be an integer.",
-            "code": "INVALID_FILE_ID",
-            "hint": "Pass an integer file_id parameter.",
-        }
-
-    if user and getattr(user, "is_authenticated", False):
-        log = EventLog.objects.select_related("project").filter(id=file_id_int, project__users=user).first()
-        if not log:
-            return None, {
-                "error": f"Event log file ID {file_id_int} was not found or is not accessible.",
-                "code": "FILE_NOT_FOUND",
-                "hint": "Check available files using list_dashboards/get_statistics or select an active file.",
-            }
-    else:
-        log = EventLog.objects.select_related("project").filter(id=file_id_int).first()
-        if not log:
-            return None, {
-                "error": f"Event log file ID {file_id_int} was not found.",
-                "code": "FILE_NOT_FOUND",
-                "hint": "Check available files or upload a new event log.",
-            }
-
-    try:
-        file_path = log.file.path if (log.file and hasattr(log.file, "path")) else (str(log.file) if log.file else None)
-    except Exception:
-        file_path = str(log.file) if log.file else None
-
-    if not file_path or not os.path.exists(file_path):
-        return None, {
-            "error": f"Event log file for ID {file_id_int} does not exist on disk.",
-            "code": "FILE_MISSING_ON_DISK",
-            "hint": "Re-upload the event log file.",
-        }
-
-    return log, None
-
-
-# -----------------------------------------------------------------------------
-# Tool Dispatcher
-# -----------------------------------------------------------------------------
-
-def call_tool(name: str, arguments: Optional[dict] = None, user=None, context=None) -> Any:
-    """
-    Execute tool by name with parameter validation, security classification,
-    and structured error handling.
-    """
-    args = arguments if isinstance(arguments, dict) else {}
-    ctx = context if isinstance(context, dict) else {}
-    category = get_category(name)
-
-    # 1. Mutating Tools Guard
-    if category == ToolCategory.MUTATING:
-        is_confirmed = ctx.get("__confirmed__", False) or ctx.get("confirmed", False)
-        if not is_confirmed:
-            raise PermissionError(f"Tool {name} is {category} and requires user confirmation.")
-
-        # Authenticated execution via DashboardService
-        if name == "create_dashboard":
-            title = args.get("name") or args.get("title") or "Process Overview Dashboard"
-            project_id = args.get("project_id") or (context.get("project_id") if context else None)
-            active_file_id = context.get("active_file_id") if context else None
-
-            if not project_id and active_file_id:
-                try:
-                    ev = EventLog.objects.get(id=active_file_id)
-                    if ev.project:
-                        project_id = ev.project.id
-                except EventLog.DoesNotExist:
-                    pass
-
-            layout = args.get("layout")
-            if not layout or not isinstance(layout, list) or len(layout) == 0:
-                layout = [
-                    {"component_name": "LogStatisticsComponent", "x": 0, "y": 0, "w": 12, "h": 2},
-                    {"component_name": "VariantsComponent", "x": 0, "y": 2, "w": 6, "h": 6},
-                    {
-                        "component_name": "OCDottedChartComponent",
-                        "x": 6,
-                        "y": 2,
-                        "w": 6,
-                        "h": 6,
-                        "props": {"file_id": active_file_id} if active_file_id else {},
-                    },
-                    {"component_name": "NewOCDFGComponent", "x": 0, "y": 8, "w": 6, "h": 6},
-                    {"component_name": "OCCNComponent", "x": 6, "y": 8, "w": 6, "h": 6},
-                ]
-
-            return DashboardService.create_dashboard(
-                user=user,
-                title=title,
-                project_id=project_id,
-                layout=layout,
-            )
-
-        elif name == "add_component":
-            pos = args.get("position")
-            if not pos:
-                pos = {
-                    "x": args.get("x", 0),
-                    "y": args.get("y", 0),
-                    "w": args.get("w", 6),
-                    "h": args.get("h", 4),
-                }
-            props = args.get("props") or args.get("config")
-            return DashboardService.add_component(
-                user=user,
-                dashboard_id=args.get("dashboard_id"),
-                component_type=args.get("component_name") or args.get("component_type") or "TextBoxComponent",
-                title=args.get("title", ""),
-                config=props,
-                position=pos,
-            )
-
-        elif name == "remove_component":
-            return DashboardService.remove_component(
-                user=user,
-                dashboard_id=args.get("dashboard_id"),
-                component_id=args.get("component_id"),
-            )
-
-        elif name == "update_component":
-            pos = args.get("geometry") or args.get("position")
-            props = args.get("props") or args.get("config")
-            return DashboardService.update_component(
-                user=user,
-                dashboard_id=args.get("dashboard_id"),
-                component_id=args.get("component_id"),
-                config=props,
-                position=pos,
-            )
-
-        elif name == "rename_dashboard":
-            title = args.get("name") or args.get("title") or ""
-            return DashboardService.rename_dashboard(
-                user=user,
-                dashboard_id=args.get("dashboard_id"),
-                title=title,
-            )
-
-    # 2. Frontend Live-Wire Tools
-    if category == ToolCategory.REQUIRES_FRONTEND:
-        return {
-            "status": "dispatched_to_frontend",
-            "action": name,
-            "tool": name,
-            "arguments": args,
-        }
-
-    # 3. Read-Only Process Mining & Asset Query Tools
-    if name == "get_statistics":
-        log, err = _resolve_event_log(args, user=user, context=ctx)
-        if err:
-            return err
-        try:
-            with _with_ocel_db(log) as db:
-                num_events = db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-                num_unique_activities = db.conn.execute(
-                    "SELECT COUNT(DISTINCT activity) FROM events"
-                ).fetchone()[0]
-                num_objects = db.conn.execute("SELECT COUNT(*) FROM objects").fetchone()[0]
-                num_object_types = db.conn.execute(
-                    "SELECT COUNT(DISTINCT obj_type) FROM objects"
-                ).fetchone()[0]
-                ts_row = db.conn.execute(
-                    "SELECT MIN(timestamp_unix), MAX(timestamp_unix) FROM events"
-                ).fetchone()
-            earliest_timestamp, newest_timestamp = ts_row if ts_row else (None, None)
-            duration_seconds = (
-                (newest_timestamp - earliest_timestamp)
-                if earliest_timestamp is not None and newest_timestamp is not None
-                else 0
-            )
-            meta = _log_meta(log)
-            return {
-                "file_id": meta["file_id"],
-                "file_name": meta["file_name"],
-                "project_name": meta["project_name"],
-                "num_events": num_events,
-                "num_unique_activities": num_unique_activities,
-                "num_objects": num_objects,
-                "num_object_types": num_object_types,
-                "earliest_timestamp": earliest_timestamp,
-                "newest_timestamp": newest_timestamp,
-                "duration_seconds": duration_seconds,
-            }
-        except Exception as exc:
-            return {"error": f"Failed to compute statistics: {exc}", "code": "EXECUTION_ERROR"}
-
-    elif name == "get_object_types":
-        log, err = _resolve_event_log(args, user=user, context=ctx)
-        if err:
-            return err
-        try:
-            with _with_ocel_db(log) as db:
-                types = _object_types(db)
-            meta = _log_meta(log)
-            return {
-                "file_id": meta["file_id"],
-                "file_name": meta["file_name"],
-                "project_name": meta["project_name"],
-                "object_types": types,
-            }
-        except Exception as exc:
-            return {"error": f"Failed to load object types: {exc}", "code": "EXECUTION_ERROR"}
-
-    elif name == "discover_totem":
-        log, err = _resolve_event_log(args, user=user, context=ctx)
-        if err:
-            return err
-        _ = _clamp_float(args.get("dfg_threshold", 0.0), 0.0, 1.0)
-        _ = _clamp_float(args.get("act_threshold", 0.0), 0.0, 1.0)
-        try:
-            with _with_ocel_db(log) as db:
-                totem = totemDiscovery_db(db)
-            return totem_to_dict(totem)
-        except Exception as exc:
-            return {"error": f"TOTeM discovery failed: {exc}", "code": "EXECUTION_ERROR"}
-
-    elif name == "discover_occn":
-        log, err = _resolve_event_log(args, user=user, context=ctx)
-        if err:
-            return err
-        threshold = _clamp_float(args.get("threshold", 0.0), 0.0, 1.0)
-        object_types = args.get("object_types")
-        parameters = {"object_types": object_types} if object_types else {}
-        try:
-            with _with_ocel_db(log) as db:
-                base_occn = discover_occn(db, relativeOccuranceThreshold=0.0, parameters=parameters)
-            occn = (
-                base_occn.apply_relative_occurrence_threshold(threshold)
-                if threshold > 0
-                else base_occn
-            )
-            return serialize_occn(occn)
-        except Exception as exc:
-            return {"error": f"OCCN discovery failed: {exc}", "code": "EXECUTION_ERROR"}
-
-    elif name == "discover_mlpa":
-        log, err = _resolve_event_log(args, user=user, context=ctx)
-        if err:
-            return err
-        _ = _clamp_float(args.get("threshold", 0.5), 0.0, 1.0)
-        try:
-            with _with_ocel_db(log) as db:
-                totem = totemDiscovery_db(db)
-            process_view = mlpaDiscovery(totem)
-            return _serialize_mlpa(process_view, totem)
-        except Exception as exc:
-            return {"error": f"MLPA discovery failed: {exc}", "code": "EXECUTION_ERROR"}
-
-    elif name == "find_variants":
-        log, err = _resolve_event_log(args, user=user, context=ctx)
-        if err:
-            return err
-        extraction = args.get("extraction") or "leading_1hop"
-        iso = args.get("iso") or "wl+vf2"
-        timeout_s = float(args.get("timeout_s", 10.0))
-        leading_object_type = args.get("leading_object_type")
-        try:
-            with _with_ocel_db(log) as db:
-                obj_types = _object_types(db)
-                if extraction.startswith("leading"):
-                    if not leading_object_type or leading_object_type not in obj_types:
-                        if not obj_types:
-                            return {"variants": [], "object_types": []}
-                        leading_object_type = obj_types[0]
-                else:
-                    leading_object_type = None
-
-                mined = find_variants(
-                    db,
-                    extraction=extraction,
-                    leading_type=leading_object_type,
-                    iso=iso,
-                    timeout_s=timeout_s,
-                    verbose=False,
-                )
-                layout_ocel = _layout_shim(db)
-
-            out = []
-            for var in mined:
-                layout_data = calculate_layout(var, layout_ocel)
-                signature = " → ".join(
-                    node_data.get("label", "")
-                    for _, node_data in sorted(
-                        var.graph.nodes(data=True),
-                        key=lambda x: x[1].get("timestamp", 0),
-                    )
-                )
-                signature_hash = sha1(signature.encode("utf-8")).hexdigest()[:8]
-                final_nodes = [
-                    {
-                        "id": node.get("id"),
-                        "activity": node.get("activity"),
-                        "x": node.get("x"),
-                        "y_lane": node.get("y_lane"),
-                        "y_lanes": node.get("y_lanes"),
-                        "objectIds": [f"type::{t}" for t in node.get("types", [])],
-                        "types": node.get("types", []),
-                    }
-                    for node in layout_data.get("nodes", [])
-                ]
-                out.append({
-                    "id": var.id,
-                    "support": var.support,
-                    "signature": signature,
-                    "signature_hash": signature_hash,
-                    "graph": {
-                        "nodes": final_nodes,
-                        "edges": layout_data.get("edges", []),
-                        "objects": layout_data.get("objects", []),
-                    },
-                })
-            meta = _log_meta(log)
-            return {
-                "file_id": meta["file_id"],
-                "file_name": meta["file_name"],
-                "project_name": meta["project_name"],
-                "variants": out,
-                "object_types": obj_types,
-            }
-        except TimeoutError as te:
-            return {
-                "error": f"Variant mining timed out after {timeout_s}s.",
-                "code": "TIMEOUT",
-                "timeout_s": timeout_s,
-                "hint": "Try using extraction='leading_1hop' or iso='trace' for faster clustering.",
-            }
-        except Exception as exc:
-            return {"error": f"Variant computation failed: {exc}", "code": "EXECUTION_ERROR"}
-
-    elif name == "get_oc_dotted_chart":
-        log, err = _resolve_event_log(args, user=user, context=ctx)
-        if err:
-            return err
-        x_axis = args.get("x_axis", "time")
-        y_axis = args.get("y_axis", "activity")
-        color_by = args.get("color_by", "activity")
-        max_points = int(args.get("max_points", 10000))
-        try:
-            with _with_ocel_db(log) as db:
-                result = get_oc_dotted_chart_data(
-                    db,
-                    x_axis=x_axis,
-                    y_axis=y_axis,
-                    color_by=color_by,
-                    max_points=max_points,
-                )
-            return result
-        except Exception as exc:
-            return {"error": f"Failed to compute dotted chart: {exc}", "code": "EXECUTION_ERROR"}
-
-    elif name == "get_layout":
-        graph_type = args.get("graph_type", "ocdfg")
-        graph_data = args.get("graph_data") or {}
-        direction = args.get("direction", "TB")
-
-        raw_nodes = graph_data.get("nodes", [])
-        raw_edges = graph_data.get("edges", [])
-
-        layout_nodes = []
-        for idx, node in enumerate(raw_nodes):
-            node_dict = dict(node) if isinstance(node, dict) else {"id": str(node)}
-            node_id = node_dict.get("id", f"n{idx}")
-            if direction == "LR":
-                x = (idx // 3) * 180 + 50
-                y = (idx % 3) * 120 + 50
-            else:
-                x = (idx % 3) * 180 + 50
-                y = (idx // 3) * 120 + 50
-            node_dict.update({"id": node_id, "x": x, "y": y, "width": 140, "height": 60})
-            layout_nodes.append(node_dict)
-
-        return {
-            "graph_type": graph_type,
-            "direction": direction,
-            "nodes": layout_nodes,
-            "edges": raw_edges,
-        }
-
-    elif name == "list_dashboards":
-        project_id = args.get("project_id")
-        file_id = args.get("file_id")
-        if user and getattr(user, "is_authenticated", False):
-            dashboards = DashboardService.list_dashboards(
-                user=user,
-                file_id=file_id,
-                project_id=project_id,
-            )
-        else:
-            dashboards = []
-        return {"dashboards": dashboards}
-
-    elif name == "list_assets":
-        project_id = args.get("project_id")
-        asset_type = args.get("asset_type")
-        qs = ProjectAsset.objects.all()
-        if user and getattr(user, "is_authenticated", False):
-            qs = qs.filter(project__users=user)
-        if project_id is not None:
-            qs = qs.filter(project_id=project_id)
-        if asset_type is not None:
-            qs = qs.filter(asset_type=asset_type)
-
-        assets = [
-            {
-                "id": a.id,
-                "name": a.name,
-                "asset_type": a.asset_type,
-                "project_id": a.project_id,
-                "created_at": a.created_at.isoformat() if hasattr(a, "created_at") and a.created_at else None,
-                "updated_at": a.updated_at.isoformat() if hasattr(a, "updated_at") and a.updated_at else None,
-            }
-            for a in qs
-        ]
-        return {"assets": assets}
-
-    return {"error": f"Tool implementation not found: {name}", "code": "UNIMPLEMENTED"}
+def call_tool(name: str, arguments: Optional[Dict[str, Any]], ctx: ToolContext) -> Dict[str, Any]:
+    """Validate and run a READ or PROPOSE tool. Raises ToolError for expected failures."""
+    tool = TOOLS_BY_NAME.get(name)
+    if tool is None:
+        raise ToolError(f"Unknown tool '{name}'.", code="UNKNOWN_TOOL")
+    if tool.handler is None:
+        raise ToolError(f"Tool '{name}' runs in the browser, not on the server.", code="CLIENT_TOOL")
+    args = validate_arguments(tool, arguments if arguments is not None else {})
+    return tool.handler(ctx, args)

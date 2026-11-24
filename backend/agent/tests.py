@@ -14,6 +14,7 @@ from django.test import TestCase
 from django.conf import settings
 from django.contrib.auth.models import User, AnonymousUser
 from rest_framework_simplejwt.tokens import AccessToken
+from channels.db import database_sync_to_async
 from channels.testing import WebsocketCommunicator
 from channels.layers import get_channel_layer
 from channels.routing import ProtocolTypeRouter
@@ -178,25 +179,27 @@ class AgentConsumerWebSocketTests(TestCase):
         self.user.delete()
         session_registry.clear()
 
-    async def test_websocket_connect_anonymous_welcome_message(self):
-        """Verify anonymous client connection receives welcome connection message."""
+    async def test_websocket_rejects_anonymous_clients(self):
+        """The bus can drive a user's UI, so unauthenticated connections are refused."""
         communicator = WebsocketCommunicator(application, "/ws/agent/?session_id=sess_anon_1")
-        connected, _ = await communicator.connect()
-        assert connected is True
+        connected, code = await communicator.connect()
+        assert connected is False
+        assert code == 4401
+        assert session_registry.get_active_sessions() == []
 
-        response = await communicator.receive_json_from()
-        assert response.get("status") == "connected"
-        assert "Live-Wire Bus" in response.get("message", "")
-        assert response.get("session_id") == "sess_anon_1"
-        assert response.get("authenticated") is False
-        assert response.get("user_id") is None
-
-        # Verify session registered in SessionRegistry
-        assert "sess_anon_1" in session_registry.get_active_sessions()
-
-        await communicator.disconnect()
-        # Verify unregister on disconnect
-        assert "sess_anon_1" not in session_registry.get_active_sessions()
+    async def test_session_ids_are_namespaced_per_user(self):
+        """Two users presenting the same session id never share a session group."""
+        other = await database_sync_to_async(User.objects.create_user)(username="agent_other", password="pw")
+        other_token = str(AccessToken.for_user(other))
+        a = WebsocketCommunicator(application, f"/ws/agent/?token={self.token}&session_id=shared")
+        b = WebsocketCommunicator(application, f"/ws/agent/?token={other_token}&session_id=shared")
+        assert (await a.connect())[0] and (await b.connect())[0]
+        await a.receive_json_from()
+        await b.receive_json_from()
+        sessions = set(session_registry.get_active_sessions())
+        assert sessions == {f"u{self.user.id}_shared", f"u{other.id}_shared"}
+        await a.disconnect()
+        await b.disconnect()
 
     async def test_websocket_connect_authenticated_jwt_query_token(self):
         """Verify client connection with ?token= resolves authenticated user and user_id."""
@@ -212,7 +215,7 @@ class AgentConsumerWebSocketTests(TestCase):
         assert response.get("session_id") == "sess_auth_jwt"
 
         assert self.user.id in session_registry.get_active_users()
-        assert "sess_auth_jwt" in session_registry.get_active_sessions()
+        assert f"u{self.user.id}_sess_auth_jwt" in session_registry.get_active_sessions()
 
         await communicator.disconnect()
         assert self.user.id not in session_registry.get_active_users()
@@ -255,7 +258,7 @@ class AgentConsumerWebSocketTests(TestCase):
 
     async def test_websocket_client_acknowledgment_roundtrip(self):
         """Verify client response/event receives acknowledgment with correlation ID."""
-        communicator = WebsocketCommunicator(application, "/ws/agent/")
+        communicator = WebsocketCommunicator(application, f"/ws/agent/?token={self.token}")
         connected, _ = await communicator.connect()
         assert connected is True
 
@@ -280,7 +283,7 @@ class AgentConsumerWebSocketTests(TestCase):
 
     async def test_websocket_client_acknowledgment_with_error(self):
         """Verify client error response is acknowledged and retains error field."""
-        communicator = WebsocketCommunicator(application, "/ws/agent/")
+        communicator = WebsocketCommunicator(application, f"/ws/agent/?token={self.token}")
         connected, _ = await communicator.connect()
         assert connected is True
         await communicator.receive_json_from()
@@ -302,7 +305,7 @@ class AgentConsumerWebSocketTests(TestCase):
 
     async def test_websocket_client_ui_state_report(self):
         """Verify client sending ui_state_report updates SessionRegistry state."""
-        communicator = WebsocketCommunicator(application, "/ws/agent/?session_id=sess_state_test")
+        communicator = WebsocketCommunicator(application, f"/ws/agent/?token={self.token}&session_id=sess_state_test")
         connected, _ = await communicator.connect()
         assert connected is True
         await communicator.receive_json_from()
@@ -323,7 +326,7 @@ class AgentConsumerWebSocketTests(TestCase):
         assert ack.get("type") == "ui_state_report"
         assert ack.get("session_id") == "sess_state_test"
 
-        cached = session_registry.get_ui_state("sess_state_test")
+        cached = session_registry.get_ui_state(f"u{self.user.id}_sess_state_test")
         assert cached == {
             "pathname": "/overview",
             "view_mode": "analysis",
@@ -334,7 +337,7 @@ class AgentConsumerWebSocketTests(TestCase):
 
     async def test_all_seven_action_types_serialization(self):
         """Verify serialization and dispatch of all 7 live-wire command actions."""
-        communicator = WebsocketCommunicator(application, "/ws/agent/")
+        communicator = WebsocketCommunicator(application, f"/ws/agent/?token={self.token}")
         connected, _ = await communicator.connect()
         assert connected is True
         await communicator.receive_json_from()
@@ -372,8 +375,8 @@ class AgentConsumerWebSocketTests(TestCase):
 
     async def test_direct_session_command_dispatch(self):
         """Verify session_registry.send_command_to_session delivers command to target session."""
-        c1 = WebsocketCommunicator(application, "/ws/agent/?session_id=sess_target")
-        c2 = WebsocketCommunicator(application, "/ws/agent/?session_id=sess_other")
+        c1 = WebsocketCommunicator(application, f"/ws/agent/?token={self.token}&session_id=sess_target")
+        c2 = WebsocketCommunicator(application, f"/ws/agent/?token={self.token}&session_id=sess_other")
 
         await c1.connect()
         await c2.connect()
@@ -382,7 +385,7 @@ class AgentConsumerWebSocketTests(TestCase):
 
         # Send command specifically to sess_target
         success = await session_registry.send_command_to_session(
-            "sess_target",
+            f"u{self.user.id}_sess_target",
             "navigate",
             {"route": "/variantsview"},
             correlation_id="sess-corr-1",
@@ -404,7 +407,8 @@ class AgentConsumerWebSocketTests(TestCase):
         """Verify session_registry.send_command_to_user delivers command to authenticated user."""
         url = f"/ws/agent/?token={self.token}&session_id=sess_user_tgt"
         c_user = WebsocketCommunicator(application, url)
-        c_anon = WebsocketCommunicator(application, "/ws/agent/?session_id=sess_anon_other")
+        other = await database_sync_to_async(User.objects.create_user)(username="agent_bystander", password="pw")
+        c_anon = WebsocketCommunicator(application, f"/ws/agent/?token={AccessToken.for_user(other)}&session_id=sess_anon_other")
 
         await c_user.connect()
         await c_anon.connect()
@@ -431,8 +435,8 @@ class AgentConsumerWebSocketTests(TestCase):
 
     async def test_multiple_concurrent_clients_broadcast(self):
         """Verify multiple connected clients simultaneously receive broadcast commands."""
-        c1 = WebsocketCommunicator(application, "/ws/agent/")
-        c2 = WebsocketCommunicator(application, "/ws/agent/")
+        c1 = WebsocketCommunicator(application, f"/ws/agent/?token={self.token}")
+        c2 = WebsocketCommunicator(application, f"/ws/agent/?token={self.token}")
 
         conn1, _ = await c1.connect()
         conn2, _ = await c2.connect()
@@ -463,7 +467,7 @@ class AgentConsumerWebSocketTests(TestCase):
 
     async def test_malformed_incoming_payload_handling(self):
         """Verify consumer handles non-dict or malformed frames gracefully without crash."""
-        communicator = WebsocketCommunicator(application, "/ws/agent/")
+        communicator = WebsocketCommunicator(application, f"/ws/agent/?token={self.token}")
         connected, _ = await communicator.connect()
         assert connected is True
         await communicator.receive_json_from()

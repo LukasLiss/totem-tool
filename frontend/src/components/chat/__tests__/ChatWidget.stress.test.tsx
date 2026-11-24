@@ -4,15 +4,15 @@ import React from "react";
 import {
   ChatMode,
   ChatMessage,
-  ToolExecution,
+  applyAssistantEvent,
   parseMarkdownBlocks,
   formatInline,
   STORAGE_MODE_KEY,
   STORAGE_MESSAGES_KEY,
-  QUICK_SUGGESTIONS,
 } from "../ChatWidget";
 import { TOUR_IDS } from "@/tour/tourIds";
-import { SSEEvent, TourStep } from "@/api/assistantApi";
+import { AssistantEvent, TourStep } from "@/api/assistantApi";
+import { runClientAction } from "../clientActions";
 
 // Mock localStorage with fault-injection capabilities
 let throwStorageErrors = false;
@@ -196,239 +196,76 @@ describe("Empirical Challenger Stress Harness — Milestone 2", () => {
     });
   });
 
-  describe("C. State Machine Stream Interruption & Fault Tolerance", () => {
-    it("simulates rapid stream abort and guarantees isStreaming is cleared", () => {
-      let state: ChatMessage[] = [
-        {
-          id: "asst-streaming-1",
-          role: "assistant",
-          content: "Streaming response token...",
-          timestamp: Date.now(),
-          isStreaming: true,
-        },
-      ];
-
-      const controller = new AbortController();
-      controller.abort();
-
-      if (controller.signal.aborted) {
-        state = state.map((msg) =>
-          msg.isStreaming ? { ...msg, isStreaming: false } : msg
-        );
-      }
-
-      expect(state[0].isStreaming).toBe(false);
-      expect(state[0].content).toBe("Streaming response token...");
+  describe("C. Agent event stream fault tolerance", () => {
+    const fresh = (): ChatMessage => ({
+      id: "a",
+      role: "assistant",
+      content: "",
+      timestamp: 0,
+      isStreaming: true,
+      toolExecutions: [],
     });
 
-    it("handles out-of-order tool_call and tool_result events gracefully", () => {
-      let msg: ChatMessage = {
-        id: "asst-tool-stream",
-        role: "assistant",
-        content: "",
-        timestamp: Date.now(),
-        isStreaming: true,
-        toolExecutions: [],
-      };
-
-      // 1. Tool Call A received
-      msg = {
-        ...msg,
-        toolExecutions: [
-          ...(msg.toolExecutions || []),
-          { id: "call-A", name: "tool_a", arguments: { x: 1 }, status: "executing" },
-        ],
-      };
-
-      // 2. Tool Call B received before Tool A finishes
-      msg = {
-        ...msg,
-        toolExecutions: [
-          ...(msg.toolExecutions || []),
-          { id: "call-B", name: "tool_b", arguments: { y: 2 }, status: "executing" },
-        ],
-      };
-
-      expect(msg.toolExecutions).toHaveLength(2);
-      expect(msg.toolExecutions![0].status).toBe("executing");
-      expect(msg.toolExecutions![1].status).toBe("executing");
-
-      // 3. Tool Result for B arrives first
-      msg = {
-        ...msg,
-        toolExecutions: msg.toolExecutions!.map((te) =>
-          te.id === "call-B" ? { ...te, result: { resB: true }, status: "completed" } : te
-        ),
-      };
-
-      expect(msg.toolExecutions![0].status).toBe("executing");
-      expect(msg.toolExecutions![1].status).toBe("completed");
-
-      // 4. Tool Result for A arrives second
-      msg = {
-        ...msg,
-        toolExecutions: msg.toolExecutions!.map((te) =>
-          te.id === "call-A" ? { ...te, result: { resA: true }, status: "completed" } : te
-        ),
-      };
-
-      expect(msg.toolExecutions![0].status).toBe("completed");
-      expect(msg.toolExecutions![1].status).toBe("completed");
+    it("resolves parallel tool calls that finish out of order", () => {
+      const events: AssistantEvent[] = [
+        { type: "tool_start", id: "A", name: "find_variants", summary: "Mining variants", kind: "read" },
+        { type: "tool_start", id: "B", name: "get_activity_stats", summary: "Activity stats", kind: "read" },
+        { type: "tool_end", id: "B", name: "get_activity_stats", ok: true, duration_ms: 5 },
+      ];
+      let msg = events.reduce(applyAssistantEvent, fresh());
+      expect(msg.toolExecutions!.map((t) => t.status)).toEqual(["executing", "completed"]);
+      msg = applyAssistantEvent(msg, { type: "tool_end", id: "A", name: "find_variants", ok: true, duration_ms: 9 });
+      expect(msg.toolExecutions!.map((t) => t.status)).toEqual(["completed", "completed"]);
     });
 
-    it("tolerates unknown tool result IDs without mutating or corrupting existing tool states", () => {
-      const initialExecutions: ToolExecution[] = [
-        { id: "valid-1", name: "get_variants", status: "executing" },
-      ];
+    it("ignores results for unknown tool ids", () => {
+      const msg = [
+        { type: "tool_start", id: "valid", name: "x", summary: "x", kind: "read" },
+        { type: "tool_end", id: "ghost", name: "x", ok: false, duration_ms: 1 },
+      ].reduce((m, e) => applyAssistantEvent(m, e as AssistantEvent), fresh());
+      expect(msg.toolExecutions).toEqual([{ id: "valid", name: "x", summary: "x", status: "executing" }]);
+    });
 
-      const updated = initialExecutions.map((te) =>
-        te.id === "unknown-tool-id"
-          ? { ...te, result: "data", status: "completed" as const }
-          : te
-      );
-
-      expect(updated[0].status).toBe("executing");
-      expect(updated[0].result).toBeUndefined();
+    it("an aborted stream still ends cleanly", () => {
+      const msg = applyAssistantEvent({ ...fresh(), content: "partial" }, { type: "done" });
+      expect(msg.isStreaming).toBe(false);
+      expect(msg.content).toBe("partial");
     });
 
     it("recovers safely from localStorage exceptions during mode and history access", () => {
       throwStorageErrors = true;
-
-      // Mode retrieval fallback
       let loadedMode: ChatMode = "teach";
       try {
-        const saved = localStorage.getItem(STORAGE_MODE_KEY);
-        loadedMode = saved === "act" ? "act" : "teach";
+        loadedMode = localStorage.getItem(STORAGE_MODE_KEY) === "act" ? "act" : "teach";
       } catch {
         loadedMode = "teach";
       }
       expect(loadedMode).toBe("teach");
-
-      // Messages retrieval fallback
-      let loadedMessages: ChatMessage[] = [];
-      try {
-        const saved = localStorage.getItem(STORAGE_MESSAGES_KEY);
-        if (saved) {
-          loadedMessages = JSON.parse(saved);
-        }
-      } catch {
-        loadedMessages = [];
-      }
-      expect(loadedMessages).toEqual([]);
-
-      // Mode saving exception handling
       expect(() => {
         try {
-          localStorage.setItem(STORAGE_MODE_KEY, "act");
+          localStorage.setItem(STORAGE_MESSAGES_KEY, "[]");
         } catch {
-          // Handled gracefully
+          // handled
         }
       }).not.toThrow();
     });
   });
 
-  describe("D. PendingActions CustomEvent Event Bus Integration", () => {
-    it("dispatches 'totem:refresh-dashboard' event with dashboard_id upon approval of dashboard-mutating tools", () => {
-      const eventListener = vi.fn();
-      window.addEventListener("totem:refresh-dashboard", eventListener);
-
-      const mutatingTools = [
-        "create_dashboard",
-        "add_component",
-        "remove_component",
-        "update_component",
-        "rename_dashboard",
-        "delete_dashboard",
-      ];
-
-      for (const toolName of mutatingTools) {
-        window.dispatchEvent(
-          new CustomEvent("totem:refresh-dashboard", {
-            detail: { dashboard_id: "dash-123", tool: toolName },
-          })
-        );
-      }
-
-      expect(eventListener).toHaveBeenCalledTimes(6);
-      window.removeEventListener("totem:refresh-dashboard", eventListener);
-    });
-
-    it("does NOT dispatch 'totem:refresh-dashboard' event for non-mutating tools", () => {
-      const eventListener = vi.fn();
-      window.addEventListener("totem:refresh-dashboard", eventListener);
-
-      const DASHBOARD_MUTATING_TOOLS = new Set([
-        "create_dashboard",
-        "add_component",
-        "remove_component",
-        "update_component",
-        "rename_dashboard",
-        "delete_dashboard",
-      ]);
-
-      const actionName = "get_process_summary";
-      const approved = true;
-
-      if (approved && DASHBOARD_MUTATING_TOOLS.has(actionName)) {
-        window.dispatchEvent(
-          new CustomEvent("totem:refresh-dashboard", {
-            detail: { dashboard_id: "dash-123" },
-          })
-        );
-      }
-
-      expect(eventListener).not.toHaveBeenCalled();
-      window.removeEventListener("totem:refresh-dashboard", eventListener);
-    });
-  });
-
-  describe("E. Tour Integration & Element IDs Conformance", () => {
+  describe("D. Tour integration and element ids", () => {
     it("verifies all chat tour IDs are declared and non-empty", () => {
-      const requiredTourKeys = [
-        "CHAT_TOGGLE",
-        "CHAT_DRAWER",
-        "CHAT_INPUT",
-        "CHAT_MODE_TEACH",
-        "CHAT_MODE_ACT",
-      ] as const;
-
-      for (const key of requiredTourKeys) {
-        expect(TOUR_IDS[key]).toBeDefined();
-        expect(typeof TOUR_IDS[key]).toBe("string");
+      for (const key of ["CHAT_TOGGLE", "CHAT_DRAWER", "CHAT_INPUT", "CHAT_MODE_TEACH", "CHAT_MODE_ACT"] as const) {
         expect(TOUR_IDS[key].length).toBeGreaterThan(0);
       }
     });
 
-    it("verifies tourController.startTour handles multi-step tours in teach mode", () => {
-      const startTourMock = vi.fn();
-      const mockTourController = { startTour: startTourMock };
-
+    it("start_tour actions reach the tour controller with their steps", () => {
+      const startTour = vi.fn();
       const steps: TourStep[] = [
-        { tour_id: TOUR_IDS.NAV_OVERVIEW, label: "Overview Tab" },
-        { tour_id: TOUR_IDS.FILE_SELECTOR, label: "Filter Controls" },
-        { tour_id: TOUR_IDS.NAV_ANALYSIS, label: "Process Graph" },
+        { tour_id: TOUR_IDS.NAV_OVERVIEW, label: "Overview" },
+        { tour_id: TOUR_IDS.FILE_SELECTOR, label: "Pick a log" },
       ];
-
-      const mode: ChatMode = "teach";
-      if (mode === "teach" && mockTourController && steps.length > 0) {
-        mockTourController.startTour(steps);
-      }
-
-      expect(startTourMock).toHaveBeenCalledWith(steps);
-    });
-
-    it("verifies suggestion catalogs match mode expectations and contain valid prompts", () => {
-      expect(QUICK_SUGGESTIONS.teach.length).toBe(8);
-      expect(QUICK_SUGGESTIONS.act.length).toBe(8);
-
-      for (const item of QUICK_SUGGESTIONS.teach) {
-        expect(item.label).toBeTruthy();
-        expect(item.prompt).toBeTruthy();
-      }
-      for (const item of QUICK_SUGGESTIONS.act) {
-        expect(item.label).toBeTruthy();
-        expect(item.prompt).toBeTruthy();
-      }
+      runClientAction("start_tour", { steps }, { startTour });
+      expect(startTour).toHaveBeenCalledWith(steps);
     });
   });
 });

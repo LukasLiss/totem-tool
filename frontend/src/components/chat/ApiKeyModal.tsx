@@ -46,9 +46,19 @@ interface ProviderOption {
 
 const PROVIDERS: ProviderOption[] = [
   {
+    id: "anthropic",
+    name: "Anthropic Claude",
+    tagline: "Claude Opus 5.5 · Recommended for multi-step analysis",
+    placeholder: "sk-ant-api03-...",
+    linkText: "Get Claude Key",
+    linkUrl: "https://console.anthropic.com/settings/keys",
+    colorClass: "border-purple-500 bg-purple-50/50 dark:bg-purple-950/20",
+    badgeClass: "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300",
+  },
+  {
     id: "gemini",
     name: "Google Gemini",
-    tagline: "Gemini 3.8 Flash · Free tier on Google AI Studio",
+    tagline: "Gemini Flash · Free tier on Google AI Studio",
     placeholder: "AIzaSy...",
     linkText: "Get Gemini Key",
     linkUrl: "https://aistudio.google.com/app/apikey",
@@ -58,22 +68,12 @@ const PROVIDERS: ProviderOption[] = [
   {
     id: "openai",
     name: "OpenAI",
-    tagline: "GPT-5.6 Luna · Latest cost-efficient flagship",
+    tagline: "GPT · Chat Completions with tool calling",
     placeholder: "sk-proj-...",
     linkText: "Get OpenAI Key",
     linkUrl: "https://platform.openai.com/api-keys",
     colorClass: "border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/20",
     badgeClass: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300",
-  },
-  {
-    id: "anthropic",
-    name: "Anthropic Claude",
-    tagline: "Claude Sonnet 5 · Latest Sonnet",
-    placeholder: "sk-ant-api03-...",
-    linkText: "Get Claude Key",
-    linkUrl: "https://console.anthropic.com/settings/keys",
-    colorClass: "border-purple-500 bg-purple-50/50 dark:bg-purple-950/20",
-    badgeClass: "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300",
   },
 ];
 
@@ -90,7 +90,7 @@ export function ApiKeyModal({
         return saved;
       }
     }
-    return "gemini";
+    return "anthropic";
   });
 
   const [apiKey, setApiKey] = useState("");
@@ -122,7 +122,7 @@ export function ApiKeyModal({
     setErrorMessage(null);
     setSuccessMessage(null);
 
-    if (trimmed.startsWith("AIza")) {
+    if (trimmed.startsWith("AIza") || trimmed.startsWith("AQ.")) {
       setSelectedProvider("gemini");
     } else if (trimmed.startsWith("sk-ant-")) {
       setSelectedProvider("anthropic");

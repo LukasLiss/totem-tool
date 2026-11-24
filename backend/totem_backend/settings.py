@@ -357,9 +357,13 @@ for env_candidate in [BASE_DIR / '.env', BASE_DIR.parent / '.env']:
         except Exception:
             pass
 
+# AI assistant. Users normally bring their own key (sent per request in the
+# X-LLM-Key header); these server-side keys are an optional fallback.
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
-ASSISTANT_MODEL = os.environ.get('ASSISTANT_MODEL', 'gemini-3.5-flash')
-ANTHROPIC_MODEL = os.environ.get('ANTHROPIC_MODEL', 'claude-sonnet-5')
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
+ASSISTANT_MODEL = os.environ.get('ASSISTANT_MODEL', 'gemini-3.5-flash')  # Gemini model
+ANTHROPIC_MODEL = os.environ.get('ANTHROPIC_MODEL', 'claude-opus-5-5')
 OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-5.6-luna')
-ASSISTANT_AGENT_ENABLED = True
+# Reasoning effort for Claude models that support it: low | medium | high | xhigh | max
+ASSISTANT_EFFORT = os.environ.get('ASSISTANT_EFFORT', 'medium')
