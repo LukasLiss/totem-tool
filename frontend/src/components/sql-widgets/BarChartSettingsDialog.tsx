@@ -148,6 +148,11 @@ function SettingsBody({ widgetId, initial, onApply, onCancel, fileId, projectId 
             onChange={(next) => set("colors", next)}
             categories={categories}
             singleColorLabel="Bar color"
+            byValue={{
+              description:
+                "Each bar gets a color between these two by its value: the smallest value the first, the largest the second.",
+              categoryColors: true,
+            }}
           />
         </>
       }

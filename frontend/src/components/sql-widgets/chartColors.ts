@@ -9,12 +9,17 @@ export type ColorScheme = "greyscale" | "categorical" | "shades";
 export interface ChartColors {
   /**
    * "single": every category in `single` (bar charts, their default);
-   * "category": a color per category from `scheme` (pie charts always).
-   * Overrides apply in both modes.
+   * "category": a color per category from `scheme` (pie charts always);
+   * "value": a color between `low` and `high` by the category's value, the
+   * smallest value in `low`, the largest in `high` (bar charts).
+   * Overrides apply in all modes.
    */
-  mode?: "single" | "category";
+  mode?: "single" | "category" | "value";
   /** The color of "single" mode; the theme's text color (black) when unset. */
   single?: string;
+  /** "value" mode: the color of the smallest and of the largest value. */
+  low?: string;
+  high?: string;
   scheme?: ColorScheme;
   /** Base color for the "shades" scheme. */
   base?: string;
@@ -34,6 +39,18 @@ export const DEFAULT_SHADES_BASE = "#2d62ef";
 export const DEFAULT_SINGLE_COLOR = "var(--foreground)";
 // What the color picker starts at for DEFAULT_SINGLE_COLOR (it needs a hex value).
 export const DEFAULT_SINGLE_PICKER = "#000000";
+// "value" mode defaults: a light and a strong shade of the Shades base color.
+export const DEFAULT_LOW_COLOR = "#c6d4fb";
+export const DEFAULT_HIGH_COLOR = DEFAULT_SHADES_BASE;
+
+/**
+ * The color at `t` (0 = `low`, 1 = `high`) of the ramp between two colors,
+ * mixed in oklab so the steps look even.
+ */
+export function valueRampColor(low: string, high: string, t: number): string {
+  const share = Math.round(Math.min(1, Math.max(0, t)) * 100);
+  return `color-mix(in oklab, ${high} ${share}%, ${low})`;
+}
 
 export const COLOR_SCHEME_OPTIONS: { value: ColorScheme; label: string }[] = [
   { value: "greyscale", label: "Greyscale" },
@@ -137,18 +154,33 @@ export function colorsDependOnLabels(colors: ChartColors | undefined): boolean {
 
 // The grouped "Other" slice: a faint neutral grey, lighter than any greyscale step.
 export const OTHER_COLOR = "color-mix(in oklab, var(--foreground) 10%, var(--background))";
+// "value" mode: a point without a numeric value.
+export const NO_VALUE_COLOR = "color-mix(in oklab, var(--foreground) 25%, var(--background))";
+
+/**
+ * "value" mode: the color of `value` on the ramp from the smallest value
+ * (`min`, the low color) to the largest (`max`, the high color). When all
+ * values are equal everything gets the high color; no value gets grey.
+ */
+export function valueFill(colors: ChartColors | undefined, value: number | null, min: number, max: number): string {
+  if (value == null || !Number.isFinite(value)) return NO_VALUE_COLOR;
+  const t = max > min ? (value - min) / (max - min) : 1;
+  return valueRampColor(colors?.low ?? DEFAULT_LOW_COLOR, colors?.high ?? DEFAULT_HIGH_COLOR, t);
+}
 
 /**
  * One color per slice, like resolveChartColors, but an "Other" slice gets the
  * neutral OTHER_COLOR (or its override) and doesn't use up a scheme color.
  */
 export function categoryFills(
-  slices: { label: string; other?: boolean }[],
+  slices: { label: string; value?: number; other?: boolean }[],
   colors: ChartColors | undefined
 ): string[] {
+  const own = slices.filter((slice) => !slice.other);
   const schemeFills = resolveChartColors(
-    slices.filter((slice) => !slice.other).map((slice) => slice.label),
-    colors
+    own.map((slice) => slice.label),
+    colors,
+    own.map((slice) => slice.value ?? 0)
   );
   let next = 0;
   return slices.map((slice) =>
@@ -156,8 +188,23 @@ export function categoryFills(
   );
 }
 
-/** One color per label, in label order. */
-export function resolveChartColors(labels: string[], colors: ChartColors | undefined): string[] {
+/**
+ * One color per label, in label order. `values` (one per label) are used by
+ * "value" mode; without them the labels count as falling from the largest
+ * value to the smallest, like the bars of a chart sketch.
+ */
+export function resolveChartColors(
+  labels: string[],
+  colors: ChartColors | undefined,
+  values?: number[]
+): string[] {
+  if (colors?.mode === "value") {
+    const vs = values ?? labels.map((_, i) => labels.length - 1 - i);
+    const finite = vs.filter(Number.isFinite);
+    const min = finite.length ? Math.min(...finite) : 0;
+    const max = finite.length ? Math.max(...finite) : 0;
+    return labels.map((label, i) => colors.overrides?.[label] ?? valueFill(colors, vs[i], min, max));
+  }
   if (colors?.mode === "single") {
     const single = colors.single ?? DEFAULT_SINGLE_COLOR;
     return labels.map((label) => colors.overrides?.[label] ?? single);

@@ -21,7 +21,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import {
   ChartContainer,
   ChartTooltip,
-  ChartTooltipContent,
   type ChartConfig,
 } from "@/components/ui/chart";
 import type { LinkedQuery } from "@/react_component/sql/linkedQuery";
@@ -43,6 +42,7 @@ import { useCategoryList } from "./chartSettingsUtils";
 import type { ChartStyle } from "./chartLegendUtils";
 import BarChartSketch from "./BarChartSketch";
 import TitledTick from "./TitledTick";
+import HeadedTooltip from "./HeadedTooltip";
 import BarChartSettingsDialog, { type BarChartSettings } from "./BarChartSettingsDialog";
 import { useDashboardLocalFilter } from "@/hooks/useDashboardLocalFilter";
 
@@ -212,7 +212,8 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
   }
 
   return (
-    <Card className="flex h-full w-full flex-col gap-0 overflow-hidden rounded-none pt-0">
+    // Same padding as the scatter plot: none above, a little below (on top of the content's p-3).
+    <Card className="flex h-full w-full flex-col gap-0 overflow-hidden rounded-none pt-0 pb-2">
       <WidgetHeader
         label={title}
         fileId={fileId}
@@ -270,7 +271,12 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
             )}
             <ChartTooltip
               cursor={{ fill: "var(--muted)" }}
-              content={<ChartTooltipContent labelKey="label" nameKey="value" />}
+              // Top row: the bar's category in its color; below, the value.
+              content={
+                <HeadedTooltip
+                  heading={(bar) => ({ label: String(bar.label ?? ""), color: bar.fill as string | undefined })}
+                />
+              }
             />
             <Bar
               dataKey="value"

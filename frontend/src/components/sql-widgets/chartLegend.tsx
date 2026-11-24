@@ -86,6 +86,52 @@ export function ChartValueLegend({
   );
 }
 
+// Recharts' grey for axis labels (its Text default fill).
+const AXIS_LABEL_COLOR = "#808080";
+
+const formatRangeValue = (value: number) => value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+
+/**
+ * Legend for "By value" colors: the column name, then the smallest value,
+ * the color ramp and the largest value in one row. The ramp sits exactly in
+ * the middle (two equal outer columns), so it lines up with the x axis label.
+ */
+export function ValueRangeLegend({
+  label,
+  low,
+  high,
+  min,
+  max,
+  className,
+}: {
+  label: string;
+  /** Colors of the smallest and the largest value. */
+  low: string;
+  high: string;
+  min: number;
+  max: number;
+  className?: string;
+}) {
+  return (
+    <div className={cn("grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 text-xs", className)}>
+      <span className="flex min-w-0 items-center justify-end gap-2">
+        {/* Styled like the chart's axis labels. */}
+        <span className="min-w-0 truncate text-[11px]" style={{ color: AXIS_LABEL_COLOR }} title={label}>
+          {label}
+        </span>
+        <span className="shrink-0 text-muted-foreground tabular-nums">{formatRangeValue(min)}</span>
+      </span>
+      <span
+        aria-hidden
+        className="h-2 w-32 rounded-[2px]"
+        style={{ background: `linear-gradient(to right in oklab, ${low}, ${high})` }}
+      />
+      {/* Left-aligned explicitly: the chart around it may center text. */}
+      <span className="text-left text-muted-foreground tabular-nums">{formatRangeValue(max)}</span>
+    </div>
+  );
+}
+
 /**
  * Pie charts only: one slice's callout, a connector from the slice edge plus
  * its label. Render it from recharts' `<Pie label>` with the label props;

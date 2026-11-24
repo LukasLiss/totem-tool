@@ -12,7 +12,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import {
   ChartContainer,
   ChartTooltip,
-  ChartTooltipContent,
   type ChartConfig,
 } from "@/components/ui/chart";
 import type { LinkedQuery } from "@/react_component/sql/linkedQuery";
@@ -21,15 +20,36 @@ import { useSqlQueryData } from "@/react_component/sql/useSqlQueryData";
 import { WidgetMessage } from "./shared";
 import { WidgetHeader } from "@/components/ui/WidgetTitle";
 import { linkedQueryOf, type SqlWidgetNodeFields, type SqlWidgetProps } from "./sqlWidgetUtils";
-import { categoryFills, colorsDependOnLabels, previewColors, type ChartColors } from "./chartColors";
-import { ChartValueLegend } from "./chartLegend";
+import {
+  NO_VALUE_COLOR,
+  categoryFills,
+  colorsDependOnLabels,
+  previewColors,
+  valueFill,
+  type ChartColors,
+} from "./chartColors";
+import { ChartValueLegend, ValueRangeLegend } from "./chartLegend";
 import type { ChartStyle, LegendPosition, PointSize } from "./chartLegendUtils";
-import { POINT_RADIUS_PX, TRANSPARENT_POINT_OPACITY, buildScatterSeries, scatterColors } from "./scatterUtils";
+import {
+  POINT_RADIUS_PX,
+  TRANSPARENT_POINT_OPACITY,
+  buildScatterSeries,
+  buildValuePoints,
+  columnOrderability,
+  notOrderableNotice,
+  scatterColors,
+  valueGradient,
+} from "./scatterUtils";
 import WidgetDraftTile from "@/components/WidgetDraftTile";
 import ScatterPlotSketch from "./ScatterPlotSketch";
 import VerticalAxisLabel from "./VerticalAxisLabel";
+import HeadedTooltip from "./HeadedTooltip";
 import ScatterPlotSettingsDialog, { type ScatterPlotSettings } from "./ScatterPlotSettingsDialog";
 import { useDashboardLocalFilter } from "@/hooks/useDashboardLocalFilter";
+
+// The y axis' width (Recharts' default, set explicitly so the legend can be
+// inset by the same amount and center under the plot area).
+const Y_AXIS_WIDTH = 60;
 
 export interface ScatterPlotNodeFields extends SqlWidgetNodeFields {
   x_column?: string;
@@ -147,16 +167,58 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
     localFilterParams: Object.keys(localFilterParams).length > 0 ? localFilterParams : undefined,
   });
 
-  const { series, xKey, yKey, seriesKey, config, legendItems } = useMemo(() => {
+  const { series, xKey, yKey, seriesKey, config, legendItems, valueRange, notice } = useMemo(() => {
+    // "By value" colors need numbers in the series column; without them the
+    // points are colored by category, with a notice below the chart.
+    const orderability =
+      seriesColumn !== "" && colors.mode === "value" ? columnOrderability(data.rows, seriesColumn) : null;
+
+    if (orderability?.orderable) {
+      const built = buildValuePoints(data.rows, data.columns, { xColumn, yColumn, seriesColumn });
+      const points = built.points.map((p) => ({ ...p, fill: valueFill(colors, p.c, built.min, built.max) }));
+      const name = seriesColumn;
+      const series = points.length > 0 ? [{ name, points, color: NO_VALUE_COLOR }] : [];
+      const config: ChartConfig = { [name]: { label: name } };
+      const withoutValue = built.withoutValue;
+      return {
+        series,
+        xKey: built.xKey,
+        yKey: built.yKey,
+        seriesKey: seriesColumn,
+        config,
+        legendItems: [],
+        valueRange: { min: built.min, max: built.max },
+        notice: withoutValue > 0
+          ? `${withoutValue.toLocaleString()} point${withoutValue === 1 ? "" : "s"} without a value in “${seriesColumn}”, shown grey.`
+          : undefined,
+      };
+    }
+
     const built = buildScatterSeries(data.rows, data.columns, { xColumn, yColumn, seriesColumn, maxSeries });
-    const fills = categoryFills(built.slices, scatterColors(colors, Boolean(built.seriesKey)));
-    const series = built.series.map((s, i) => ({ ...s, color: fills[i] }));
+    const seriesColors = scatterColors(colors, Boolean(built.seriesKey));
+    const fills = categoryFills(
+      built.slices,
+      seriesColors.mode === "value" ? { ...seriesColors, mode: "category" } : seriesColors
+    );
+    // Each point carries its series and color, for the tooltip's top row.
+    const series = built.series.map((s, i) => ({
+      ...s,
+      color: fills[i],
+      points: s.points.map((p) => ({ ...p, series: s.name, fill: fills[i] })),
+    }));
     const config: ChartConfig = {};
     series.forEach((s) => {
       config[s.name] = { label: s.name, color: s.color };
     });
     const legendItems = series.map((s) => ({ label: s.name, color: s.color }));
-    return { ...built, series, config, legendItems };
+    return {
+      ...built,
+      series,
+      config,
+      legendItems,
+      valueRange: null,
+      notice: orderability && data.rows.length > 0 ? notOrderableNotice(seriesColumn, orderability.example) : undefined,
+    };
   }, [data.rows, data.columns, xColumn, yColumn, seriesColumn, maxSeries, colors]);
 
   // The real series for the edit-mode sketch, loaded like the settings popup
@@ -196,6 +258,7 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
             pointSize={pointSize}
             transparentPoints={transparentPoints}
             colors={previewColors(sketchColors, sketchLabels)}
+            gradient={hasSeries && colors.mode === "value" ? valueGradient(colors) : undefined}
             className="h-full w-full"
           />
         }
@@ -214,10 +277,15 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
   }
 
   const showLegend = Boolean(seriesKey) && (legendPosition === "bottom" || legendPosition === "columns");
+  // With an x label: the 7px the label sits below the axis (offset -7), plus 8px of air to the legend.
+  // The y label fits inside the y axis' 60px (5px from its edge), so 4px on the left give it about
+  // the same air as the x label has below.
+  const margin = { top: 8, right: 16, bottom: xLabel ? 15 : 8, left: 4 };
 
   // The header (with the filters) stays while there is nothing to draw.
   return (
-    <Card className="flex h-full w-full flex-col gap-0 overflow-hidden rounded-none pt-0">
+    // No card padding above, a little below (on top of the content's p-3).
+    <Card className="flex h-full w-full flex-col gap-0 overflow-hidden rounded-none pt-0 pb-2">
       <WidgetHeader
         label={title}
         fileId={fileId}
@@ -238,17 +306,18 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
         ) : (
           <>
         <ChartContainer config={config} className="aspect-auto min-h-0 w-full flex-1">
-          <ScatterChart margin={{ top: 8, right: 16, bottom: xLabel ? 24 : 8, left: yLabel ? 16 : 4 }}>
+          <ScatterChart margin={margin}>
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis
               type="number"
               dataKey="x"
               name={xLabel || xKey}
               tickLine={false}
-              label={xLabel ? { value: xLabel, position: "insideBottom", offset: -12, fontSize: 11 } : undefined}
+              label={xLabel ? { value: xLabel, position: "insideBottom", offset: -7, fontSize: 11 } : undefined}
             />
             <YAxis
               type="number"
+              width={Y_AXIS_WIDTH}
               dataKey="y"
               name={yLabel || yKey}
               tickLine={false}
@@ -256,7 +325,19 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
             />
             <ChartTooltip
               cursor={{ strokeDasharray: "3 3" }}
-              content={<ChartTooltipContent hideLabel={!seriesKey} />}
+              // Top row: the point's series in its color ("By value": the color
+              // column and the point's value there); below, x and y.
+              content={
+                <HeadedTooltip
+                  heading={(point) =>
+                    !seriesKey
+                      ? null
+                      : valueRange
+                        ? { label: seriesKey, color: point.fill as string, value: point.c ?? "no value" }
+                        : { label: String(point.series ?? ""), color: point.fill as string }
+                  }
+                />
+              }
             />
             {series.map((s) => (
               <Scatter
@@ -264,13 +345,14 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
                 name={s.name}
                 data={s.points}
                 fill={s.color}
-                // Points drawn here with the chosen size and transparency.
-                shape={({ cx, cy }: ScatterShapeProps) => (
+                // Points drawn here with the chosen size and transparency;
+                // "By value" points carry their own color.
+                shape={({ cx, cy, payload }: ScatterShapeProps) => (
                   <circle
                     cx={cx}
                     cy={cy}
                     r={POINT_RADIUS_PX[pointSize]}
-                    fill={s.color}
+                    fill={(payload as { fill?: string } | undefined)?.fill ?? s.color}
                     fillOpacity={transparentPoints ? TRANSPARENT_POINT_OPACITY : 1}
                   />
                 )}
@@ -279,12 +361,31 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
           </ScatterChart>
         </ChartContainer>
         {showLegend && (
-          <ChartValueLegend
-            items={legendItems}
-            layout={legendPosition === "columns" ? "columns" : "bottom"}
+          // Inset like the plot area, so the legend centers under the plot
+          // (as the x label does), not under the plot plus the y axis.
+          <div
             className="max-h-[35%] w-full shrink-0 overflow-y-auto"
-          />
+            style={{ paddingLeft: margin.left + Y_AXIS_WIDTH, paddingRight: margin.right }}
+          >
+            {valueRange ? (
+              <ValueRangeLegend
+                label={seriesKey}
+                low={valueGradient(colors)[0]}
+                high={valueGradient(colors)[1]}
+                min={valueRange.min}
+                max={valueRange.max}
+                className="w-full"
+              />
+            ) : (
+              <ChartValueLegend
+                items={legendItems}
+                layout={legendPosition === "columns" ? "columns" : "bottom"}
+                className="w-full"
+              />
+            )}
+          </div>
         )}
+        {notice && <p role="status" className="text-[11px] text-amber-700 dark:text-amber-400">{notice}</p>}
         {data.truncated && (
           <p className="text-[11px] text-muted-foreground">showing the first 5,000 rows</p>
         )}

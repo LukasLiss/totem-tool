@@ -136,7 +136,7 @@ def _validated_int(raw, default, minimum, maximum):
 # "none" hides the legend (scatter plot; the pie chart uses show_legend).
 _LEGEND_POSITIONS = {"none", "bottom", "columns", "callouts"}
 _LEGEND_VALUES = {"none", "value", "percent", "both"}
-_COLOR_MODES = {"single", "category"}
+_COLOR_MODES = {"single", "category", "value"}
 _COLOR_SCHEMES = {"greyscale", "categorical", "shades"}
 _POINT_SIZES = {"small", "medium", "large"}
 _MAX_CATEGORIES_LIMIT = 500
@@ -194,6 +194,10 @@ def _validated_chart_style(raw):
             colors["scheme"] = colors_raw["scheme"]
         if is_hex_color(colors_raw.get("base")):
             colors["base"] = colors_raw["base"].strip()
+        # "value" mode: colors of the smallest and the largest value.
+        for key in ("low", "high"):
+            if is_hex_color(colors_raw.get(key)):
+                colors[key] = colors_raw[key].strip()
         if isinstance(colors_raw.get("stable"), bool):
             colors["stable"] = colors_raw["stable"]
         overrides_raw = colors_raw.get("overrides")
