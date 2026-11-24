@@ -5,6 +5,32 @@ export function initialMapping(preview: FlatLogPreview): FlatColumnMapping[] {
   return preview.columns.map((c) => ({ column: c.name, ...c.suggestion }));
 }
 
+/**
+ * The mapping for a re-read file (another separator or encoding): columns
+ * that are still there keep what the user chose, new ones get suggestions.
+ * A suggested timestamp gives way to one the user already picked.
+ */
+export function carryOverMapping(previous: FlatColumnMapping[], suggested: FlatColumnMapping[]): FlatColumnMapping[] {
+  const byName = new Map(previous.map((c) => [c.column, c]));
+  const carried = suggested.map((c) => byName.get(c.column) ?? c);
+  const keptTimestamp = carried.some((c) => byName.has(c.column) && c.role === "timestamp");
+  return carried.map((c) =>
+    keptTimestamp && c.role === "timestamp" && !byName.has(c.column) ? { ...c, role: "event_attribute" } : c,
+  );
+}
+
+const FORMAT_LABELS: Record<string, string> = {
+  auto: "automatic detection",
+  iso: "ISO 8601",
+  unix_s: "Unix time (seconds)",
+  unix_ms: "Unix time (milliseconds)",
+};
+
+/** How a timestamp format is named to the user. */
+export function formatLabel(format: string): string {
+  return FORMAT_LABELS[format] ?? format;
+}
+
 export function defaultObjectType(column: string, role: FlatLogRole): string {
   if (role === "resource") return "resource";
   const base = column
@@ -41,14 +67,17 @@ const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n ==
  * What to tell the user about rows a mapped import left out, or null when
  * every row became an event.
  */
-export function skippedRowsSummary(report: FlatLogImportReport | null | undefined): { title: string; lines: string[] } | null {
+export function skippedRowsSummary(
+  report: FlatLogImportReport | null | undefined,
+): { title: string; lines: string[]; skipped: number } | null {
   if (!report) return null;
   const skipped = report.skipped_bad_timestamp + report.skipped_no_object + report.skipped_no_activity;
-  if (skipped === 0) return null;
+  const renamed = Object.entries(report.renamed_attributes ?? {});
+  if (skipped === 0 && renamed.length === 0) return null;
   const lines: string[] = [];
   if (report.skipped_bad_timestamp > 0) {
     const example = report.bad_timestamp_example ? ` (e.g. “${report.bad_timestamp_example}”)` : "";
-    const format = report.timestamp_format === "auto" ? "any recognised format" : `“${report.timestamp_format}”`;
+    const format = report.timestamp_format === "auto" ? "any recognised format" : `“${formatLabel(report.timestamp_format)}”`;
     lines.push(`${plural(report.skipped_bad_timestamp, "row")} with a timestamp that does not match ${format}${example}`);
   }
   if (report.skipped_no_object > 0) {
@@ -57,8 +86,15 @@ export function skippedRowsSummary(report: FlatLogImportReport | null | undefine
   if (report.skipped_no_activity > 0) {
     lines.push(`${plural(report.skipped_no_activity, "row")} without an activity`);
   }
+  // Names the database cannot hold twice (it ignores case) were renamed.
+  for (const [column, stored] of renamed) {
+    lines.push(`Column “${column}” is stored as “${stored}” (the name was taken)`);
+  }
   return {
-    title: `Imported ${plural(report.events, "event")}; skipped ${plural(skipped, "row")} of ${report.rows.toLocaleString()}`,
+    title: skipped > 0
+      ? `Imported ${plural(report.events, "event")}; skipped ${plural(skipped, "row")} of ${report.rows.toLocaleString()}`
+      : `Imported ${plural(report.events, "event")}`,
     lines,
+    skipped,
   };
 }

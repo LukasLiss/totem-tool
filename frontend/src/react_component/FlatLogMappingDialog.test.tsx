@@ -16,12 +16,14 @@ vi.mock("@/api/fileApi", async (importOriginal) => {
 });
 
 import { FlatLogMappingDialog } from "./FlatLogMappingDialog";
-import { defaultObjectType, mappingProblems, skippedRowsSummary } from "./flatLogMapping";
+import { carryOverMapping, defaultObjectType, mappingProblems, skippedRowsSummary } from "./flatLogMapping";
 
 const PREVIEW: FlatLogPreview = {
   format: "xes",
   kind: "flat",
   delimiter: null,
+  encoding: null,
+  encodings: ["utf-8", "windows-1252"],
   truncated: false,
   timestamp_presets: ["yyyy-MM-dd HH:mm:ss", "dd.MM.yyyy HH:mm"],
   columns: [
@@ -51,7 +53,11 @@ function renderDialog(onConfirm = vi.fn()) {
 
 beforeEach(() => {
   vi.useFakeTimers();
-  parseTimestamps.mockImplementation(async (values: string[]) => values.map(() => "2024-03-01T09:00:00+01:00"));
+  parseTimestamps.mockImplementation(async (values: string[]) => ({
+    format: "iso",
+    results: values.map(() => "2024-03-01T09:00:00+01:00"),
+    ambiguous_with: [],
+  }));
 });
 
 afterEach(() => {
@@ -85,6 +91,29 @@ describe("mappingProblems", () => {
   });
 });
 
+describe("carryOverMapping", () => {
+  it("keeps the user's roles for columns that are still there", () => {
+    const previous = [
+      { column: "Ticket", role: "object_id" as const, object_type: "ticket" },
+      { column: "When", role: "timestamp" as const, format: "dd.MM.yyyy" },
+      { column: "Gr��e", role: "event_attribute" as const },
+    ];
+    const suggested = [
+      { column: "Ticket", role: "event_attribute" as const },
+      { column: "When", role: "event_attribute" as const },
+      { column: "Größe", role: "event_attribute" as const },
+      { column: "Updated", role: "timestamp" as const, format: "auto" },
+    ];
+    expect(carryOverMapping(previous, suggested)).toEqual([
+      { column: "Ticket", role: "object_id", object_type: "ticket" },
+      { column: "When", role: "timestamp", format: "dd.MM.yyyy" },
+      { column: "Größe", role: "event_attribute" },
+      // Only one timestamp: the user's choice wins over a new suggestion.
+      { column: "Updated", role: "event_attribute", format: "auto" },
+    ]);
+  });
+});
+
 describe("skippedRowsSummary", () => {
   const base = {
     rows: 10, events: 10, skipped_no_activity: 0, skipped_no_object: 0, skipped_bad_timestamp: 0,
@@ -94,6 +123,13 @@ describe("skippedRowsSummary", () => {
   it("says nothing when every row was imported", () => {
     expect(skippedRowsSummary(base)).toBeNull();
     expect(skippedRowsSummary(undefined)).toBeNull();
+  });
+
+  it("mentions columns stored under another name", () => {
+    const summary = skippedRowsSummary({ ...base, renamed_attributes: { Activity: "Activity_attr" } });
+    expect(summary?.title).toBe("Imported 10 events");
+    expect(summary?.skipped).toBe(0);
+    expect(summary?.lines).toEqual(["Column “Activity” is stored as “Activity_attr” (the name was taken)"]);
   });
 
   it("names each reason, with a timestamp that did not match", () => {
@@ -170,8 +206,38 @@ describe("FlatLogMappingDialog", () => {
     expect(onConfirm).toHaveBeenCalledTimes(1);
   });
 
+  it("warns when the sample also fits the swapped day/month order, and switches on request", async () => {
+    parseTimestamps.mockImplementation(async (values: string[]) => ({
+      format: "dd/MM/yyyy HH:mm:ss",
+      results: values.map(() => "2024-04-03T10:00:00+00:00"),
+      ambiguous_with: [{
+        format: "MM/dd/yyyy HH:mm:ss",
+        value: "03/04/2024 10:00:00",
+        as_chosen: "2024-04-03T10:00:00+00:00",
+        as_other: "2024-03-04T10:00:00+00:00",
+      }],
+    }));
+    const onConfirm = renderDialog();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    expect(screen.getByTestId("timestamp-ambiguous").textContent).toMatch(/Also fits MM\/dd\/yyyy/);
+    expect(screen.getByTestId("mapping-problems").textContent).toMatch(/check that “03\/04\/2024 10:00:00” means/);
+    // A warning, not a blocker.
+    expect((screen.getByTestId("start-import") as HTMLButtonElement).disabled).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Use that instead" }));
+    fireEvent.click(screen.getByTestId("start-import"));
+    const mapping = onConfirm.mock.calls[0][0] as FlatLogMapping;
+    expect(mapping.columns.find((c) => c.role === "timestamp")?.format).toBe("MM/dd/yyyy HH:mm:ss");
+  });
+
   it("refuses a timestamp format none of the sample matches", async () => {
-    parseTimestamps.mockImplementation(async (values: string[]) => values.map(() => null));
+    parseTimestamps.mockImplementation(async (values: string[]) => ({
+      format: "iso",
+      results: values.map(() => null),
+      ambiguous_with: [],
+    }));
     renderDialog();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(400);

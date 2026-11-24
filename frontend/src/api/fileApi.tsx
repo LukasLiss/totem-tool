@@ -46,6 +46,8 @@ export interface FlatColumnMapping {
 export interface FlatLogMapping {
   columns: FlatColumnMapping[];
   delimiter?: string | null;
+  /** CSV text encoding ("utf-8", "windows-1252", ...); detected when absent. */
+  encoding?: string | null;
 }
 
 export interface FlatLogPreviewColumn {
@@ -62,8 +64,11 @@ export interface FlatLogPreview {
   columns: FlatLogPreviewColumn[];
   rows: string[][];
   delimiter: string | null;
+  /** CSV only: the encoding used to read the sample (detected or chosen). */
+  encoding: string | null;
   truncated: boolean;
   timestamp_presets: string[];
+  encodings: string[];
 }
 
 /** File names that may hold a case-centric log, by format. */
@@ -83,13 +88,18 @@ const PREVIEW_BYTES = 2 * 1024 * 1024;
  * Only the start of the file is sent, so a large log is not uploaded twice;
  * the real upload follows once the user has mapped the columns.
  */
-export async function previewFlatLog(file: File, delimiter?: string | null): Promise<FlatLogPreview> {
+export async function previewFlatLog(
+  file: File,
+  delimiter?: string | null,
+  encoding?: string | null,
+): Promise<FlatLogPreview> {
   const truncated = file.size > PREVIEW_BYTES;
   const formData = new FormData();
   formData.append("file", file.slice(0, PREVIEW_BYTES), "preview");
   formData.append("filename", file.name);
   formData.append("truncated", truncated ? "true" : "false");
   if (delimiter) formData.append("delimiter", delimiter);
+  if (encoding) formData.append("encoding", encoding);
   const { data } = await axios.post("/api/files/preview/", formData, { _skipGlobalFilter: true });
   return data;
 }
@@ -104,6 +114,24 @@ export interface FlatLogImportReport {
   bad_timestamp_example: string | null;
   timestamp_format: string;
   timezone: string;
+  /** Columns stored under another name because theirs was taken (case-insensitively). */
+  renamed_attributes?: Record<string, string>;
+}
+
+/** Another format that also reads every sample value, but differently. */
+export interface TimestampAmbiguity {
+  format: string;
+  /** A sample value the two formats disagree on, and both readings (ISO). */
+  value: string;
+  as_chosen: string;
+  as_other: string;
+}
+
+export interface TimestampCheck {
+  /** The format the import will use; "auto" resolves to one for the column. */
+  format: string;
+  results: (string | null)[];
+  ambiguous_with: TimestampAmbiguity[];
 }
 
 /** Parse sample values with a timestamp format, exactly as the import will. */
@@ -111,13 +139,13 @@ export async function parseTimestamps(
   values: string[],
   format: string,
   timezone?: string,
-): Promise<(string | null)[]> {
+): Promise<TimestampCheck> {
   const { data } = await axios.post(
     "/api/files/parse-timestamps/",
     { values, format, timezone },
     { _skipGlobalFilter: true },
   );
-  return data.results;
+  return data;
 }
 
 export interface UploadLimits {

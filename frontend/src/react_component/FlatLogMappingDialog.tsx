@@ -36,8 +36,9 @@ import {
   type FlatLogMapping,
   type FlatLogPreview,
   type FlatLogRole,
+  type TimestampAmbiguity,
 } from "@/api/fileApi";
-import { defaultObjectType, initialMapping, mappingProblems } from "./flatLogMapping";
+import { carryOverMapping, defaultObjectType, formatLabel, initialMapping, mappingProblems } from "./flatLogMapping";
 
 const ROLE_INFO: Record<FlatLogRole, { label: string; hint: string; tone: string; cell: string }> = {
   object_id: {
@@ -100,6 +101,13 @@ const SPECIAL_FORMATS: { value: string; label: string }[] = [
   { value: "unix_ms", label: "Unix time (milliseconds)" },
 ];
 const CUSTOM_FORMAT = "__custom__";
+const ENCODING_LABELS: Record<string, string> = {
+  "utf-8": "UTF-8",
+  "windows-1252": "Windows-1252 (Excel)",
+  "iso-8859-1": "ISO-8859-1 (Latin-1)",
+  "utf-16": "UTF-16 (Excel Unicode)",
+};
+
 /** Zone for timestamps that carry none, unless the user picks another. */
 const DEFAULT_TIMEZONE = "UTC";
 
@@ -163,16 +171,24 @@ export function FlatLogMappingDialog({ open, file, preview: initialPreview, onCa
   // Object attributes point at an id column that may have changed role since.
   const idColumns = columns.filter((c) => c.role === "object_id" || c.role === "resource");
 
-  const changeDelimiter = async (delimiter: string) => {
-    if (!file) return;
+  /** Read the file again with another separator or encoding. */
+  const reload = async (options: { delimiter?: string; encoding?: string }) => {
+    if (!file || !preview) return;
     setReloading(true);
     setReloadError(null);
     try {
-      const next = await previewFlatLog(file, delimiter);
+      const next = await previewFlatLog(
+        file,
+        options.delimiter ?? preview.delimiter,
+        options.encoding ?? preview.encoding,
+      );
       setPreview(next);
-      const mapped = initialMapping(next);
+      // Keep what the user already chose for columns that are still there.
+      const mapped = carryOverMapping(columns, initialMapping(next));
       setColumns(mapped);
-      setSelected(mapped[0]?.column ?? null);
+      setSelected((current) =>
+        mapped.some((c) => c.column === current) ? current : mapped[0]?.column ?? null,
+      );
     } catch (err: unknown) {
       const message =
         (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Could not re-read the file.";
@@ -192,7 +208,15 @@ export function FlatLogMappingDialog({ open, file, preview: initialPreview, onCa
         : [],
     [preview, tsIndex],
   );
-  const [tsCheck, setTsCheck] = useState<{ ok: number; total: number; example?: [string, string]; firstBad?: string } | null>(null);
+  const [tsCheck, setTsCheck] = useState<{
+    ok: number;
+    total: number;
+    example?: [string, string];
+    firstBad?: string;
+    /** The format the import will use ("auto" settles on one per column). */
+    format: string;
+    ambiguousWith: TimestampAmbiguity[];
+  } | null>(null);
   const [tsChecking, setTsChecking] = useState(false);
   const [tsError, setTsError] = useState<string | null>(null);
   const tsFormat = tsColumn?.format || "auto";
@@ -208,8 +232,9 @@ export function FlatLogMappingDialog({ open, file, preview: initialPreview, onCa
     setTsChecking(true);
     const handle = window.setTimeout(async () => {
       try {
-        const results = await parseTimestamps(tsSamples, tsFormat, tsZone);
+        const check = await parseTimestamps(tsSamples, tsFormat, tsZone);
         if (cancelled) return;
+        const results = check.results;
         setTsError(null);
         const okIndex = results.findIndex((r) => r !== null);
         const badIndex = results.findIndex((r) => r === null);
@@ -218,6 +243,8 @@ export function FlatLogMappingDialog({ open, file, preview: initialPreview, onCa
           total: results.length,
           example: okIndex >= 0 ? [tsSamples[okIndex], results[okIndex] as string] : undefined,
           firstBad: badIndex >= 0 ? tsSamples[badIndex] : undefined,
+          format: check.format,
+          ambiguousWith: check.ambiguous_with,
         });
       } catch (err: unknown) {
         if (cancelled) return;
@@ -240,11 +267,18 @@ export function FlatLogMappingDialog({ open, file, preview: initialPreview, onCa
   const problems = mappingProblems(columns);
   if (tsError) problems.push({ level: "error", text: tsError });
   if (tsCheck && tsCheck.total > 0 && tsCheck.ok === 0) {
-    problems.push({ level: "error", text: `No sample timestamp matches “${tsFormat}” (e.g. “${tsCheck.firstBad}”).` });
+    problems.push({ level: "error", text: `No sample timestamp matches “${formatLabel(tsFormat)}” (e.g. “${tsCheck.firstBad}”).` });
   } else if (tsCheck && tsCheck.ok < tsCheck.total) {
     problems.push({
       level: "warning",
-      text: `${tsCheck.total - tsCheck.ok} of ${tsCheck.total} sample timestamps do not match; those events will be skipped.`,
+      text: `${tsCheck.total - tsCheck.ok} of ${tsCheck.total} sample timestamps do not match “${formatLabel(tsCheck.format)}”; those events will be skipped.`,
+    });
+  }
+  if (tsCheck && tsCheck.ambiguousWith.length > 0) {
+    const alt = tsCheck.ambiguousWith[0];
+    problems.push({
+      level: "warning",
+      text: `The timestamps also fit “${formatLabel(alt.format)}”: check that “${alt.value}” means ${formatIso(alt.as_chosen)} and not ${formatIso(alt.as_other)}.`,
     });
   }
   const blocking = problems.some((p) => p.level === "error");
@@ -253,6 +287,7 @@ export function FlatLogMappingDialog({ open, file, preview: initialPreview, onCa
     if (blocking || !preview) return;
     onConfirm({
       delimiter: preview.format === "csv" ? preview.delimiter : null,
+      encoding: preview.format === "csv" ? preview.encoding : null,
       columns: columns.map((c) => {
         const out: FlatColumnMapping = { column: c.column, role: c.role };
         if (c.role === "object_id" || c.role === "resource") out.object_type = c.object_type?.trim();
@@ -395,6 +430,7 @@ export function FlatLogMappingDialog({ open, file, preview: initialPreview, onCa
                     <span className="text-emerald-700 dark:text-emerald-400 flex items-center gap-1">
                       <CheckCircle2 className="h-3.5 w-3.5" />
                       All {tsCheck.total} sample values parse
+                      {tsFormat === "auto" && <> as {formatLabel(tsCheck.format)}</>}
                       {tsCheck.example && <> — “{tsCheck.example[0]}” → {formatIso(tsCheck.example[1])}</>}
                     </span>
                   ) : (
@@ -405,6 +441,21 @@ export function FlatLogMappingDialog({ open, file, preview: initialPreview, onCa
                     </span>
                   )
                 ) : null}
+                {!tsChecking && tsCheck && tsCheck.ambiguousWith.length > 0 && (
+                  <span className="flex items-center gap-1 text-amber-700 dark:text-amber-400" data-testid="timestamp-ambiguous">
+                    <AlertTriangle className="h-3.5 w-3.5" />
+                    Also fits {formatLabel(tsCheck.ambiguousWith[0].format)}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-6 px-2 text-xs"
+                      onClick={() => update(selectedMapping.column, { format: tsCheck.ambiguousWith[0].format })}
+                    >
+                      Use that instead
+                    </Button>
+                  </span>
+                )}
               </div>
             )}
           </div>
@@ -492,13 +543,28 @@ export function FlatLogMappingDialog({ open, file, preview: initialPreview, onCa
             {preview?.format === "csv" && (
               <label className="flex items-center gap-2">
                 Separator
-                <Select value={preview.delimiter ?? ","} onValueChange={changeDelimiter} disabled={reloading}>
+                <Select value={preview.delimiter ?? ","} onValueChange={(delimiter) => reload({ delimiter })} disabled={reloading}>
                   <SelectTrigger size="sm" className="w-36" aria-label="Separator">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     {DELIMITERS.map((d) => (
                       <SelectItem key={d.label} value={d.value}>{d.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
+            )}
+            {preview?.format === "csv" && (
+              <label className="flex items-center gap-2">
+                Encoding
+                <Select value={preview.encoding ?? "utf-8"} onValueChange={(encoding) => reload({ encoding })} disabled={reloading}>
+                  <SelectTrigger size="sm" className="w-56" aria-label="Encoding">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(preview.encodings ?? ["utf-8"]).map((e) => (
+                      <SelectItem key={e} value={e}>{ENCODING_LABELS[e] ?? e}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>

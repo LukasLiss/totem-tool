@@ -231,7 +231,8 @@ export function FileUploadValidator() {
       if (skipped) {
         // Rows that did not fit the mapping are not an error, but the user
         // must not have to discover them by counting events.
-        toast.warning(skipped.title, {
+        const show = skipped.skipped > 0 ? toast.warning : toast.info;
+        show(skipped.title, {
           description: (
             <div className="text-left space-y-1 mt-1">
               <ul className="list-disc pl-4 space-y-0.5">
@@ -239,9 +240,11 @@ export function FileUploadValidator() {
                   <li key={i} className="text-xs">{line}</li>
                 ))}
               </ul>
-              <p className="text-xs text-muted-foreground">
-                Upload the file again with a different mapping to include them.
-              </p>
+              {skipped.skipped > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Upload the file again with a different mapping to include them.
+                </p>
+              )}
             </div>
           ),
           duration: 15000,
