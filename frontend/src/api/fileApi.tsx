@@ -3,15 +3,103 @@ import { filterRequestConfig } from "@/store/filterStore";
 
 export async function uploadFile(
   file: File,
-  onUploadProgress?: (progressEvent: AxiosProgressEvent) => void
+  onUploadProgress?: (progressEvent: AxiosProgressEvent) => void,
+  mapping?: FlatLogMapping,
 ) {
   const formData = new FormData();
   formData.append("file", file);
+  if (mapping) formData.append("mapping", JSON.stringify(mapping));
   const { data } = await axios.post("/api/files/", formData, {
     _skipGlobalFilter: true,
     onUploadProgress,
   });
   return data;
+}
+
+// ---------------------------------------------------------------------------
+// Case-centric ("flat") logs: XES and plain CSV, imported through a column
+// mapping. See totem_lib/src/totem_lib/ocel/flat_log.py.
+// ---------------------------------------------------------------------------
+
+export type FlatLogRole =
+  | "object_id"
+  | "resource"
+  | "activity"
+  | "timestamp"
+  | "event_attribute"
+  | "object_attribute"
+  | "ignore";
+
+export interface FlatColumnMapping {
+  column: string;
+  role: FlatLogRole;
+  /** object_id / resource: the object type the ids belong to. */
+  object_type?: string;
+  /** timestamp: "auto", "unix_s", "unix_ms" or a pattern like "dd.MM.yyyy HH:mm". */
+  format?: string;
+  /** object_attribute: the object id column whose objects get the attribute. */
+  target?: string;
+}
+
+export interface FlatLogMapping {
+  columns: FlatColumnMapping[];
+  delimiter?: string | null;
+}
+
+export interface FlatLogPreviewColumn {
+  name: string;
+  suggestion: Omit<FlatColumnMapping, "column">;
+  empty: number;
+  distinct: number;
+}
+
+export interface FlatLogPreview {
+  format: "xes" | "csv";
+  /** "ocel_csv": an OCEL 2.0 CSV, which imports without a mapping. */
+  kind: "flat" | "ocel_csv";
+  columns: FlatLogPreviewColumn[];
+  rows: string[][];
+  delimiter: string | null;
+  truncated: boolean;
+  timestamp_presets: string[];
+}
+
+/** File names that may hold a case-centric log, by format. */
+export function flatLogFormat(fileName: string): "xes" | "csv" | null {
+  const name = fileName.toLowerCase();
+  if (name.endsWith(".xes") || name.endsWith(".xes.gz")) return "xes";
+  if (name.endsWith(".csv") || name.endsWith(".tsv") || name.endsWith(".txt")) return "csv";
+  return null;
+}
+
+/** Bytes sent for a preview: enough for the first 100 events of most logs. */
+const PREVIEW_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Columns, suggested roles and first rows of a flat log.
+ *
+ * Only the start of the file is sent, so a large log is not uploaded twice;
+ * the real upload follows once the user has mapped the columns.
+ */
+export async function previewFlatLog(file: File, delimiter?: string | null): Promise<FlatLogPreview> {
+  const truncated = file.size > PREVIEW_BYTES;
+  const formData = new FormData();
+  formData.append("file", file.slice(0, PREVIEW_BYTES), "preview");
+  formData.append("filename", file.name);
+  formData.append("truncated", truncated ? "true" : "false");
+  if (delimiter) formData.append("delimiter", delimiter);
+  const { data } = await axios.post("/api/files/preview/", formData, { _skipGlobalFilter: true });
+  return data;
+}
+
+/** Parse sample values with a timestamp format, exactly as the import will. */
+export async function parseTimestamps(values: string[], format: string): Promise<(string | null)[]> {
+  const { data } = await axios.post(
+    "/api/files/parse-timestamps/",
+    { values, format },
+    { _skipGlobalFilter: true },
+  );
+  return data.results;
 }
 
 export interface UploadLimits {

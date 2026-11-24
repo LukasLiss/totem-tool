@@ -1,7 +1,16 @@
 import { useState, useRef, useContext } from "react";
 import axios from "axios";
 import { fileTypeFromBlob } from "file-type";
-import { getUploadLimits, importProject, uploadFile } from "../api/fileApi";
+import {
+  flatLogFormat,
+  getUploadLimits,
+  importProject,
+  previewFlatLog,
+  uploadFile,
+  type FlatLogMapping,
+  type FlatLogPreview,
+} from "../api/fileApi";
+import { FlatLogMappingDialog } from "./FlatLogMappingDialog";
 import { Loader2, CheckCircle2, XCircle } from "lucide-react";
 import {useDropzone} from 'react-dropzone';
 import { Button } from "@/components/ui/button";
@@ -51,6 +60,10 @@ export function FileUploadValidator() {
     const [isConverting, setIsConverting] = useState(false);
     const [uploadPercent, setUploadPercent] = useState<number | null>(null);
     const [uploadStage, setUploadStage] = useState<string>("");
+    // Case-centric logs (XES, plain CSV) are mapped column by column first.
+    const [flatPreview, setFlatPreview] = useState<FlatLogPreview | null>(null);
+    const [showMappingDialog, setShowMappingDialog] = useState(false);
+    const [preparingPreview, setPreparingPreview] = useState(false);
     // The upload request is a tracked computation (see computationStore):
     // once the file is transferred, the backend reports the conversion
     // progress through it, and it can be cancelled.
@@ -91,15 +104,18 @@ export function FileUploadValidator() {
       (file.name.toLowerCase().endsWith(".sqlite") ||
         file.name.toLowerCase().endsWith(".db"));
     const isCsv =
-      type?.ext === "csv" || file.name.toLowerCase().endsWith(".csv");
+      type?.ext === "csv" || flatLogFormat(file.name) === "csv";
+    // Case-centric XES logs (plain or gzipped); imported through the column
+    // mapping dialog.
+    const isXes = flatLogFormat(file.name) === "xes";
     // The `file-type` library has no DuckDB signature, so `type?.ext` is
     // undefined for valid DuckDB files. Fall back to filename matching, in
     // line with how isJson / isCsv are handled.
     const isDuckDB =
       file.name.toLowerCase().endsWith(".duckdb");
 
-    if (!(isJson || isXml || isSqlite || isCsv || isDuckDB || isProjectBundle(file))){
-        toast.error("Invalid file type", {description:"Please choose a TOTeM project (.totem) or an event log ('json', 'xml', 'sqlite', 'csv', or 'duckdb')."});
+    if (!(isJson || isXml || isSqlite || isCsv || isXes || isDuckDB || isProjectBundle(file))){
+        toast.error("Invalid file type", {description:"Please choose a TOTeM project (.totem) or an event log ('json', 'xml', 'sqlite', 'csv', 'xes', or 'duckdb')."});
         return false;
     }
 
@@ -179,7 +195,7 @@ export function FileUploadValidator() {
     setTimeout(() => setValidationStatus("idle"), 3000);
   };
 
-  const handleFileUpload = async () => {
+  const handleFileUpload = async (mapping?: FlatLogMapping) => {
     try {
       if (!file) {
         toast.warning("No file selected!");
@@ -204,7 +220,7 @@ export function FileUploadValidator() {
             setUploadStage(`Uploading file... ${percent}%`);
           }
         }
-      });
+      }, mapping);
       setSelectedFile(response);
       setValidationStatus('success');
       toast.success("Upload successful", {
@@ -212,6 +228,7 @@ export function FileUploadValidator() {
       });
       if (response?.id != null) await prepareLargeLogFilter(Number(response.id));
       setFile(null);
+      setFlatPreview(null);
       setShowConversionModal(false);
       setIsConverting(false);
       setUploadPercent(null);
@@ -225,6 +242,12 @@ export function FileUploadValidator() {
       setValidationStatus(isCancelledError(err) ? 'idle' : 'error');
       setTimeout(() => setValidationStatus('idle'), 3000);
 
+      if (mapping && !isCancelledError(err)) {
+        // Back to the mapping, as the user left it, to fix what the
+        // error below points at (usually the timestamp format).
+        setShowConversionModal(false);
+        setShowMappingDialog(true);
+      }
       if (isCancelledError(err)) {
         setShowConversionModal(false);
         toast.info("Upload cancelled", { description: "The file was not imported." });
@@ -259,6 +282,27 @@ export function FileUploadValidator() {
  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const isValid = await validateFile();
+    if (isValid && file && flatLogFormat(file.name)) {
+      // XES and plain CSV need their columns mapped. An OCEL 2.0 CSV is
+      // recognised from its header and imported as before.
+      setPreparingPreview(true);
+      try {
+        const preview = await previewFlatLog(file);
+        if (preview.kind === "flat") {
+          setFlatPreview(preview);
+          setShowMappingDialog(true);
+          return;
+        }
+      } catch (err: unknown) {
+        const description = axios.isAxiosError(err)
+          ? err.response?.data?.error ?? "The file could not be read."
+          : "The file could not be read.";
+        toast.error("Could not preview the event log", { description });
+        return;
+      } finally {
+        setPreparingPreview(false);
+      }
+    }
     if (isValid) {
       // A project bundle already holds a converted log, so the conversion
       // notice does not apply to it — only an event log in another format
@@ -295,7 +339,7 @@ export function FileUploadValidator() {
                 style={{ opacity: 0 }}
               />
               <input  {...getInputProps()} />
-              <p className="text-lg text-primary">Click or drag and drop an OCEL file or a TOTeM project (.totem) here to start a new project</p>
+              <p className="text-lg text-primary">Click or drag and drop an OCEL file, a case-centric log (.xes, .csv) or a TOTeM project (.totem) here to start a new project</p>
             </div>
 
         <CardFooter className="flex-col gap-6 text-sm w-full mt-6 p-0">
@@ -306,13 +350,15 @@ export function FileUploadValidator() {
               <Button 
                 className="w-full flex mt-2 md:flex-row cursor-pointer transition hover:shadow-lg gap-2" 
                 type="submit"
-                disabled={isConverting || validationStatus === 'loading'}
+                disabled={isConverting || preparingPreview || validationStatus === 'loading'}
               >
-                {(isConverting || validationStatus === 'loading') && <Loader2 className="h-4 w-4 animate-spin" />}
+                {(isConverting || preparingPreview || validationStatus === 'loading') && <Loader2 className="h-4 w-4 animate-spin" />}
                 {validationStatus === 'success' && <CheckCircle2 className="h-4 w-4 text-green-500" />}
                 {validationStatus === 'error' && <XCircle className="h-4 w-4 text-red-500" />}
                 {isConverting
                   ? uploadStage || 'Converting & Validating...'
+                  : preparingPreview
+                  ? 'Reading columns...'
                   : validationStatus === 'loading'
                   ? uploadStage || 'Validating...'
                   : 'Validate & Upload'}
@@ -322,6 +368,20 @@ export function FileUploadValidator() {
       </form>
     </CardContent>
   </Card>
+
+  <FlatLogMappingDialog
+    open={showMappingDialog}
+    file={file}
+    preview={flatPreview}
+    onCancel={() => setShowMappingDialog(false)}
+    onConfirm={(mapping) => {
+      // Straight into the import: the mapping dialog was the confirmation.
+      setShowMappingDialog(false);
+      setShowConversionModal(true);
+      setIsConverting(true);
+      handleFileUpload(mapping);
+    }}
+  />
 
   <Dialog open={showConversionModal} onOpenChange={(open) => {
     if (!isConverting) {
