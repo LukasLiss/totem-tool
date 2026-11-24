@@ -202,6 +202,10 @@
   pointer-events: none;
   color: var(--muted-foreground);
 }
+/* Gone as soon as the caret is in the editor, not only once something is typed. */
+.tiptap-text-box.ProseMirror-focused p.is-editor-empty:first-child::before {
+  content: none;
+}
 
 /* The editor fills its tile; lists need their markers back, because the
    Tailwind preflight removes them. */

@@ -64,15 +64,32 @@ const run = (text: string, marks?: Array<Record<string, unknown>>) => ({
   ...(marks ? { marks } : {}),
 });
 
+/** Edit mode edits in a popup: double-click the tile to open it. */
+function openEditor() {
+  fireEvent.doubleClick(screen.getByLabelText("Edit text box"));
+}
+
+/** The popup portals to the body, outside the widget's container. */
+const editorElement = () => document.body.querySelector(".tiptap-text-box") as HTMLElement | null;
+
 describe("TextBoxComponent edit mode", () => {
-  it("mounts the editor with the box's existing text", () => {
+  it("shows the real text on the tile, without an editor", () => {
     const { container } = renderWidget();
-    expect(container.querySelector(".tiptap-text-box")).not.toBeNull();
     expect(container.textContent).toContain("hello");
+    expect(container.querySelector(".tiptap-text-box")).toBeNull();
+    expect(screen.queryByLabelText("Bold")).toBeNull();
+  });
+
+  it("opens the editor with the box's existing text on a double-click", () => {
+    renderWidget();
+    openEditor();
+    expect(editorElement()).not.toBeNull();
+    expect(editorElement()?.textContent).toContain("hello");
   });
 
   it("offers the formatting controls", () => {
     renderWidget();
+    openEditor();
     for (const label of [
       "Font size", "Font", "Bold", "Italic", "Underline",
       "Align left", "Align center", "Align right", "Align justify",
@@ -84,39 +101,57 @@ describe("TextBoxComponent edit mode", () => {
   });
 
   it("shows an existing rich document's text", () => {
-    const { container } = renderWidget({
+    renderWidget({
       rich_text: doc(para([run("already", [{ type: "bold" }])])),
       text: "already",
     });
-    expect(container.textContent).toContain("already");
+    openEditor();
+    expect(editorElement()?.textContent).toContain("already");
   });
 
-  // Background colour and vertical alignment stay box-level: neither can be
-  // expressed per paragraph, so they still patch the node directly.
   it("declares the default alignment on the editor wrapper too", () => {
-    const { container } = renderWidget({ text: "hello" });
-    const editor = container.querySelector(".tiptap-text-box") as HTMLElement;
-    const wrapper = editor.closest("[style*='text-align']") as HTMLElement | null;
+    renderWidget({ text: "hello" });
+    openEditor();
+    const wrapper = editorElement()?.closest("[style*='text-align']") as HTMLElement | null;
     expect(wrapper?.style.textAlign).toBe("left");
   });
 
-  it("applies a background colour change immediately and patches the node", () => {
+  // Background colour and vertical alignment stay box-level: neither can be
+  // expressed per paragraph, so they patch the node directly — on Apply.
+  it("shows a background colour change in the popup and patches the node on Apply", () => {
     const { node } = renderWidget();
+    openEditor();
     fireEvent.click(screen.getByLabelText("Background colour"));
     fireEvent.click(screen.getByLabelText("#1e293b"));
 
-    expect(node.background_color).toBe("#1e293b");
     expect(screen.getByLabelText("Background colour").textContent).toContain("#1e293b");
+    expect(node.background_color).toBeUndefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    expect(node.background_color).toBe("#1e293b");
   });
 
-  it("applies a vertical alignment change immediately", () => {
+  it("patches a vertical alignment change on Apply", () => {
     const { node } = renderWidget();
+    openEditor();
     fireEvent.click(screen.getByLabelText("Vertical align bottom"));
-
-    expect(node.vertical_align).toBe("bottom");
     expect(screen.getByLabelText("Vertical align bottom").getAttribute("aria-pressed")).toBe(
       "true",
     );
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    expect(node.vertical_align).toBe("bottom");
+  });
+
+  it("leaves the node alone on Cancel", () => {
+    const { node, onUpdate } = renderWidget();
+    openEditor();
+    fireEvent.click(screen.getByLabelText("Vertical align bottom"));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(node.vertical_align).toBeUndefined();
+    expect(editorElement()).toBeNull();
   });
 });
 

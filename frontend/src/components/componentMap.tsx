@@ -102,7 +102,7 @@ import SqlQueryEditor, {
 import { useFilterVersion } from '@/store/filterStore';
 import { WidgetHeader } from '@/components/ui/WidgetTitle';
 import { useDashboardLocalFilter } from '@/hooks/useDashboardLocalFilter';
-import TextBoxEditor from '@/components/text-box/TextBoxEditor';
+import TextBoxEditDialog, { type TextBoxEdit } from '@/components/text-box/TextBoxEditDialog';
 import RichTextRenderer from '@/components/text-box/RichTextRenderer';
 import { useProjectDashboards } from '@/components/text-box/useProjectDashboards';
 import {
@@ -258,8 +258,8 @@ export interface ComponentProps {
 
 
 // TextBoxComponent: free text plus block-level formatting (#373). Edit mode
-// shows a formatting toolbar above the textarea, the way ImageComponent
-// shows its settings; view mode renders the same styles on a paragraph.
+// shows the real text as a draft tile; a double-click opens the editor popup
+// (TextBoxEditDialog), which edits it at the tile's exact size.
 // The text is a React text node throughout, never HTML, so there is no
 // markup to sanitise.
 export const TextBoxComponent: React.FC<ComponentProps> = ({
@@ -352,48 +352,102 @@ export const TextBoxComponent: React.FC<ComponentProps> = ({
     onUpdate?.({ ...conversionPatch(next), text: plain } as Partial<GridStackNode>);
   };
 
+  // Edit mode: the popup, opened with the tile's exact size so the text is
+  // edited exactly as it will look.
+  const tileRef = React.useRef<HTMLDivElement>(null);
+  const [editFrame, setEditFrame] = React.useState<{ width: number; height: number } | null>(null);
+  const openEditor = () => {
+    const tile = tileRef.current;
+    // offsetWidth / offsetHeight: the layout size, unaffected by any zoom transform.
+    if (tile) setEditFrame({ width: tile.offsetWidth, height: tile.offsetHeight });
+  };
+  const applyEdit = (edit: TextBoxEdit) => {
+    if (Object.keys(edit.format).length > 0) handleFormatChange(edit.format);
+    if (edit.doc) handleDocChange(edit.doc);
+  };
+
+  // The text as on the dashboard; edit mode shows the same, with a draft label.
+  const textCard = (
+    // min-h is deliberately absent: the card fills whatever the grid tile
+    // is, rather than forcing 320px into a 2-row widget.
+    <Card className="w-full h-full rounded-none py-0 overflow-hidden">
+      <CardContent className="h-full p-3" style={containerStyle}>
+        {hasRichText ? (
+          // The document carries its own styling; the container only
+          // supplies the plain defaults for anything a run leaves unset.
+          <div
+            style={{
+              fontSize: TEXT_BOX_FORMAT_DEFAULTS.font_size,
+              color: TEXT_BOX_FORMAT_DEFAULTS.text_color,
+              lineHeight: TEXT_BOX_FORMAT_DEFAULTS.line_height,
+              // Mirrors TextBoxEditor: without it an unaligned block
+              // inherits `text-align: center` from `.grid-stack-item-content`.
+              textAlign: TEXT_BOX_FORMAT_DEFAULTS.text_align,
+            }}
+          >
+            <RichTextRenderer
+              doc={doc}
+              // Links don't navigate while the dashboard is being edited.
+              onDashboardLink={isEditMode ? () => {} : setPendingDashboard}
+              knownDashboardIds={knownDashboardIds}
+            />
+          </div>
+        ) : (
+          <p style={{ ...textStyle, whiteSpace: 'pre-wrap', margin: 0 }}>{text}</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+
   return (
-    <div style={{ height: '100%', width: '100%' }}>
+    <div ref={tileRef} style={{ height: '100%', width: '100%' }}>
       {isEditMode ? (
-        <Card className="w-full h-full rounded-none flex flex-col gap-0 py-0 overflow-hidden">
-          <TextBoxEditor
-            doc={doc}
-            format={format}
-            onDocChange={handleDocChange}
-            onFormatChange={handleFormatChange}
-            idPrefix={`text-box-${node.component_id}`}
-            dashboards={dashboards}
-          />
-        </Card>
+        // The real text, like other widgets' draft tiles: a label in the corner,
+        // double-click (or Enter / Space) opens the editor popup.
+        <div
+          className="group relative h-full w-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          role="button"
+          tabIndex={0}
+          aria-label="Edit text box"
+          onDoubleClick={openEditor}
+          onKeyDown={(e) => {
+            // Only keys on the tile itself; the popup's events bubble up here through React.
+            if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
+              e.preventDefault();
+              openEditor();
+            }
+          }}
+        >
+          {textCard}
+          <span className="pointer-events-none absolute left-2 top-1.5 rounded bg-background/80 px-1.5 text-xs font-medium text-muted-foreground">
+            Text
+          </span>
+          <span className="pointer-events-none absolute inset-x-0 bottom-1.5 text-center text-xs text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100">
+            Double-click to edit
+          </span>
+          {!text.trim() && (
+            <span className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
+              Empty text box
+            </span>
+          )}
+        </div>
       ) : (
-        // min-h is deliberately absent: the card fills whatever the grid tile
-        // is, rather than forcing 320px into a 2-row widget.
-        <Card className="w-full h-full rounded-none py-0 overflow-hidden">
-          <CardContent className="h-full p-3" style={containerStyle}>
-            {hasRichText ? (
-              // The document carries its own styling; the container only
-              // supplies the plain defaults for anything a run leaves unset.
-              <div
-                style={{
-                  fontSize: TEXT_BOX_FORMAT_DEFAULTS.font_size,
-                  color: TEXT_BOX_FORMAT_DEFAULTS.text_color,
-                  lineHeight: TEXT_BOX_FORMAT_DEFAULTS.line_height,
-                  // Mirrors TextBoxEditor: without it an unaligned block
-                  // inherits `text-align: center` from `.grid-stack-item-content`.
-                  textAlign: TEXT_BOX_FORMAT_DEFAULTS.text_align,
-                }}
-              >
-                <RichTextRenderer
-                  doc={doc}
-                  onDashboardLink={setPendingDashboard}
-                  knownDashboardIds={knownDashboardIds}
-                />
-              </div>
-            ) : (
-              <p style={{ ...textStyle, whiteSpace: 'pre-wrap', margin: 0 }}>{text}</p>
-            )}
-          </CardContent>
-        </Card>
+        textCard
+      )}
+
+      {editFrame && (
+        <TextBoxEditDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setEditFrame(null);
+          }}
+          frame={editFrame}
+          doc={doc}
+          format={format}
+          idPrefix={`text-box-${node.component_id}`}
+          dashboards={dashboards}
+          onApply={applyEdit}
+        />
       )}
 
       {/* The same Dialog grid.tsx uses to confirm discarding changes. It
