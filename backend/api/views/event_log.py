@@ -43,6 +43,13 @@ from totem_lib.totem import (
 )
 from totem_lib.process_areas import prepare_db, process_areas_from_aggregates
 from totem_lib.ocel import FilterStack, apply_filter_stack, import_ocel_db
+from totem_lib.ocel.flat_log import (
+    FlatLogMapping,
+    FlatLogMappingError,
+    flat_log_format,
+    parse_timestamp,
+    preview_flat_log,
+)
 from totem_lib.ocel.event_columns import list_event_columns
 from totem_lib.ocpn import (
     DuplicateTransitionLabelError,
@@ -285,11 +292,13 @@ def _claim_storage_name(storage, name, max_length=None):
         return candidate, path
 
 
-def _convert_upload_to_duckdb(upload, progress=None):
+def _convert_upload_to_duckdb(upload, progress=None, mapping=None):
     """Convert an uploaded OCEL file to DuckDB beside it; return the new name.
 
     ``progress`` is handed to ``import_ocel_db`` (a ``callback(fraction,
     message)``), so the client can follow — and cancel — the conversion.
+    ``mapping`` is the column mapping of a case-centric log (XES, plain CSV)
+    chosen in the import dialog; see ``totem_lib.ocel.flat_log``.
 
     The target must not simply be the upload's name with a `.duckdb`
     extension: Django de-duplicated the upload's name only against files
@@ -302,7 +311,11 @@ def _convert_upload_to_duckdb(upload, progress=None):
     try:
         work_path = os.path.join(work_dir, "log.duckdb")
         import_ocel_db(
-            upload.path, db_path=work_path, strict_mode=False, progress=progress
+            upload.path,
+            db_path=work_path,
+            strict_mode=False,
+            progress=progress,
+            mapping=mapping,
         ).close()
         root, _ = os.path.splitext(upload.name)
         name, path = _claim_storage_name(
@@ -437,11 +450,17 @@ class EventLogViewSet(OCAlignmentActionsMixin, viewsets.ModelViewSet):
             return
         try:
             converted_name = _convert_upload_to_duckdb(
-                event_log.file, progress=getattr(self, "_import_progress", None)
+                event_log.file,
+                progress=getattr(self, "_import_progress", None),
+                mapping=getattr(self, "_import_mapping", None),
             )
         except JobCancelled:
             _discard_upload(event_log)
             raise
+        except FlatLogMappingError as e:
+            # The user picked the mapping, so say what is wrong with it as is.
+            _discard_upload(event_log)
+            raise serializers.ValidationError({"error": str(e)})
         except Exception as e:
             _discard_upload(event_log)
             if isinstance(e, OCELValidationException):
@@ -458,15 +477,36 @@ class EventLogViewSet(OCAlignmentActionsMixin, viewsets.ModelViewSet):
         check_project_limit(request.user)
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        
+
+        # Column mapping of a case-centric log (XES / plain CSV), as JSON.
+        # Checked before the conversion so a bad one fails fast.
+        mapping = None
+        raw_mapping = request.data.get("mapping")
+        if raw_mapping:
+            try:
+                mapping = FlatLogMapping.from_dict(
+                    json.loads(raw_mapping) if isinstance(raw_mapping, str) else raw_mapping
+                )
+            except (ValueError, TypeError) as e:
+                message = str(e) if isinstance(e, FlatLogMappingError) else "The column mapping is not valid JSON."
+                return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
+            upload_name = serializer.validated_data["file"].name
+            if flat_log_format(upload_name) is None:
+                return Response(
+                    {"error": "A column mapping only applies to XES and CSV files."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         try:
             with job_scope(request, "Importing event log") as job:
                 job.report(0.0, "Converting to DuckDB")
                 self._import_progress = job.report
+                self._import_mapping = mapping
                 try:
                     self.perform_create(serializer)
                 finally:
                     self._import_progress = None
+                    self._import_mapping = None
                 user_file = serializer.instance
 
                 job.report(None, "Opening database")
@@ -534,6 +574,76 @@ class EventLogViewSet(OCAlignmentActionsMixin, viewsets.ModelViewSet):
             content_type="application/zip",
         )
         return response
+
+    # Enough rows for the mapping dialog; the client sends only this much.
+    PREVIEW_MAX_BYTES = 8 * 1024 * 1024
+    PREVIEW_MAX_ROWS = 100
+
+    @action(detail=False, methods=["post"], url_path="preview")
+    def preview(self, request):
+        """Columns and first rows of a case-centric log (XES or plain CSV).
+
+        The client sends only the start of the file (``file``), the real
+        file name (``filename``) and whether it cut the file (``truncated``),
+        so a large log is not uploaded twice. Nothing is stored. The answer
+        is ``totem_lib.ocel.flat_log.preview_flat_log``'s: columns with a
+        suggested role each, the first rows, and ``kind`` — ``"ocel_csv"``
+        when the CSV is an OCEL 2.0 one that needs no mapping.
+        """
+        upload = request.FILES.get("file")
+        if upload is None:
+            return Response({"error": "No file was uploaded."}, status=status.HTTP_400_BAD_REQUEST)
+        file_name = request.data.get("filename") or upload.name
+        if flat_log_format(file_name) is None:
+            return Response(
+                {"error": "Only XES and CSV files can be previewed."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        data = upload.read(self.PREVIEW_MAX_BYTES + 1)
+        truncated = (
+            str(request.data.get("truncated", "")).lower() in ("1", "true", "yes")
+            or len(data) > self.PREVIEW_MAX_BYTES
+        )
+        delimiter = request.data.get("delimiter") or None
+        if delimiter is not None and len(delimiter) != 1:
+            return Response({"error": "The delimiter must be a single character."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            result = preview_flat_log(
+                data[: self.PREVIEW_MAX_BYTES],
+                file_name,
+                max_rows=self.PREVIEW_MAX_ROWS,
+                truncated=truncated,
+                delimiter=delimiter,
+            )
+        except Exception as e:  # malformed XML, undecodable gzip, ...
+            return Response(
+                {"error": f"The file could not be read: {e}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not result["columns"]:
+            return Response(
+                {"error": "No events were found at the start of the file."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(result)
+
+    @action(detail=False, methods=["post"], url_path="parse-timestamps")
+    def parse_timestamps(self, request):
+        """Try a timestamp format on sample values, for the mapping dialog.
+
+        Body: ``{"values": [...], "format": "dd.MM.yyyy HH:mm"}``; answers
+        ``{"results": [iso string or null, ...]}`` using the very parser the
+        import uses, so what the dialog shows is what the import will do.
+        """
+        values = request.data.get("values")
+        fmt = request.data.get("format") or "auto"
+        if not isinstance(values, list) or not isinstance(fmt, str):
+            return Response(
+                {"error": "Send 'values' (a list) and 'format' (a string)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        results = [parse_timestamp(None if v is None else str(v), fmt) for v in values[:500]]
+        return Response({"results": results})
 
     @action(detail=False, methods=["post"], url_path="import-project")
     def import_project(self, request):
