@@ -1,4 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Filter, Calendar, Layers, Zap, X, ChevronRight } from 'lucide-react';
 import axios from 'axios';
 import { FilterConfigDialog } from '@/components/FilterConfigDialog';
@@ -32,6 +33,30 @@ const BUTTON_BASE: React.CSSProperties = {
 } as const;
 
 const stopPointerDown = (e: React.PointerEvent) => e.stopPropagation();
+
+// The menu's distance from its button and from the window's edges, in px.
+const MENU_GAP = 4;
+const VIEWPORT_MARGIN = 8;
+const MENU_MIN_WIDTH = 300;
+
+/**
+ * Where the menu goes on screen: below its button, left-aligned with it;
+ * shifted left when it would leave the window on the right, and above the
+ * button when there is no room below. The menu is rendered at the page's top
+ * level (a portal), so a small card can't cut it off.
+ */
+function menuPosition(button: DOMRect, menu: { width: number; height: number }) {
+  const width = Math.max(menu.width, MENU_MIN_WIDTH);
+  const left = Math.max(
+    VIEWPORT_MARGIN,
+    Math.min(button.left, window.innerWidth - VIEWPORT_MARGIN - width),
+  );
+  const below = button.bottom + MENU_GAP;
+  const fitsBelow = below + menu.height <= window.innerHeight - VIEWPORT_MARGIN;
+  const above = button.top - MENU_GAP - menu.height;
+  const top = fitsBelow || above < VIEWPORT_MARGIN ? below : above;
+  return { left, top };
+}
 
 type TypeMeta = { type: FilterType; label: string; icon: React.ReactElement };
 
@@ -120,6 +145,9 @@ export function LocalFilterDropdown({
   const [optionsLoaded, setOptionsLoaded] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
+  // The menu lives in a portal, outside the container; it counts as inside for outside clicks.
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [menuPos, setMenuPos] = useState<{ left: number; top: number } | null>(null);
   const appliedRef = useRef(applied);
   appliedRef.current = applied;
 
@@ -178,7 +206,9 @@ export function LocalFilterDropdown({
     if (!dropdownOpen) return;
     function onMouseDown(e: MouseEvent) {
       if (dialogOpen) return;
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (menuRef.current?.contains(target)) return;
+      if (containerRef.current && !containerRef.current.contains(target)) {
         if (isDirty) {
           setConfirmClose(true);
         } else {
@@ -189,6 +219,28 @@ export function LocalFilterDropdown({
     document.addEventListener('mousedown', onMouseDown);
     return () => document.removeEventListener('mousedown', onMouseDown);
   }, [dropdownOpen, dialogOpen, isDirty]);
+
+  // Place the menu at its button, and keep it there while the page scrolls or resizes.
+  useLayoutEffect(() => {
+    if (!dropdownOpen) {
+      setMenuPos(null);
+      return;
+    }
+    const place = () => {
+      const button = containerRef.current?.getBoundingClientRect();
+      const menu = menuRef.current;
+      if (!button || !menu) return;
+      setMenuPos(menuPosition(button, { width: menu.offsetWidth, height: menu.offsetHeight }));
+    };
+    place();
+    // Capture: scrolling inside any container (the dashboard, a card) moves the button too.
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
+    return () => {
+      window.removeEventListener('scroll', place, true);
+      window.removeEventListener('resize', place);
+    };
+  }, [dropdownOpen, pending]);
 
   function openType(type: FilterType) {
     setActiveType(type);
@@ -244,13 +296,17 @@ export function LocalFilterDropdown({
         <Filter size={12} strokeWidth={2.5} />
       </button>
 
-      {dropdownOpen && (
+      {dropdownOpen && createPortal(
         <div
+          ref={menuRef}
+          onPointerDown={stopPropagation ? stopPointerDown : undefined}
           style={{
-            position: 'absolute',
-            top: 'calc(100% + 4px)',
-            left: 0,
-            minWidth: 300,
+            position: 'fixed',
+            top: menuPos?.top ?? 0,
+            left: menuPos?.left ?? 0,
+            // Measured once before it is placed, so it doesn't flash in the corner.
+            visibility: menuPos ? 'visible' : 'hidden',
+            minWidth: MENU_MIN_WIDTH,
             background: 'var(--background)',
             border: '1px solid var(--border)',
             borderRadius: 8,
@@ -332,7 +388,8 @@ export function LocalFilterDropdown({
               Apply
             </button>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {/* Confirmation dialog when closing with unapplied changes */}
