@@ -12,7 +12,7 @@ import { KPI_DEFAULT_QUERY } from "./constants";
 import { useSqlQueryData } from "@/react_component/sql/useSqlQueryData";
 import { WidgetMessage } from "./shared";
 import { linkedQueryOf, type SqlWidgetNodeFields, type SqlWidgetProps } from "./sqlWidgetUtils";
-import { formatKpiValue, pickKpiValue } from "./kpiUtils";
+import { formatKpiValue, kpiSampleNumber, pickKpiValue, useKpiSize } from "./kpiUtils";
 import WidgetDraftTile from "@/components/WidgetDraftTile";
 import KpiSketch from "./KpiSketch";
 import KpiSettingsDialog, { type KpiSettings } from "./KpiSettingsDialog";
@@ -101,9 +101,15 @@ const KpiComponent: React.FC<SqlWidgetProps<KpiNodeFields>> = ({
     () => pickKpiValue(data.rows, data.columns, valueColumn),
     [data.rows, data.columns, valueColumn]
   );
+  const formatted = value ? formatKpiValue(value.raw, decimals) : null;
+
+  // The number's size step, from the card's size (the same in edit mode, for the draft).
+  const [cardElement, setCardElement] = useState<HTMLDivElement | null>(null);
+  const size = useKpiSize(cardElement, formatted ?? kpiSampleNumber(decimals), prefix + suffix);
 
   if (isEditMode) {
     return (
+      <div ref={setCardElement} className="h-full w-full">
       <WidgetDraftTile
         typeLabel="KPI"
         hint={KPI_SKETCH_HINT}
@@ -118,6 +124,7 @@ const KpiComponent: React.FC<SqlWidgetProps<KpiNodeFields>> = ({
             // The sample number until the value is loaded (or without an event log / on an error).
             value={value && !data.loading && !data.error ? formatKpiValue(value.raw, decimals) : undefined}
             column={value?.column}
+            size={size}
             className="h-full w-full"
           />
         }
@@ -132,13 +139,12 @@ const KpiComponent: React.FC<SqlWidgetProps<KpiNodeFields>> = ({
           projectId={projectId}
         />
       </WidgetDraftTile>
+      </div>
     );
   }
 
-  const formatted = value ? formatKpiValue(value.raw, decimals) : null;
-
   return (
-    <Card className="flex h-full w-full flex-col gap-0 overflow-hidden rounded-none pt-0">
+    <Card ref={setCardElement} className="flex h-full w-full flex-col gap-0 overflow-hidden rounded-none pt-0">
       <WidgetHeader
         label={title}
         fileId={fileId}
@@ -159,15 +165,16 @@ const KpiComponent: React.FC<SqlWidgetProps<KpiNodeFields>> = ({
         ) : (
           <>
             <div className="flex items-baseline gap-1 whitespace-nowrap">
-              {prefix && <span className="text-lg text-muted-foreground">{prefix}</span>}
+              {/* Fixed size steps by the card's size (see KPI_SIZES). */}
+              {prefix && <span className="text-muted-foreground" style={{ fontSize: size.affix }}>{prefix}</span>}
               <span
                 className="font-semibold tabular-nums tracking-tight"
-                style={{ fontSize: "clamp(1.75rem, 12cqw, 3.5rem)", lineHeight: 1.1 }}
+                style={{ fontSize: size.number, lineHeight: 1.1 }}
                 title={value.column}
               >
                 {formatted}
               </span>
-              {suffix && <span className="text-lg text-muted-foreground">{suffix}</span>}
+              {suffix && <span className="text-muted-foreground" style={{ fontSize: size.affix }}>{suffix}</span>}
             </div>
             {!title && <span className="font-mono text-[11px] text-muted-foreground">{value.column}</span>}
           </>

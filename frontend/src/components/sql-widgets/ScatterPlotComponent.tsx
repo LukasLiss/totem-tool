@@ -19,7 +19,7 @@ import { CHART_SKETCH_HINT, SCATTER_DEFAULT_QUERY } from "./constants";
 import { useSqlQueryData } from "@/react_component/sql/useSqlQueryData";
 import { WidgetMessage } from "./shared";
 import { WidgetHeader } from "@/components/ui/WidgetTitle";
-import { linkedQueryOf, type SqlWidgetNodeFields, type SqlWidgetProps } from "./sqlWidgetUtils";
+import { formatChartNumber, linkedQueryOf, type SqlWidgetNodeFields, type SqlWidgetProps } from "./sqlWidgetUtils";
 import {
   NO_VALUE_COLOR,
   categoryFills,
@@ -313,6 +313,7 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
               dataKey="x"
               name={xLabel || xKey}
               tickLine={false}
+              tickFormatter={formatChartNumber}
               label={xLabel ? { value: xLabel, position: "insideBottom", offset: -7, fontSize: 11 } : undefined}
             />
             <YAxis
@@ -321,6 +322,7 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
               dataKey="y"
               name={yLabel || yKey}
               tickLine={false}
+              tickFormatter={formatChartNumber}
               label={yLabel ? { content: (props) => <VerticalAxisLabel {...props} text={yLabel} fontSize={11} /> } : undefined}
             />
             <ChartTooltip

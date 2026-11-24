@@ -31,6 +31,7 @@ import { WidgetHeader } from "@/components/ui/WidgetTitle";
 import WidgetDraftTile from "@/components/WidgetDraftTile";
 import {
   firstNumericColumn,
+  formatChartNumber,
   linkedQueryOf,
   toNumber,
   type SqlWidgetNodeFields,
@@ -242,7 +243,7 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
             <CartesianGrid vertical={horizontal} horizontal={!horizontal} strokeDasharray="3 3" />
             {horizontal ? (
               <>
-                <XAxis type="number" tickLine={false} axisLine={false} />
+                <XAxis type="number" tickLine={false} axisLine={false} tickFormatter={formatChartNumber} />
                 <YAxis
                   type="category"
                   dataKey="label"
@@ -266,7 +267,7 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
                   tickFormatter={(v: string) => (v.length > 16 ? `${v.slice(0, 15)}…` : v)}
                   tick={(props) => <TitledTick {...props} />}
                 />
-                <YAxis tickLine={false} axisLine={false} />
+                <YAxis tickLine={false} axisLine={false} tickFormatter={formatChartNumber} />
               </>
             )}
             <ChartTooltip

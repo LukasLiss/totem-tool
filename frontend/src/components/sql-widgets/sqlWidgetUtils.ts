@@ -125,6 +125,15 @@ export function firstNumericColumn(rows: Record<string, unknown>[], columns: str
   );
 }
 
+/**
+ * A number as shown in the charts (axis ticks, tooltips, legends): in the
+ * browser's format, like everywhere else in the tool (e.g. "1,200.5" or
+ * "1.200,5"); anything else as text.
+ */
+export function formatChartNumber(v: unknown): string {
+  return typeof v === "number" ? v.toLocaleString() : String(v);
+}
+
 export function toNumber(v: unknown): number | null {
   if (typeof v === "number") return Number.isFinite(v) ? v : null;
   if (typeof v === "string" && v.trim() !== "") {

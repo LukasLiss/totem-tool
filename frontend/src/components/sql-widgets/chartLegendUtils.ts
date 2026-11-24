@@ -40,7 +40,9 @@ export interface LegendItem {
 
 export function formatPercent(share: number): string {
   const pct = share * 100;
-  return `${pct >= 10 || pct === 0 ? pct.toFixed(0) : pct.toFixed(1)}%`;
+  // In the browser's number format like all other numbers ("12.5%" or "12,5%").
+  const digits = pct >= 10 || pct === 0 ? 0 : 1;
+  return `${pct.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits })}%`;
 }
 
 export function formatLegendValue(value: number, share: number, mode: LegendValues): string {
