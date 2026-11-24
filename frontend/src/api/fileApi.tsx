@@ -31,6 +31,46 @@ export async function getUserFiles() {
   return data;
 }
 
+/** The project an event log belongs to, as a `.totem` archive. */
+export async function exportProject(fileId: string | number): Promise<Blob> {
+  const { data } = await axios.get(`/api/files/${fileId}/export-project/`, {
+    _skipGlobalFilter: true,
+    responseType: "blob",
+  });
+  return data;
+}
+
+export interface ProjectImportWarning {
+  code: string;
+  component_name: string | null;
+  detail: string;
+}
+
+export interface ProjectImportResult {
+  project: { id: number; name: string; display_name: string };
+  event_log: number | null;
+  /** The restored event log, shaped like `/api/files/` returns one. */
+  file: Record<string, unknown> | null;
+  warnings: ProjectImportWarning[];
+}
+
+/**
+ * Create a whole project from a `.totem` archive. Always creates a new
+ * project; it never merges into an existing one.
+ */
+export async function importProject(
+  file: File,
+  onUploadProgress?: (progressEvent: AxiosProgressEvent) => void
+): Promise<ProjectImportResult> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const { data } = await axios.post("/api/files/import-project/", formData, {
+    _skipGlobalFilter: true,
+    onUploadProgress,
+  });
+  return data;
+}
+
 /** Rename the project an event log belongs to (its switcher label). */
 export async function renameProject(fileId: string | number, name: string) {
   const { data } = await axios.patch(

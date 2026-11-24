@@ -1,6 +1,7 @@
 /**
- * JSON file input/output helpers shared by the model editors.
- * Models are saved as plain JSON files and can be re-imported later.
+ * File input/output helpers shared by the model editors and the project
+ * export. Models are saved as plain JSON files and can be re-imported later;
+ * a whole project is saved as a `.totem` archive.
  */
 
 /**
@@ -18,8 +19,7 @@
 export type JsonSaveOutcome = 'saved' | 'cancelled' | 'downloaded';
 
 /** The pre-File-System-Access path: hand the blob over and hope for the best. */
-function anchorDownload(name: string, text: string) {
-  const blob = new Blob([text], { type: 'application/json' });
+function anchorDownload(name: string, blob: Blob) {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
@@ -38,26 +38,28 @@ function isAbort(error: unknown) {
 }
 
 /**
- * Write `data` to a file of the user's choosing as pretty-printed JSON, and
- * report what happened — see `JsonSaveOutcome`.
+ * Write `blob` to a file of the user's choosing, and report what happened —
+ * see `JsonSaveOutcome`.
  *
  * Prefers `showSaveFilePicker`, which resolves only once the file has been
  * written, so a caller can confirm a save instead of guessing at one. Where it
- * does not exist (Firefox, Safari) the old anchor download still runs.
+ * does not exist (Firefox, Safari) the anchor download still runs.
+ *
+ * Shared by every exporter rather than copied per format: the activation,
+ * abort and fallback rules below are subtle enough that two copies would
+ * drift.
  */
-export async function downloadJson(
-  filename: string,
-  data: unknown,
+export async function saveBlob(
+  name: string,
+  blob: Blob,
+  pickerType: { description: string; accept: Record<string, string[]> },
 ): Promise<JsonSaveOutcome> {
-  const name = filename.endsWith('.json') ? filename : `${filename}.json`;
-  const text = JSON.stringify(data, null, 2);
-
   let handle: FileSystemFileHandle | null = null;
   if (typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function') {
     try {
       handle = await window.showSaveFilePicker({
         suggestedName: name,
-        types: [{ description: 'JSON file', accept: { 'application/json': ['.json'] } }],
+        types: [pickerType],
       });
     } catch (error) {
       if (isAbort(error)) return 'cancelled';
@@ -74,7 +76,7 @@ export async function downloadJson(
     // a reason to also download the file somewhere else.
     const writable = await handle.createWritable();
     try {
-      await writable.write(text);
+      await writable.write(blob);
       await writable.close();
     } catch (error) {
       // Discard the swap file so a half-written export never replaces the
@@ -85,8 +87,42 @@ export async function downloadJson(
     return 'saved';
   }
 
-  anchorDownload(name, text);
+  anchorDownload(name, blob);
   return 'downloaded';
+}
+
+/**
+ * Write `data` to a file of the user's choosing as pretty-printed JSON.
+ * Thin wrapper over `saveBlob`, kept because most callers save JSON.
+ */
+export async function downloadJson(
+  filename: string,
+  data: unknown,
+): Promise<JsonSaveOutcome> {
+  const name = filename.endsWith('.json') ? filename : `${filename}.json`;
+  return saveBlob(
+    name,
+    new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }),
+    { description: 'JSON file', accept: { 'application/json': ['.json'] } },
+  );
+}
+
+/**
+ * Write an exported project to a `.totem` file.
+ *
+ * `.totem` rather than `.totem.zip` although the contents are a zip: Safari
+ * expands downloaded zip archives on arrival, which would leave someone who
+ * clicked a sample-project link holding a folder and nothing to drag back in.
+ */
+export async function saveProjectBundle(
+  filename: string,
+  blob: Blob,
+): Promise<JsonSaveOutcome> {
+  const name = filename.endsWith('.totem') ? filename : `${filename}.totem`;
+  return saveBlob(name, blob, {
+    description: 'TOTeM project',
+    accept: { 'application/zip': ['.totem'] },
+  });
 }
 
 /**
