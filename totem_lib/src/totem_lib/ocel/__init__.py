@@ -22,3 +22,10 @@ from .event_columns import (
     write_event_column,
     write_event_columns_to_file,
 )
+from .flat_log import (
+    FlatLogMapping,
+    FlatLogMappingError,
+    flat_log_format,
+    parse_timestamp,
+    preview_flat_log,
+)

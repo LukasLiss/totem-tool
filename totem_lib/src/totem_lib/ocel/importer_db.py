@@ -53,6 +53,7 @@ import duckdb
 import ijson
 import pyarrow as pa
 
+from .flat_log import FlatLogMapping, flat_log_format, stage_flat_log
 from .ocel_duckdb import OcelDuckDB, create_ocel_indexes, create_ocel_schema
 from .validation import OCELValidationException, validate_ocel
 
@@ -88,9 +89,10 @@ def import_ocel_db(
     graceful_import: bool = True,
     strict_mode: bool = False,
     progress: Optional[ProgressCallback] = None,
+    mapping=None,
 ) -> OcelDuckDB:
     """
-    Import an OCEL 2.0 file directly into a DuckDB database.
+    Import an OCEL 2.0 file (or a mapped flat log) directly into a DuckDB database.
 
     Usage example::
 
@@ -139,12 +141,21 @@ def import_ocel_db(
         progress:               Optional ``callback(fraction, message)`` invoked as
                                 the import advances (``fraction`` in ``[0, 1]``).
                                 Raising inside the callback aborts the import.
+        mapping:                Column mapping for a case-centric ("flat") log —
+                                an XES file or a plain CSV/TSV table — as a
+                                ``flat_log.FlatLogMapping`` or its dict form
+                                (see :mod:`.flat_log`). Required for a plain
+                                CSV; an XES file without one gets the mapping
+                                the import dialog would suggest
+                                (``case:concept:name`` → case object, ...).
 
     Returns:
         OcelDuckDB instance backed by the populated database.
     """
     _, ext = os.path.splitext(file_path)
     fmt = ext.lower().lstrip(".")
+    if flat_log_format(file_path) == "xes":
+        fmt = "xes"  # also "log.xes.gz", whatever Django renamed it to
 
     if fmt == "duckdb":
         return OcelDuckDB.load(file_path)
@@ -154,7 +165,19 @@ def import_ocel_db(
         "json": _stage_json,
         "xml": _stage_xml,
         "csv": _stage_csv,
+        "xes": _stage_flat,
     }
+    if mapping is not None or fmt == "xes":
+        if mapping is None:
+            flat_mapping = FlatLogMapping.suggested(file_path)
+        elif isinstance(mapping, FlatLogMapping):
+            mapping.validate()
+            flat_mapping = mapping
+        else:
+            flat_mapping = FlatLogMapping.from_dict(mapping)
+        if fmt in ("csv", "tsv", "txt", "xes"):
+            readers[fmt] = lambda path, stage, report, _t: _stage_flat(path, stage, report, flat_mapping)
+
     if fmt not in readers:
         raise ValueError(
             f"Unsupported format '{ext}'. "
@@ -1238,6 +1261,20 @@ def _stage_csv(file_path: str, stage: _Staging, report: _Reporter, _threshold) -
         buffers.maybe_flush()
     buffers.flush()
     report(0.5, "Reading CSV")
+
+
+# ---------------------------------------------------------------------------
+# Flat (case-centric) logs: XES, plain CSV — see flat_log.py
+# ---------------------------------------------------------------------------
+
+def _stage_flat(file_path: str, stage: _Staging, report: _Reporter, mapping) -> None:
+    buffers = _RowBuffers(stage)
+    size = os.path.getsize(file_path)
+    with open(file_path, "rb") as raw:
+        tick = _FileProgress(raw, size, report, 0.0, 0.5, "Reading event log")
+        report(0.0, "Reading event log")
+        stage_flat_log(file_path, mapping, buffers, tick=tick, raw=raw)
+    report(0.5, "Reading event log")
 
 
 # ---------------------------------------------------------------------------
