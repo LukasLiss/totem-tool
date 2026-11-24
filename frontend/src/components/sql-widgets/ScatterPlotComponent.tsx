@@ -43,13 +43,11 @@ import {
 import WidgetDraftTile from "@/components/WidgetDraftTile";
 import ScatterPlotSketch from "./ScatterPlotSketch";
 import VerticalAxisLabel from "./VerticalAxisLabel";
+import { AXIS_STYLE, GRID_DASH, yAxisWidthFor } from "./chartAxis";
 import HeadedTooltip from "./HeadedTooltip";
 import ScatterPlotSettingsDialog, { type ScatterPlotSettings } from "./ScatterPlotSettingsDialog";
 import { useDashboardLocalFilter } from "@/hooks/useDashboardLocalFilter";
 
-// The y axis' width (Recharts' default, set explicitly so the legend can be
-// inset by the same amount and center under the plot area).
-const Y_AXIS_WIDTH = 60;
 
 export interface ScatterPlotNodeFields extends SqlWidgetNodeFields {
   x_column?: string;
@@ -224,6 +222,12 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
   // The real series for the edit-mode sketch, loaded like the settings popup
   // does, so per-series colors show on the tile too. Only needed when the
   // colors depend on the series names.
+  // The y axis as wide as its tick numbers (and the y label) need, from the data only.
+  const yAxisWidth = useMemo(
+    () => yAxisWidthFor(series.flatMap((s) => s.points.map((p) => p.y)), Boolean(yLabel)),
+    [series, yLabel]
+  );
+
   const hasSeries = seriesColumn !== "";
   const sketchColors = scatterColors(colors, hasSeries);
   const sketchData = useSqlQueryData({
@@ -278,8 +282,8 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
 
   const showLegend = Boolean(seriesKey) && (legendPosition === "bottom" || legendPosition === "columns");
   // With an x label: the 7px the label sits below the axis (offset -7), plus 8px of air to the legend.
-  // The y label fits inside the y axis' 60px (5px from its edge), so 4px on the left give it about
-  // the same air as the x label has below.
+  // The y label sits 5px inside the y axis' box, so 4px on the left give it about the same air as
+  // the x label has below.
   const margin = { top: 8, right: 16, bottom: xLabel ? 15 : 8, left: 4 };
 
   // The header (with the filters) stays while there is nothing to draw.
@@ -307,21 +311,21 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
           <>
         <ChartContainer config={config} className="aspect-auto min-h-0 w-full flex-1">
           <ScatterChart margin={margin}>
-            <CartesianGrid strokeDasharray="3 3" />
+            <CartesianGrid strokeDasharray={GRID_DASH} />
             <XAxis
               type="number"
               dataKey="x"
               name={xLabel || xKey}
-              tickLine={false}
+              {...AXIS_STYLE}
               tickFormatter={formatChartNumber}
               label={xLabel ? { value: xLabel, position: "insideBottom", offset: -7, fontSize: 11 } : undefined}
             />
             <YAxis
               type="number"
-              width={Y_AXIS_WIDTH}
+              width={yAxisWidth}
               dataKey="y"
               name={yLabel || yKey}
-              tickLine={false}
+              {...AXIS_STYLE}
               tickFormatter={formatChartNumber}
               label={yLabel ? { content: (props) => <VerticalAxisLabel {...props} text={yLabel} fontSize={11} /> } : undefined}
             />
@@ -367,7 +371,7 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
           // (as the x label does), not under the plot plus the y axis.
           <div
             className="max-h-[35%] w-full shrink-0 overflow-y-auto"
-            style={{ paddingLeft: margin.left + Y_AXIS_WIDTH, paddingRight: margin.right }}
+            style={{ paddingLeft: margin.left + yAxisWidth, paddingRight: margin.right }}
           >
             {valueRange ? (
               <ValueRangeLegend

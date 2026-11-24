@@ -43,6 +43,7 @@ import { useCategoryList } from "./chartSettingsUtils";
 import type { ChartStyle } from "./chartLegendUtils";
 import BarChartSketch from "./BarChartSketch";
 import TitledTick from "./TitledTick";
+import { AXIS_STYLE, GRID_DASH, yAxisWidthFor } from "./chartAxis";
 import HeadedTooltip from "./HeadedTooltip";
 import BarChartSettingsDialog, { type BarChartSettings } from "./BarChartSettingsDialog";
 import { useDashboardLocalFilter } from "@/hooks/useDashboardLocalFilter";
@@ -182,6 +183,9 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
     [valueKey]
   );
 
+  // Vertical bars: the value axis as wide as its tick numbers need, from the data only (like the scatter plot).
+  const valueAxisWidth = useMemo(() => yAxisWidthFor(chartData.map((bar) => bar.value), false), [chartData]);
+
   if (isEditMode) {
     // In edit mode the tile shows a layout sketch; the settings open in a popup.
     return (
@@ -240,16 +244,16 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
             layout={horizontal ? "vertical" : "horizontal"}
             margin={{ top: showValues ? 18 : 6, right: showValues && horizontal ? 36 : 12, bottom: 4, left: 4 }}
           >
-            <CartesianGrid vertical={horizontal} horizontal={!horizontal} strokeDasharray="3 3" />
+            {/* Grid lines along the value axis only; axes in the shared style (AXIS_STYLE). */}
+            <CartesianGrid vertical={horizontal} horizontal={!horizontal} strokeDasharray={GRID_DASH} />
             {horizontal ? (
               <>
-                <XAxis type="number" tickLine={false} axisLine={false} tickFormatter={formatChartNumber} />
+                <XAxis type="number" {...AXIS_STYLE} tickFormatter={formatChartNumber} />
                 <YAxis
                   type="category"
                   dataKey="label"
                   width={110}
-                  tickLine={false}
-                  axisLine={false}
+                  {...AXIS_STYLE}
                   tickFormatter={(v: string) => (v.length > 16 ? `${v.slice(0, 15)}…` : v)}
                   tick={(props) => <TitledTick {...props} />}
                 />
@@ -258,8 +262,7 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
               <>
                 <XAxis
                   dataKey="label"
-                  tickLine={false}
-                  axisLine={false}
+                  {...AXIS_STYLE}
                   interval={0}
                   angle={chartData.length > 8 ? -30 : 0}
                   textAnchor={chartData.length > 8 ? "end" : "middle"}
@@ -267,7 +270,7 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
                   tickFormatter={(v: string) => (v.length > 16 ? `${v.slice(0, 15)}…` : v)}
                   tick={(props) => <TitledTick {...props} />}
                 />
-                <YAxis tickLine={false} axisLine={false} tickFormatter={formatChartNumber} />
+                <YAxis width={valueAxisWidth} {...AXIS_STYLE} tickFormatter={formatChartNumber} />
               </>
             )}
             <ChartTooltip
