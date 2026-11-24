@@ -40,7 +40,7 @@ object.
 
 ## Timestamp formats
 
-Choose **Detect automatically** for ISO 8601 and the common formats, **Unix time** in seconds
+Choose **Detect automatically** to let TOTeM pick, **Unix time** in seconds
 or milliseconds, one of the listed patterns, or **Custom pattern...** to type your own. Patterns
 use the same letters as Disco and Java: `yyyy` year, `MM` month, `dd` day, `HH` hour (24h),
 `hh` hour (12h) with `a` for AM/PM, `mm` minutes, `ss` seconds, `SSS` fractions and `XXX` the
@@ -57,6 +57,17 @@ handled: 09:00 in Berlin is 08:00 UTC in March and 07:00 UTC in July. The defaul
 The zone applies only to values that carry no offset. A value like `2024-03-01T09:00:00+01:00`
 keeps its own offset, and Unix times are absolute, so the field is disabled for them.
 
+**Detect automatically** picks **one** format for the whole column, the one that fits most of
+the first rows, and the check line names it ("parse as dd/MM/yyyy HH:mm:ss"). It never reads one
+row day-first and the next month-first. Rows that do not fit the chosen format are skipped and
+reported.
+
+**Day or month first?** `03/04/2024` is 3 April in Europe and March 4 in the US. When every
+sample value fits both orders, the dialog says so, shows how one value would be read either way,
+and offers **Use that instead** to switch. TOTeM assumes day first until you choose otherwise.
+
+![An Excel export read as Windows-1252, with dates that fit both day orders](images/import-csv-encoding-ambiguous.png)
+
 The format is checked against the sample as you choose it, with the same parser the import
 uses. A format that fits none of the values blocks the import and names an example that does not
 match:
@@ -70,7 +81,20 @@ With the right one, every sample value parses and the dialog shows how the first
 ## CSV files
 
 The separator (`,` `;` tab or `|`) is detected from the header line. If it guessed wrong, change
-it next to the status line and the table is read again. Files are read as UTF-8.
+it next to the status line and the table is read again. The roles you already set are kept.
+
+The **encoding** is detected too: UTF-8, or Windows-1252 (what Excel on Windows saves as "CSV")
+when the file is not valid UTF-8, and UTF-16 for Excel's "Unicode text" export. If umlauts or
+accents look wrong in the table (`Pr�fung`), pick another encoding next to the separator.
+
+Cells of any length are fine, so long notes or comments import as well.
+
+Column names that differ only in upper and lower case (`Status` and `status`), or that match a
+built-in field (`Activity` kept as an attribute), cannot both be stored as they are. TOTeM stores
+the second one as `status_2` or `Activity_attr` and says so after the import.
+
+Events are kept in file order when they have the same timestamp. A log with dates only and no
+times still shows each case's steps in the order of the file.
 
 ## What gets skipped
 
