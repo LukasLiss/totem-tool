@@ -296,7 +296,7 @@ export const NUMERIC_BOUNDS = {
 export type NumericOption = keyof typeof NUMERIC_BOUNDS;
 
 /** Switches among the options. */
-export const BOOLEAN_OPTIONS = ['mergePoints', 'arcHalo', 'fitNodeWidth', 'showFrequencies', 'showLanes', 'showRanks'] as const satisfies ReadonlyArray<keyof LayoutOptions>;
+export const BOOLEAN_OPTIONS = ['mergePoints', 'arcHalo', 'arcDurationShade', 'fitNodeWidth', 'showFrequencies', 'showLanes', 'showRanks'] as const satisfies ReadonlyArray<keyof LayoutOptions>;
 
 export const ASPECT_BY_KEY: Partial<Record<keyof LayoutOptions, Aspect>> = Object.fromEntries(
   ASPECTS.map((a) => [a.key, a]),
@@ -333,6 +333,7 @@ export const DEFAULT_OPTIONS: LayoutOptions = {
   arcHalo: true,
   arcOpacity: 0.9,
   arcLabels: 'none',
+  arcDurationShade: false,
   nodeStyle: 'box',
   terminalStyle: 'circle',
   fitNodeWidth: true,

@@ -88,6 +88,7 @@ export default function ControlPanel({ options, onChange, onGallery, laneOrder =
                 {range('arcOpacity', 'Opacity', (v) => `${Math.round(v * 100)} %`)}
                 <Toggle label="White halo (crossings read over/under)" checked={o.arcHalo} onChange={(v) => onChange({ arcHalo: v })} />
                 <Toggle label="Frequency labels on arcs" checked={o.arcLabels === 'frequency'} onChange={(v) => onChange({ arcLabels: v ? 'frequency' : 'none' })} />
+                <Toggle label="Arc strength by duration (faint = fast, strong = slow)" checked={o.arcDurationShade} onChange={(v) => onChange({ arcDurationShade: v })} />
               </>
             )}
             {group === 'Look' && (

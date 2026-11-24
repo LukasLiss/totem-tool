@@ -1149,7 +1149,7 @@ export function computeLayout(graph: LabGraph, options: LayoutOptions, extras: L
           radius = 8;
           center = { x: cx + hw - 6 - k * 19, y: cy - hh };
         }
-        selfLoops.push({ node: id, type: a.type, weight: a.weight, width, style: opts.selfLoopStyle, points, center, radius });
+        selfLoops.push({ node: id, type: a.type, weight: a.weight, avgLeadTime: a.avgLeadTime, width, style: opts.selfLoopStyle, points, center, radius });
       });
     }
   }

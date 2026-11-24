@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_OPTIONS } from '../options';
-import { fromStoredLayout, parseStoredLayout, toStoredLayout } from '../preferences';
+import { fromStoredLayout, parseStoredLayout, toStoredLayout, withStoredOptions } from '../preferences';
 
 const LR = { ...DEFAULT_OPTIONS, direction: 'LR' as const };
 
@@ -61,5 +61,33 @@ describe('stored layout preferences', () => {
     const options = fromStoredLayout({ version: 1, options: { selfLoopStyle: 'badge' } }, LR);
     expect(options.selfLoopStyle).toBe('badge');
     expect(options.direction).toBe('LR');
+  });
+
+  it('reads and validates the arc strength by duration switch', () => {
+    expect(parseStoredLayout({ version: 1, options: { arcDurationShade: true } })).toEqual({ arcDurationShade: true });
+    expect(parseStoredLayout({ version: 1, options: { arcDurationShade: 'yes' } })).toBeNull();
+  });
+});
+
+describe('withStoredOptions (settings popup)', () => {
+  it('adds options to a stored entry and keeps the others', () => {
+    const stored = { version: 1, options: { rankGap: 80 } };
+    expect(withStoredOptions(stored, { arcLabels: 'frequency', arcDurationShade: true })).toEqual({
+      version: 1,
+      options: { rankGap: 80, arcLabels: 'frequency', arcDurationShade: true },
+    });
+  });
+
+  it('leaves out options set back to their defaults, and gives null when nothing is left', () => {
+    const stored = { version: 1, options: { arcLabels: 'frequency', arcDurationShade: true } };
+    expect(withStoredOptions(stored, { arcLabels: 'none', arcDurationShade: false })).toBeNull();
+    expect(withStoredOptions(null, { arcLabels: 'none', arcDurationShade: false })).toBeNull();
+  });
+
+  it('starts over from an unusable entry', () => {
+    expect(withStoredOptions({ version: 99, options: {} }, { arcDurationShade: true })).toEqual({
+      version: 1,
+      options: { arcDurationShade: true },
+    });
   });
 });

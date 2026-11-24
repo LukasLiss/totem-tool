@@ -48,7 +48,7 @@ import ProcessAreaSketch from './ProcessAreaSketch';
 import TotemModelSketch from './TotemModelSketch';
 import { GRAPH_SKETCH_MAX_WIDTH } from './sketchScale';
 import OcdfgSketch from './OcdfgSketch';
-import OcdfgSettingsBody from './OcdfgSettingsDialog';
+import OcdfgSettingsBody, { type OcdfgSettings } from './OcdfgSettingsDialog';
 import OcpnSketch from './OcpnSketch';
 import OcpnSettingsBody from './OcpnSettingsDialog';
 import OccnSketch from './OccnSketch';
@@ -72,7 +72,8 @@ import { listAssets, type ProjectAsset } from '@/api/assetsApi';
 import { toast } from "sonner";
 import { saveOcdfgWidgetLayout } from "@/api/dashboardApi";
 import type { SaveLayout } from "@/react_component/ocdfg-layout/useLayoutOptions";
-import type { StoredLayout } from "@/react_component/ocdfg-layout/preferences";
+import { parseStoredLayout, withStoredOptions, type StoredLayout } from "@/react_component/ocdfg-layout/preferences";
+import { DEFAULT_OPTIONS } from "@/react_component/ocdfg-layout/options";
 import OCCNVisualizer from '@/react_component/OCCNVisualizer';
 import LogStatistics from './LogStatistics';
 import LogStatisticsSketch from './LogStatisticsSketch';
@@ -1543,6 +1544,30 @@ function useDashboardOcdfgLayout(
   };
 }
 
+/**
+ * The settings popup's arc switches, read from the widget's stored layout
+ * (where the layout panel keeps them too). Read on every render: the node is
+ * updated in place, e.g. when the layout panel changes them in view mode.
+ */
+function arcSettingsOf(node: ComponentProps["node"]) {
+  const stored = parseStoredLayout(withoutDirection(node.layout_options ?? null)) ?? {};
+  return {
+    frequencyLabels: (stored.arcLabels ?? DEFAULT_OPTIONS.arcLabels) === "frequency",
+    durationShade: stored.arcDurationShade ?? DEFAULT_OPTIONS.arcDurationShade,
+  };
+}
+
+/** The widget's stored layout with the popup's arc switches applied. */
+function withArcSettings(
+  node: ComponentProps["node"],
+  next: Pick<OcdfgSettings, "frequencyLabels" | "durationShade">,
+): StoredLayout | null {
+  return withStoredOptions(withoutDirection(node.layout_options ?? null), {
+    arcLabels: next.frequencyLabels ? "frequency" : "none",
+    arcDurationShade: next.durationShade,
+  });
+}
+
 // NewOCDFGComponent: Dashboard wrapper for the Object-Centric DFG (arc weight)
 export const NewOCDFGComponent: React.FC<ComponentProps> = ({
   node,
@@ -1581,6 +1606,7 @@ export const NewOCDFGComponent: React.FC<ComponentProps> = ({
             layoutDirection={layoutDirection}
             showControls={showControls}
             interactionLocked={initialInteractionLocked}
+            {...arcSettingsOf(node)}
             className="h-full w-full"
           />
         }
@@ -1590,7 +1616,7 @@ export const NewOCDFGComponent: React.FC<ComponentProps> = ({
             id={`ocdfg-${node.component_id}`}
             heading="Object-Centric DFG (Arc Weight) settings"
             description="Object-Centric Directly Follows Graph with a minimum arc weight per object type."
-            initial={{ showControls, initialInteractionLocked, layoutDirection }}
+            initial={{ showControls, initialInteractionLocked, layoutDirection, ...arcSettingsOf(node) }}
             sketchHint={OCDFG_SKETCH_HINT}
             onApply={(next) => {
               setShowControls(next.showControls);
@@ -1600,6 +1626,7 @@ export const NewOCDFGComponent: React.FC<ComponentProps> = ({
                 show_controls: next.showControls,
                 initial_interaction_locked: next.initialInteractionLocked,
                 layout_direction: next.layoutDirection,
+                layout_options: withArcSettings(node, next),
               });
               setSettingsOpen(false);
             }}
@@ -1666,6 +1693,7 @@ export const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
             layoutDirection={layoutDirection}
             showControls={showControls}
             interactionLocked={initialInteractionLocked}
+            {...arcSettingsOf(node)}
             className="h-full w-full"
           />
         }
@@ -1675,7 +1703,7 @@ export const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
             id={`ocdfg-variants-${node.component_id}`}
             heading="OCDFG (variants) settings"
             description="Object-Centric Directly Follows Graph (OCDFG) visualization with Variant/Trace filtering."
-            initial={{ showControls, initialInteractionLocked, layoutDirection }}
+            initial={{ showControls, initialInteractionLocked, layoutDirection, ...arcSettingsOf(node) }}
             sketchHint={OCDFG_SKETCH_HINT}
             onApply={(next) => {
               setShowControls(next.showControls);
@@ -1685,6 +1713,7 @@ export const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
                 show_controls: next.showControls,
                 initial_interaction_locked: next.initialInteractionLocked,
                 layout_direction: next.layoutDirection,
+                layout_options: withArcSettings(node, next),
               });
               setSettingsOpen(false);
             }}
