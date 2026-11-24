@@ -1,5 +1,6 @@
 import axios, { type AxiosProgressEvent } from "axios";
 import { filterRequestConfig } from "@/store/filterStore";
+import { xesPreviewSample } from "./xesSample";
 
 export async function uploadFile(
   file: File,
@@ -93,11 +94,16 @@ export async function previewFlatLog(
   delimiter?: string | null,
   encoding?: string | null,
 ): Promise<FlatLogPreview> {
-  const truncated = file.size > PREVIEW_BYTES;
+  // XES: the first traces, wherever they start (see xesSample.ts). CSV: the
+  // first bytes, since a CSV header is one line.
+  const sample =
+    flatLogFormat(file.name) === "xes"
+      ? await xesPreviewSample(file, PREVIEW_BYTES)
+      : { blob: file.slice(0, PREVIEW_BYTES), name: file.name, truncated: file.size > PREVIEW_BYTES };
   const formData = new FormData();
-  formData.append("file", file.slice(0, PREVIEW_BYTES), "preview");
-  formData.append("filename", file.name);
-  formData.append("truncated", truncated ? "true" : "false");
+  formData.append("file", sample.blob, "preview");
+  formData.append("filename", sample.name);
+  formData.append("truncated", sample.truncated ? "true" : "false");
   if (delimiter) formData.append("delimiter", delimiter);
   if (encoding) formData.append("encoding", encoding);
   const { data } = await axios.post("/api/files/preview/", formData, { _skipGlobalFilter: true });

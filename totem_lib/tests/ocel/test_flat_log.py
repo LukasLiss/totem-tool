@@ -445,3 +445,27 @@ def test_gzip_preview_does_not_inflate_without_limit():
     assert cut and len(inflated) <= flat_log.PREVIEW_MAX_DECOMPRESSED
     preview = preview_flat_log(blob, "bomb.xes.gz")
     assert preview["truncated"] is True
+
+
+def test_xes_with_megabytes_of_log_metadata_before_the_first_trace(tmp_path):
+    # The BPI Challenge 2015 logs carry ~6 MB of log-level statistics before
+    # the first trace; a byte prefix of the file then holds no event.
+    from totem_lib.ocel.flat_log import preview_flat_log_file
+
+    text = XES.read_text(encoding="utf-8")
+    metadata = '  <int key="01_HOOFD_101" value="843"/>\n' * 180_000
+    big = text.replace("  <trace>", metadata + "  <trace>", 1)
+    path = tmp_path / "big_header.xes"
+    path.write_text(big, encoding="utf-8")
+    assert path.stat().st_size > 6 * 1024 * 1024
+
+    preview = preview_flat_log_file(str(path))
+    roles = {c["name"]: c["suggestion"]["role"] for c in preview["columns"]}
+    assert roles["case:concept:name"] == "object_id"
+    assert len(preview["rows"]) == 8
+
+    db = import_ocel_db(str(path))  # no mapping: the suggested one
+    try:
+        assert _rows(db, "SELECT COUNT(*) FROM events") == [(8,)]
+    finally:
+        db.close()

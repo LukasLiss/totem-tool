@@ -36,7 +36,6 @@ import csv
 import gzip
 import io
 import itertools
-import os
 import re
 import xml.etree.ElementTree as ET
 import zlib
@@ -673,6 +672,45 @@ def preview_flat_log(
             if len(rows) >= max_rows:
                 break
 
+    return _describe_preview(fmt, columns, rows, used_delimiter, used_encoding, truncated)
+
+
+def preview_flat_log_file(
+    file_path: str,
+    max_rows: int = 100,
+    delimiter: Optional[str] = None,
+    encoding: Optional[str] = None,
+) -> dict:
+    """:func:`preview_flat_log` for a file on disk, read as a stream.
+
+    Unlike a byte prefix, this finds the first events however much comes
+    before them: some XES exports (the BPI Challenge 2015 logs) put several
+    MB of log-level statistics ahead of the first trace.
+    """
+    fmt = flat_log_format(file_path)
+    if fmt is None:
+        raise ValueError(f"'{file_path}' is not an XES or CSV file.")
+    used_delimiter = used_encoding = None
+    if fmt == "csv":
+        with open(file_path, "rb") as handle:
+            head = handle.read(1024 * 1024)
+        used_encoding = normalize_encoding(encoding) or detect_encoding(head)
+        used_delimiter = delimiter or detect_delimiter(head.decode(used_encoding, errors="replace"))
+    rows: list[dict] = []
+    columns: list[str] = []
+    for row in iter_flat_rows(file_path, used_delimiter, encoding=used_encoding):
+        rows.append(row)
+        for key in row:
+            if key not in columns:
+                columns.append(key)
+        if len(rows) >= max_rows:
+            break
+    if fmt == "xes":
+        columns.sort(key=lambda c: 0 if c.startswith("case:") else 1)
+    return _describe_preview(fmt, columns, rows, used_delimiter, used_encoding, len(rows) >= max_rows)
+
+
+def _describe_preview(fmt, columns, rows, used_delimiter, used_encoding, truncated) -> dict:
     kind = "ocel_csv" if fmt == "csv" and is_ocel_csv_header(columns) else "flat"
     suggestions = _suggest_roles(columns, rows, fmt) if kind == "flat" else {}
     column_info = []
@@ -808,10 +846,7 @@ class FlatLogMapping:
     @classmethod
     def suggested(cls, file_path: str, sample_rows: int = 200) -> "FlatLogMapping":
         """The mapping the dialog would propose, for scripted imports."""
-        with open(file_path, "rb") as handle:
-            data = handle.read(4 * 1024 * 1024)
-        truncated = os.path.getsize(file_path) > len(data)
-        preview = preview_flat_log(data, file_path, max_rows=sample_rows, truncated=truncated)
+        preview = preview_flat_log_file(file_path, max_rows=sample_rows)
         cols = []
         for col in preview["columns"]:
             s = col["suggestion"]
@@ -1066,6 +1101,7 @@ __all__ = [
     "resolve_timezone",
     "unique_attribute_names",
     "preview_flat_log",
+    "preview_flat_log_file",
     "stage_flat_log",
     "suggest_timestamp_format",
 ]
