@@ -134,6 +134,17 @@ export function formatChartNumber(v: unknown): string {
   return typeof v === "number" ? v.toLocaleString() : String(v);
 }
 
+/**
+ * A formatted number with its unit, as set in a chart's Style tab: after a
+ * space ("46.9 h"), except "%", which follows directly ("22%"). Without a
+ * unit the number as it is.
+ */
+export function withUnit(text: string, unit?: string): string {
+  const u = unit?.trim();
+  if (!u) return text;
+  return u.startsWith("%") ? `${text}${u}` : `${text} ${u}`;
+}
+
 export function toNumber(v: unknown): number | null {
   if (typeof v === "number") return Number.isFinite(v) ? v : null;
   if (typeof v === "string" && v.trim() !== "") {

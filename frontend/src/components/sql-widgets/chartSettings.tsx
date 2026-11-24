@@ -356,6 +356,38 @@ export function SettingRow({ label, htmlFor, disabled = false, children }: {
   );
 }
 
+// Longest unit kept (the backend keeps the same), so it stays a unit, not a sentence.
+const UNIT_MAX_LENGTH = 16;
+
+/**
+ * A unit shown after a chart's numbers (tooltips, value labels, legends),
+ * e.g. "h", "%" or "€"; empty means none.
+ */
+export function UnitRow({ id, label, value, onChange, disabled = false }: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (unit: string) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <SettingRow label={label} htmlFor={id} disabled={disabled}>
+      <span className={cn("flex items-center gap-2", disabled && "opacity-50")}>
+        <span className="text-xs text-muted-foreground">after the numbers, not on the axis</span>
+        <Input
+          id={id}
+          value={value}
+          maxLength={UNIT_MAX_LENGTH}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="e.g. h, %, €"
+          className="h-8 w-28"
+        />
+      </span>
+    </SettingRow>
+  );
+}
+
 /** "Max categories" with a number field; empty means `placeholder` (all, by default). */
 export function MaxCategoriesRow({
   id,

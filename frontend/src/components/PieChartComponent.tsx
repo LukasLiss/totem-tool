@@ -7,7 +7,7 @@ import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } f
 import { GridStackNode } from 'gridstack';
 import type { LinkedQuery } from "@/react_component/sql/linkedQuery";
 import { useSqlQueryData } from "@/react_component/sql/useSqlQueryData";
-import { linkedQueryOf } from "@/components/sql-widgets/sqlWidgetUtils";
+import { formatChartNumber, linkedQueryOf, withUnit } from "@/components/sql-widgets/sqlWidgetUtils";
 import { WidgetMessage } from "@/components/sql-widgets/shared";
 import { WidgetHeader } from "@/components/ui/WidgetTitle";
 import { ChartValueLegend, PieCallout } from "@/components/sql-widgets/chartLegend";
@@ -138,6 +138,7 @@ const PieChartComponent: React.FC<ComponentProps> = ({
   const [showCategoryCount, setShowCategoryCount] = useState(node.chart_style?.show_category_count ?? true);
   const [colors, setColors] = useState<ChartColors>(node.chart_style?.colors ?? {});
   const [maxCategories, setMaxCategories] = useState<number | null>(node.chart_style?.max_categories ?? null);
+  const [valueUnit, setValueUnit] = useState(node.chart_style?.units?.value ?? '');
 
   // Sync with node when it changes
   useEffect(() => {
@@ -154,6 +155,7 @@ const PieChartComponent: React.FC<ComponentProps> = ({
     setShowCategoryCount(node.chart_style?.show_category_count ?? true);
     setColors(node.chart_style?.colors ?? {});
     setMaxCategories(node.chart_style?.max_categories ?? null);
+    setValueUnit(node.chart_style?.units?.value ?? '');
   }, [node]);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -216,6 +218,7 @@ const PieChartComponent: React.FC<ComponentProps> = ({
     showCategoryCount,
     colors,
     maxCategories,
+    valueUnit,
   };
 
   const applySettings = (next: PieChartSettings) => {
@@ -232,6 +235,7 @@ const PieChartComponent: React.FC<ComponentProps> = ({
     setShowCategoryCount(next.showCategoryCount);
     setColors(next.colors);
     setMaxCategories(next.maxCategories);
+    setValueUnit(next.valueUnit);
     onUpdate?.({
       title: next.title,
       query: next.query,
@@ -247,6 +251,7 @@ const PieChartComponent: React.FC<ComponentProps> = ({
         show_category_count: next.showCategoryCount,
         colors: next.colors,
         max_categories: next.maxCategories ?? undefined,
+        units: { ...node.chart_style?.units, value: next.valueUnit || undefined },
         legend: {
           ...node.chart_style?.legend,
           position: next.legendPosition,
@@ -306,9 +311,9 @@ const PieChartComponent: React.FC<ComponentProps> = ({
   const calloutFit = React.useMemo(
     () =>
       showCallouts && chartSize && chartSize.width > 0 && chartSize.height > 0
-        ? fitPieCallouts(legendItems, legendValues, chartSize.width, chartSize.height)
+        ? fitPieCallouts(legendItems, legendValues, chartSize.width, chartSize.height, valueUnit)
         : null,
-    [showCallouts, chartSize, legendItems, legendValues]
+    [showCallouts, chartSize, legendItems, legendValues, valueUnit]
   );
   // Radius of the donut hole in px, for sizing the center text: the fitted
   // callout radius, or else recharts' default 50% of half the smaller chart side.
@@ -324,9 +329,9 @@ const PieChartComponent: React.FC<ComponentProps> = ({
   );
   const calloutLabel = React.useCallback(
     (props: PieLabelRenderProps) => (
-      <PieCallout {...props} values={legendValues} shares={calloutShares} twoLines={calloutFit?.twoLines} />
+      <PieCallout {...props} values={legendValues} shares={calloutShares} twoLines={calloutFit?.twoLines} unit={valueUnit} />
     ),
-    [legendValues, calloutShares, calloutFit]
+    [legendValues, calloutShares, calloutFit, valueUnit]
   );
 
   if (isEditMode) {
@@ -394,7 +399,7 @@ const PieChartComponent: React.FC<ComponentProps> = ({
           <PieChart>
               <ChartTooltip
                 cursor={false}
-                content={<ChartTooltipContent hideLabel  />}
+                content={<ChartTooltipContent hideLabel formatValue={(v) => withUnit(formatChartNumber(v), valueUnit)} />}
               />
             <Pie
               data={chartData}
@@ -453,6 +458,7 @@ const PieChartComponent: React.FC<ComponentProps> = ({
             items={legendItems}
             layout={legendPosition}
             values={legendValues}
+            unit={valueUnit}
             className="w-full max-h-[40%] shrink-0 overflow-y-auto"
           />
         )}

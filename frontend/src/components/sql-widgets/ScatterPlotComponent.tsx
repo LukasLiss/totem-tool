@@ -19,7 +19,7 @@ import { CHART_SKETCH_HINT, SCATTER_DEFAULT_QUERY } from "./constants";
 import { useSqlQueryData } from "@/react_component/sql/useSqlQueryData";
 import { WidgetMessage } from "./shared";
 import { WidgetHeader } from "@/components/ui/WidgetTitle";
-import { formatChartNumber, linkedQueryOf, type SqlWidgetNodeFields, type SqlWidgetProps } from "./sqlWidgetUtils";
+import { formatChartNumber, linkedQueryOf, withUnit, type SqlWidgetNodeFields, type SqlWidgetProps } from "./sqlWidgetUtils";
 import {
   NO_VALUE_COLOR,
   categoryFills,
@@ -29,7 +29,7 @@ import {
   type ChartColors,
 } from "./chartColors";
 import { ChartValueLegend, ValueRangeLegend } from "./chartLegend";
-import type { ChartStyle, LegendPosition, PointSize } from "./chartLegendUtils";
+import type { ChartStyle, ChartUnits, LegendPosition, PointSize } from "./chartLegendUtils";
 import {
   POINT_RADIUS_PX,
   TRANSPARENT_POINT_OPACITY,
@@ -83,6 +83,7 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
   const [transparentPoints, setTransparentPoints] = useState(node.chart_style?.transparent_points ?? false);
   const [colors, setColors] = useState<ChartColors>(node.chart_style?.colors ?? {});
   const [maxSeries, setMaxSeries] = useState<number | null>(node.chart_style?.max_categories ?? null);
+  const [units, setUnits] = useState<ChartUnits>(node.chart_style?.units ?? {});
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
@@ -99,6 +100,7 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
     setTransparentPoints(node.chart_style?.transparent_points ?? false);
     setColors(node.chart_style?.colors ?? {});
     setMaxSeries(node.chart_style?.max_categories ?? null);
+    setUnits(node.chart_style?.units ?? {});
   }, [node]);
 
   const fileId = selectedFile?.id;
@@ -118,6 +120,9 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
     transparentPoints,
     colors,
     maxSeries,
+    xUnit: units.x ?? "",
+    yUnit: units.y ?? "",
+    colorUnit: units.color ?? "",
   };
 
   const applySettings = (next: ScatterPlotSettings) => {
@@ -134,6 +139,13 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
     setTransparentPoints(next.transparentPoints);
     setColors(next.colors);
     setMaxSeries(next.maxSeries);
+    const nextUnits: ChartUnits = {
+      ...node.chart_style?.units,
+      x: next.xUnit || undefined,
+      y: next.yUnit || undefined,
+      color: next.colorUnit || undefined,
+    };
+    setUnits(nextUnits);
     onUpdate?.({
       title: next.title,
       query: next.query,
@@ -151,6 +163,7 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
         transparent_points: next.transparentPoints,
         colors: next.colors,
         max_categories: next.maxSeries ?? undefined,
+        units: nextUnits,
       },
     });
   };
@@ -339,9 +352,14 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
                     !seriesKey
                       ? null
                       : valueRange
-                        ? { label: seriesKey, color: point.fill as string, value: point.c ?? "no value" }
+                        ? {
+                            label: seriesKey,
+                            color: point.fill as string,
+                            value: point.c == null ? "no value" : withUnit(formatChartNumber(point.c), units.color),
+                          }
                         : { label: String(point.series ?? ""), color: point.fill as string }
                   }
+                  units={{ x: units.x, y: units.y }}
                 />
               }
             />
@@ -380,6 +398,7 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
                 high={valueGradient(colors)[1]}
                 min={valueRange.min}
                 max={valueRange.max}
+                unit={units.color}
                 className="w-full"
               />
             ) : (

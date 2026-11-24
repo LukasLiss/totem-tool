@@ -7,10 +7,13 @@
  */
 
 import React from "react";
+import { withUnit } from "./sqlWidgetUtils";
 
 /** One tooltip row as Recharts hands it over. */
 interface TooltipEntry {
   name?: unknown;
+  /** The data field of the row, e.g. "value", "x" or "y". */
+  dataKey?: unknown;
   value?: unknown;
   type?: string;
   /** The hovered data item (bar or point). */
@@ -32,7 +35,9 @@ const HeadedTooltip: React.FC<{
   payload?: readonly TooltipEntry[];
   /** The top row for the hovered item; none when it returns null. */
   heading: (item: Record<string, unknown>) => TooltipHeading | null;
-}> = ({ active, payload, heading }) => {
+  /** Units shown after the values, by the rows' data field (e.g. `{ x: "h" }`). */
+  units?: Record<string, string | undefined>;
+}> = ({ active, payload, heading, units }) => {
   const entries = (payload ?? []).filter((entry) => entry.type !== "none");
   if (!active || entries.length === 0) return null;
   const head = heading(entries[0].payload ?? {});
@@ -62,7 +67,9 @@ const HeadedTooltip: React.FC<{
               {name}
             </span>
             {entry.value != null && (
-              <span className="font-mono font-medium text-foreground tabular-nums">{formatValue(entry.value)}</span>
+              <span className="font-mono font-medium text-foreground tabular-nums">
+                {withUnit(formatValue(entry.value), units?.[String(entry.dataKey ?? "")])}
+              </span>
             )}
           </div>
         );

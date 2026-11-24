@@ -142,6 +142,9 @@ _POINT_SIZES = {"small", "medium", "large"}
 _MAX_CATEGORIES_LIMIT = 500
 _MAX_COLOR_OVERRIDES = 500
 _MAX_CATEGORY_LABEL_LENGTH = 200
+# chart_style.units: bar / pie values, scatter axes and color column.
+_UNIT_KEYS = ("value", "x", "y", "color")
+_MAX_UNIT_LENGTH = 16
 
 
 def _validated_chart_style(raw):
@@ -213,6 +216,19 @@ def _validated_chart_style(raw):
                 colors["overrides"] = overrides
         if colors:
             style["colors"] = colors
+
+    # Units shown after the numbers (React renders them as plain text):
+    # short strings only, empty ones dropped.
+    units_raw = raw.get("units")
+    if isinstance(units_raw, dict):
+        units = {
+            key: units_raw[key].strip()
+            for key in _UNIT_KEYS
+            if isinstance(units_raw.get(key), str)
+            and 0 < len(units_raw[key].strip()) <= _MAX_UNIT_LENGTH
+        }
+        if units:
+            style["units"] = units
 
     return style
 

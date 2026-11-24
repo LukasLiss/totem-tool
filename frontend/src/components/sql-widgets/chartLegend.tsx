@@ -18,6 +18,7 @@ import {
   type LegendItem,
   type LegendValues,
 } from "./chartLegendUtils";
+import { withUnit } from "./sqlWidgetUtils";
 
 const Swatch = ({ color }: { color: string }) => (
   <span className="h-2 w-2 shrink-0 rounded-[2px]" style={{ backgroundColor: color }} />
@@ -28,11 +29,14 @@ export function ChartValueLegend({
   items,
   layout,
   values = "none",
+  unit,
   className,
 }: {
   items: LegendItem[];
   layout: "bottom" | "columns";
   values?: LegendValues;
+  /** Shown after each value (not the percent), e.g. "h". */
+  unit?: string;
   className?: string;
 }) {
   const total = items.reduce((acc, item) => acc + (item.value ?? 0), 0);
@@ -47,7 +51,7 @@ export function ChartValueLegend({
             <span>{item.label}</span>
             {values !== "none" && item.value != null && (
               <span className="text-muted-foreground tabular-nums">
-                {formatLegendValue(item.value, share(item.value), values)}
+                {formatLegendValue(item.value, share(item.value), values, unit)}
               </span>
             )}
           </div>
@@ -73,7 +77,7 @@ export function ChartValueLegend({
             {item.label}
           </span>
           {showValue && item.value != null && (
-            <span className="tabular-nums">{item.value.toLocaleString()}</span>
+            <span className="tabular-nums">{withUnit(item.value.toLocaleString(), unit)}</span>
           )}
           {showPercent && item.value != null && (
             <span className="w-12 text-right text-muted-foreground tabular-nums">
@@ -102,9 +106,12 @@ export function ValueRangeLegend({
   high,
   min,
   max,
+  unit,
   className,
 }: {
   label: string;
+  /** Shown after the smallest and largest value, e.g. "h". */
+  unit?: string;
   /** Colors of the smallest and the largest value. */
   low: string;
   high: string;
@@ -119,7 +126,7 @@ export function ValueRangeLegend({
         <span className="min-w-0 truncate text-[11px]" style={{ color: AXIS_LABEL_COLOR }} title={label}>
           {label}
         </span>
-        <span className="shrink-0 text-muted-foreground tabular-nums">{formatRangeValue(min)}</span>
+        <span className="shrink-0 text-muted-foreground tabular-nums">{withUnit(formatRangeValue(min), unit)}</span>
       </span>
       <span
         aria-hidden
@@ -127,7 +134,7 @@ export function ValueRangeLegend({
         style={{ background: `linear-gradient(to right in oklab, ${low}, ${high})` }}
       />
       {/* Left-aligned explicitly: the chart around it may center text. */}
-      <span className="text-left text-muted-foreground tabular-nums">{formatRangeValue(max)}</span>
+      <span className="text-left text-muted-foreground tabular-nums">{withUnit(formatRangeValue(max), unit)}</span>
     </div>
   );
 }
@@ -143,8 +150,9 @@ export function PieCallout({
   values,
   shares,
   twoLines = false,
+  unit,
   ...props
-}: PieLabelRenderProps & { values: LegendValues; shares: number[]; twoLines?: boolean }): ReactNode {
+}: PieLabelRenderProps & { values: LegendValues; shares: number[]; twoLines?: boolean; unit?: string }): ReactNode {
   const { cx, cy, outerRadius, percent, name, value, fill, index } = props;
   const placement = layoutPieCallouts(
     shares,
@@ -157,7 +165,7 @@ export function PieCallout({
 
   const { side, sx, sy, bx, by, tx, ty } = placement;
   const label = String(name ?? "");
-  const valueText = formatLegendValue(Number(value) || 0, Number(percent) || 0, values);
+  const valueText = formatLegendValue(Number(value) || 0, Number(percent) || 0, values, unit);
   const textX = tx + side * CALLOUT_TEXT_GAP;
 
   return (

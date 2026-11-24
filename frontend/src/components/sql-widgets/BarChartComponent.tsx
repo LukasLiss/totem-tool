@@ -34,6 +34,7 @@ import {
   formatChartNumber,
   linkedQueryOf,
   toNumber,
+  withUnit,
   type SqlWidgetNodeFields,
   type SqlWidgetProps,
 } from "./sqlWidgetUtils";
@@ -79,6 +80,7 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
   const [showValues, setShowValues] = useState(node.show_values ?? false);
   const [colors, setColors] = useState<ChartColors>(node.chart_style?.colors ?? {});
   const [maxCategories, setMaxCategories] = useState<number | null>(node.chart_style?.max_categories ?? null);
+  const [valueUnit, setValueUnit] = useState(node.chart_style?.units?.value ?? "");
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
@@ -91,6 +93,7 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
     setShowValues(node.show_values ?? false);
     setColors(node.chart_style?.colors ?? {});
     setMaxCategories(node.chart_style?.max_categories ?? null);
+    setValueUnit(node.chart_style?.units?.value ?? "");
   }, [node]);
 
   const fileId = selectedFile?.id;
@@ -123,6 +126,7 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
     showValues,
     colors,
     maxCategories,
+    valueUnit,
   };
 
   const applySettings = (next: BarChartSettings) => {
@@ -135,6 +139,7 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
     setShowValues(next.showValues);
     setColors(next.colors);
     setMaxCategories(next.maxCategories);
+    setValueUnit(next.valueUnit);
     onUpdate?.({
       title: next.title,
       query: next.query,
@@ -148,6 +153,7 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
         ...node.chart_style,
         colors: next.colors,
         max_categories: next.maxCategories ?? undefined,
+        units: { ...node.chart_style?.units, value: next.valueUnit || undefined },
       },
     });
   };
@@ -279,6 +285,7 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
               content={
                 <HeadedTooltip
                   heading={(bar) => ({ label: String(bar.label ?? ""), color: bar.fill as string | undefined })}
+                  units={{ value: valueUnit }}
                 />
               }
             />
@@ -297,7 +304,7 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
                   position={horizontal ? "right" : "top"}
                   className="fill-foreground"
                   fontSize={11}
-                  formatter={(v: number) => v.toLocaleString()}
+                  formatter={(v: number) => withUnit(v.toLocaleString(), valueUnit)}
                 />
               )}
             </Bar>

@@ -23,6 +23,7 @@ import {
   ColorSettings,
   MaxCategoriesRow,
   SettingRow,
+  UnitRow,
   type ChartSettingsTab,
 } from "./chartSettings";
 import { useDiscoverOnOpen, type CategoryList } from "./chartSettingsUtils";
@@ -52,6 +53,10 @@ export interface ScatterPlotSettings {
   colors: ChartColors;
   /** Series with their own color, the rest grouped as "Other"; null = DEFAULT_MAX_SERIES. */
   maxSeries: number | null;
+  /** Shown after the x / y values and the "By value" color values (tooltip, legend); empty = none. */
+  xUnit: string;
+  yUnit: string;
+  colorUnit: string;
 }
 
 const POINT_SIZE_OPTIONS = [
@@ -175,6 +180,7 @@ function SettingsBody({ widgetId, initial, onApply, onCancel, fileId, projectId 
               className="h-8 max-w-56"
             />
           </SettingRow>
+          <UnitRow id={`${idPrefix}-x-unit`} label="X unit" value={draft.xUnit} onChange={(v) => set("xUnit", v)} />
           <SettingRow label="Y axis label" htmlFor={`${idPrefix}-y-label`}>
             <Input
               id={`${idPrefix}-y-label`}
@@ -184,6 +190,7 @@ function SettingsBody({ widgetId, initial, onApply, onCancel, fileId, projectId 
               className="h-8 max-w-56"
             />
           </SettingRow>
+          <UnitRow id={`${idPrefix}-y-unit`} label="Y unit" value={draft.yUnit} onChange={(v) => set("yUnit", v)} />
           {/* Legend and max series only apply with a series column. */}
           <SettingRow label="Point size">
             <SegmentedControl
@@ -236,6 +243,14 @@ function SettingsBody({ widgetId, initial, onApply, onCancel, fileId, projectId 
               categoryColors: false,
             }}
           />
+          {valueMode && (
+            <UnitRow
+              id={`${idPrefix}-color-unit`}
+              label="Color value unit"
+              value={draft.colorUnit}
+              onChange={(v) => set("colorUnit", v)}
+            />
+          )}
         </>
       }
       sketch={
