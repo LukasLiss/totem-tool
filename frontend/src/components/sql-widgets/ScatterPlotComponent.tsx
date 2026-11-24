@@ -27,6 +27,7 @@ import type { ChartStyle, LegendPosition, PointSize } from "./chartLegendUtils";
 import { POINT_RADIUS_PX, TRANSPARENT_POINT_OPACITY, buildScatterSeries, scatterColors } from "./scatterUtils";
 import WidgetDraftTile from "@/components/WidgetDraftTile";
 import ScatterPlotSketch from "./ScatterPlotSketch";
+import VerticalAxisLabel from "./VerticalAxisLabel";
 import ScatterPlotSettingsDialog, { type ScatterPlotSettings } from "./ScatterPlotSettingsDialog";
 import { useDashboardLocalFilter } from "@/hooks/useDashboardLocalFilter";
 
@@ -251,7 +252,7 @@ const ScatterPlotComponent: React.FC<SqlWidgetProps<ScatterPlotNodeFields>> = ({
               dataKey="y"
               name={yLabel || yKey}
               tickLine={false}
-              label={yLabel ? { value: yLabel, angle: -90, position: "insideLeft", fontSize: 11 } : undefined}
+              label={yLabel ? { content: (props) => <VerticalAxisLabel {...props} text={yLabel} fontSize={11} /> } : undefined}
             />
             <ChartTooltip
               cursor={{ strokeDasharray: "3 3" }}

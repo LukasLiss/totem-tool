@@ -42,6 +42,7 @@ import { limitCategories } from "./chartData";
 import { useCategoryList } from "./chartSettingsUtils";
 import type { ChartStyle } from "./chartLegendUtils";
 import BarChartSketch from "./BarChartSketch";
+import TitledTick from "./TitledTick";
 import BarChartSettingsDialog, { type BarChartSettings } from "./BarChartSettingsDialog";
 import { useDashboardLocalFilter } from "@/hooks/useDashboardLocalFilter";
 
@@ -248,6 +249,7 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
                   tickLine={false}
                   axisLine={false}
                   tickFormatter={(v: string) => (v.length > 16 ? `${v.slice(0, 15)}…` : v)}
+                  tick={(props) => <TitledTick {...props} />}
                 />
               </>
             ) : (
@@ -261,6 +263,7 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
                   textAnchor={chartData.length > 8 ? "end" : "middle"}
                   height={chartData.length > 8 ? 60 : 30}
                   tickFormatter={(v: string) => (v.length > 16 ? `${v.slice(0, 15)}…` : v)}
+                  tick={(props) => <TitledTick {...props} />}
                 />
                 <YAxis tickLine={false} axisLine={false} />
               </>
