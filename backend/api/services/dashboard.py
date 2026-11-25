@@ -25,6 +25,7 @@ from api.models import (
     TextBoxComponent,
     VariantsComponent,
 )
+from api.rich_text import validated_rich_text
 from api.serializers import DashboardComponentPolymorphicSerializer
 
 
@@ -318,6 +319,7 @@ class DashboardService:
                 order=order,
                 text=str(cfg.get("text", title or "")),
                 font_size=int(cfg.get("font_size", 14)),
+                rich_text=validated_rich_text(cfg.get("rich_text")),
             )
         elif model_cls == NumberofEventsComponent:
             comp = NumberofEventsComponent.objects.create(
@@ -503,6 +505,8 @@ class DashboardService:
             if isinstance(comp, TextBoxComponent):
                 if "text" in config:
                     comp.text = str(config["text"])
+                if "rich_text" in config:
+                    comp.rich_text = validated_rich_text(config["rich_text"])
                 if "font_size" in config:
                     comp.font_size = int(config["font_size"])
             elif isinstance(comp, NumberofEventsComponent):

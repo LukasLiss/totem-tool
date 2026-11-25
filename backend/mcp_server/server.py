@@ -21,6 +21,7 @@ from __future__ import annotations
 import datetime as _dt
 import enum
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, FrozenSet, List, Optional
 
@@ -605,7 +606,7 @@ COMPONENT_CATALOG: Dict[str, str] = {
     "ProcessAreaComponent": "TOTeM process areas (multi-level process architecture).",
     "OCPNComponent": "Object-centric Petri net.",
     "NumberofEventsComponent": "Single number: event count. props: color.",
-    "TextBoxComponent": "Markdown/text note. props: text, font_size.",
+    "TextBoxComponent": "Text note. props: text (markdown: headings, lists, **bold**), font_size.",
     "ImageComponent": "Static image. props: image.",
 }
 
@@ -643,6 +644,21 @@ def _service_call(fn, *a, **kw):
         raise ToolError(str(exc), code="REJECTED")
 
 
+def _text_props(props: Dict[str, Any]) -> Dict[str, Any]:
+    """Text boxes store a rich-text document: convert the model's markdown so
+    headings, lists and bold render instead of showing literal `##` and `**`."""
+    if not isinstance(props.get("text"), str):
+        return props
+    from api.rich_text import plain_text_from_doc, validated_rich_text
+
+    from .markdown_doc import markdown_to_doc
+
+    doc = validated_rich_text(markdown_to_doc(props["text"]))
+    if doc is None:
+        return props
+    return {**props, "rich_text": doc, "text": plain_text_from_doc(doc)}
+
+
 def create_dashboard(ctx: ToolContext, args: Dict[str, Any]) -> Dict[str, Any]:
     user = _require_user(ctx)
     layout = []
@@ -651,6 +667,7 @@ def create_dashboard(ctx: ToolContext, args: Dict[str, Any]) -> Dict[str, Any]:
         props = dict(entry.pop("props", None) or {})
         if entry["component_name"] == "OCDottedChartComponent" and "file_id" not in props and ctx.active_file_id:
             props["file_id"] = ctx.active_file_id
+        props = _text_props(props)
         layout.append({**{"x": 0, "y": 0, "w": 6, "h": 6}, **entry, "props": props})
     d = _service_call(
         DashboardService.create_dashboard,
@@ -667,6 +684,7 @@ def add_component(ctx: ToolContext, args: Dict[str, Any]) -> Dict[str, Any]:
     props = dict(args.get("props") or {})
     if args["component_name"] == "OCDottedChartComponent" and "file_id" not in props and ctx.active_file_id:
         props["file_id"] = ctx.active_file_id
+    props = _text_props(props)
     comp = _service_call(
         DashboardService.add_component,
         user=user,
@@ -686,7 +704,7 @@ def update_component(ctx: ToolContext, args: Dict[str, Any]) -> Dict[str, Any]:
         user=user,
         dashboard_id=args.get("dashboard_id"),
         component_id=int(args["component_id"]),
-        config=args.get("props"),
+        config=_text_props(dict(args["props"])) if args.get("props") else None,
         position=position,
     )
     return {"component_id": comp.get("id", args["component_id"]), "updated": True}
@@ -716,6 +734,24 @@ def delete_dashboard(ctx: ToolContext, args: Dict[str, Any]) -> Dict[str, Any]:
 # -----------------------------------------------------------------------------
 # Catalog
 # -----------------------------------------------------------------------------
+
+def _describe_update(args: Dict[str, Any]) -> str:
+    """Say what an update changes, so the approval card is meaningful."""
+    props = args.get("props") or {}
+    changes = []
+    if isinstance(props.get("text"), str):
+        # Drop markdown syntax (headings, bullets, emphasis) from the preview.
+        text = re.sub(r"(?m)^\s*(?:#+|[-*+]|\d+[.)])\s+", " ", props["text"])
+        preview = " ".join(text.replace("**", "").replace("`", "").split())
+        changes.append(f'set text to "{preview[:60]}{"…" if len(preview) > 60 else ""}"')
+    other = sorted(k for k in props if k != "text")
+    if other:
+        changes.append("change " + ", ".join(other))
+    if any(k in args for k in ("x", "y", "w", "h")):
+        changes.append("move/resize")
+    target = f"component {args.get('component_id')}"
+    return f"Update {target}: " + "; ".join(changes) if changes else f"Update {target}"
+
 
 VIEWS = ["overview", "analysis", "conformance", "playout", "editor", "model_assets", "dashboard"]
 ANALYSIS_COMPONENTS = ["ocdfg", "variants", "dotted_chart", "occn", "process_area"]
@@ -920,7 +956,7 @@ TOOLS: List[Tool] = [
         ToolKind.PROPOSE,
         update_component,
         modes=frozenset({"act"}),
-        describe=lambda a: f"Update component {a.get('component_id')}",
+        describe=_describe_update,
     ),
     Tool(
         "remove_component",

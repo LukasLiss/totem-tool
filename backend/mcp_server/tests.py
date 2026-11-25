@@ -239,3 +239,61 @@ class DashboardToolTests(TestCase):
 
         known = {canonical for _, canonical in DashboardService.COMPONENT_REGISTRY.values()}
         self.assertEqual(set(TOOLS_BY_NAME["add_component"].parameters["properties"]["component_name"]["enum"]), known)
+
+
+class MarkdownToRichTextTests(TestCase):
+    def test_converts_the_markdown_models_write(self):
+        from .markdown_doc import markdown_to_doc
+
+        doc = markdown_to_doc(
+            "## Container bottlenecks\n\n"
+            "- **PlaceinStock → BringtoLoadingBay**: median 7.9 d\n"
+            "- Reschedules are *rare*\n\n"
+            "1. First\n2. Second\n\n"
+            "Watch `LoadTruck` waits.\n---\nEnd"
+        )
+        types = [b["type"] for b in doc["content"]]
+        self.assertEqual(types, ["heading", "bulletList", "orderedList", "paragraph", "horizontalRule", "paragraph"])
+        self.assertEqual(doc["content"][0]["attrs"], {"level": 2})
+        first_item = doc["content"][1]["content"][0]["content"][0]["content"]
+        self.assertEqual(first_item[0], {"type": "text", "text": "PlaceinStock → BringtoLoadingBay", "marks": [{"type": "bold"}]})
+        self.assertEqual(doc["content"][1]["content"][1]["content"][0]["content"][1]["marks"], [{"type": "italic"}])
+        self.assertEqual(doc["content"][3]["content"][1]["marks"], [{"type": "code"}])
+
+    def test_plain_text_and_snake_case_stay_plain(self):
+        from .markdown_doc import markdown_to_doc
+
+        doc = markdown_to_doc("Use leading_object_type and 2*3 stays literal.")
+        self.assertEqual(doc["content"][0]["content"], [{"type": "text", "text": "Use leading_object_type and 2*3 stays literal."}])
+
+    def test_text_box_created_by_the_assistant_gets_rich_text(self):
+        from api.models import TextBoxComponent
+
+        user = User.objects.create_user("writer", password="pw")
+        project = Project.objects.create(name="p")
+        project.users.add(user)
+        ctx = ToolContext(user=user, project_id=project.id)
+        created = call_tool(
+            "create_dashboard",
+            {"name": "Notes", "components": [{"component_name": "TextBoxComponent", "props": {"text": "## Baseline\n- **7.9 d** in stock"}}]},
+            ctx,
+        )
+        box = TextBoxComponent.objects.get(dashboard_id=created["dashboard_id"])
+        self.assertEqual(box.rich_text["content"][0]["type"], "heading")
+        self.assertEqual(box.text, "Baseline\n7.9 d in stock")
+
+        call_tool("update_component", {"component_id": box.id, "props": {"text": "Plain **update**"}}, ctx)
+        box.refresh_from_db()
+        self.assertEqual(box.rich_text["content"][0]["content"][1]["marks"], [{"type": "bold"}])
+        self.assertEqual(box.text, "Plain update")
+
+
+class ApprovalDescriptionTests(TestCase):
+    def test_update_cards_say_what_changes(self):
+        describe = TOOLS_BY_NAME["update_component"].summary
+        self.assertEqual(
+            describe({"component_id": 14, "props": {"text": "## Waiting\n- **7.9 d** in stock"}}),
+            'Update component 14: set text to "Waiting 7.9 d in stock"',
+        )
+        self.assertEqual(describe({"component_id": 3, "w": 6, "props": {"leading_object_type": "Container"}}), "Update component 3: change leading_object_type; move/resize")
+        self.assertEqual(describe({"component_id": 3}), "Update component 3")
