@@ -26,7 +26,11 @@ LOCK_PREFIX = "assistant_conv_lock:"
 CANCEL_PREFIX = "assistant_conv_cancel:"
 TTL_SECONDS = 24 * 3600
 LOCK_SECONDS = 15 * 60
-MAX_TRANSCRIPT_CHARS = 400_000
+MAX_TRANSCRIPT_CHARS = 400_000  # fallback when a provider reports no token usage
+# Condense once the last request sent this many input tokens (cached or not): every
+# turn re-sends the whole transcript, so cost and latency grow with it. Matches the
+# trigger Anthropic's server-side compaction uses by default.
+COMPACT_AT_INPUT_TOKENS = 150_000
 RECAP_CHARS = 24_000
 
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
@@ -48,6 +52,7 @@ class Conversation:
     messages: List[Dict[str, Any]] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
+    last_input_tokens: int = 0  # input tokens of the latest model request, as reported by the provider
 
     def _key(self) -> str:
         return f"{CACHE_PREFIX}{self.user_id}:{self.id}"
@@ -130,6 +135,10 @@ def clear_cancel(user_id: int, conversation_id: str) -> None:
 
 def transcript_size(messages: List[Dict[str, Any]]) -> int:
     return len(json.dumps(messages, default=str))
+
+
+def needs_compaction(conv: "Conversation") -> bool:
+    return conv.last_input_tokens > COMPACT_AT_INPUT_TOKENS or transcript_size(conv.messages) > MAX_TRANSCRIPT_CHARS
 
 
 def recap(messages: List[Dict[str, Any]], limit: int = RECAP_CHARS) -> str:

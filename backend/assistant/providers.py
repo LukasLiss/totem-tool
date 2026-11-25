@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import uuid
 from typing import Any, Dict, Iterator, List, Optional
 
@@ -263,16 +264,46 @@ def _sse_data(resp) -> Iterator[str]:
                 yield data
 
 
-def _post_stream(provider: str, url: str, headers: Dict[str, str], payload: Dict[str, Any]):
+REST_RETRIES = 2
+REST_BACKOFF_SECONDS = (1.0, 4.0)
+REST_MAX_RETRY_AFTER = 20.0
+
+
+def _retry_delay(resp, attempt: int) -> float:
+    """Honour a short Retry-After header, else back off on a fixed schedule."""
+    header = resp.headers.get("retry-after") if resp is not None else None
     try:
-        resp = requests.post(url, headers=headers, json=payload, stream=True, timeout=(10, 300))
-    except requests.RequestException as exc:
-        raise ProviderError("network", f"Could not reach {provider}: {exc}") from exc
-    if resp.status_code != 200:
+        if header is not None:
+            return min(float(header), REST_MAX_RETRY_AFTER)
+    except ValueError:
+        pass
+    return REST_BACKOFF_SECONDS[min(attempt, len(REST_BACKOFF_SECONDS) - 1)]
+
+
+def _post_stream(provider: str, url: str, headers: Dict[str, str], payload: Dict[str, Any]):
+    """POST a streaming request, retrying rate limits, 5xx and connection errors a few times.
+
+    Nothing has been streamed to the user before the response starts, so a retry
+    here is invisible to them. The Anthropic SDK does the same on its own.
+    """
+    for attempt in range(REST_RETRIES + 1):
+        try:
+            resp = requests.post(url, headers=headers, json=payload, stream=True, timeout=(10, 300))
+        except requests.RequestException as exc:
+            if attempt < REST_RETRIES:
+                time.sleep(_retry_delay(None, attempt))
+                continue
+            raise ProviderError("network", f"Could not reach {provider}: {exc}") from exc
+        if resp.status_code == 200:
+            return resp
         body = resp.text
         resp.close()
-        raise _http_error(provider, resp.status_code, body)
-    return resp
+        err = _http_error(provider, resp.status_code, body)
+        if err.retryable and attempt < REST_RETRIES:
+            time.sleep(_retry_delay(resp, attempt))
+            continue
+        raise err
+    raise ProviderError("unavailable", f"{provider} did not respond.")  # pragma: no cover
 
 
 # =============================================================================

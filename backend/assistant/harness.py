@@ -46,14 +46,59 @@ from .prompts import TOUR_TARGETS, build_system_prompt, render_ui_context
 from .providers import Provider, ProviderError
 
 logger = logging.getLogger(__name__)
+# One JSON record per turn: metadata only (no message text, tool arguments or keys).
+trace_logger = logging.getLogger("assistant.trace")
 
 MAX_STEPS = 12
 MAX_TOOL_RESULT_CHARS = 24_000
 LOCK_WAIT_SECONDS = 15
 
 
+def _dumps(value: Any) -> str:
+    return json.dumps(value, default=str, ensure_ascii=False)
+
+
+def _shrink(payload: Any, limit: int) -> str:
+    """Serialize ``payload`` within ``limit`` characters while keeping it valid JSON.
+
+    Repeatedly halves the longest list (rows, edges, variants, ...) and records
+    what was cut next to it, so the model knows the result is partial and why.
+    Falls back to a plain cut only for payloads with no list to trim.
+    """
+    text = _dumps(payload)
+    if len(text) <= limit or not isinstance(payload, (dict, list)):
+        return text
+    data = json.loads(text)  # a private deep copy we can edit
+    originals: Dict[int, int] = {}
+
+    def lists(node: Any, parent: Any = None, key: Any = None):
+        if isinstance(node, list):
+            yield parent, key, node
+            items = enumerate(node)
+        elif isinstance(node, dict):
+            items = node.items()
+        else:
+            return
+        for k, child in items:
+            yield from lists(child, node, k)
+
+    for _ in range(40):
+        candidates = [(p, k, lst) for p, k, lst in lists(data) if isinstance(p, dict) and len(lst) > 1]
+        if not candidates:
+            break
+        parent, key, longest = max(candidates, key=lambda c: len(_dumps(c[2])))
+        total = originals.setdefault(id(parent) * 31 + hash(key), len(longest))
+        kept = longest[: max(1, len(longest) // 2)]
+        parent[key] = kept
+        parent[f"{key}_truncated"] = f"showing {len(kept)} of {total}; narrow the request to see the rest"
+        text = _dumps(data)
+        if len(text) <= limit:
+            return text
+    return text[:limit] + f"\n…[truncated: result was {len(text)} characters; narrow the request]"
+
+
 def _result_block(tool_use: Dict[str, Any], payload: Any, is_error: bool = False) -> Dict[str, Any]:
-    text = payload if isinstance(payload, str) else json.dumps(payload, default=str, ensure_ascii=False)
+    text = payload if isinstance(payload, str) else _shrink(payload, MAX_TOOL_RESULT_CHARS)
     if len(text) > MAX_TOOL_RESULT_CHARS:
         text = text[:MAX_TOOL_RESULT_CHARS] + f"\n…[truncated: result was {len(text)} characters; narrow the request]"
     return {
@@ -101,14 +146,24 @@ class Turn:
         self.tool_names = {t.name for t in self.tools}
         self.system = build_system_prompt(conversation.mode)
         self.usage = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+        self.trace: Dict[str, Any] = {
+            "conversation_id": conversation.id,
+            "mode": conversation.mode,
+            "provider": getattr(provider, "name", "?"),
+            "model": getattr(provider, "model", "?"),
+            "steps": [],
+            "tools": [],
+            "outcome": "answered",
+        }
 
     # -- transcript helpers -------------------------------------------------
 
     def _user_message(self, text: str) -> Dict[str, Any]:
         blocks: List[Dict[str, Any]] = []
-        if conv_store.transcript_size(self.conv.messages) > conv_store.MAX_TRANSCRIPT_CHARS:
+        if self.conv.messages and conv_store.needs_compaction(self.conv):
             recap = conv_store.recap(self.conv.messages)
             self.conv.messages = []
+            self.conv.last_input_tokens = 0
             blocks.append({"type": "text", "text": "<earlier_conversation_recap>\n" + recap + "\n</earlier_conversation_recap>"})
         if self.conv.notes:
             notes = "\n".join(f"- {n}" for n in self.conv.notes)
@@ -186,6 +241,7 @@ class Turn:
             block = _result_block(tu, {"error": f"Internal error in {name}: {type(exc).__name__}: {exc}"}, is_error=True)
 
         end = {"type": "tool_end", "id": tu["id"], "name": name, "ok": not block["is_error"], "duration_ms": int((time.monotonic() - started) * 1000)}
+        self.trace["tools"].append({"name": name, "ok": end["ok"], "ms": end["duration_ms"]})
         if block["is_error"]:
             try:
                 end["error"] = json.loads(block["content"]).get("error")
@@ -204,10 +260,13 @@ class Turn:
         tool_specs = [t.spec() for t in self.tools]
 
         text_so_far = False  # any answer text streamed earlier in this turn
+        partial: List[str] = []  # text of the model step in progress, kept if the user stops it
         try:
             for step in range(MAX_STEPS):
                 final = None
                 step_has_text = False
+                partial = []
+                step_started = time.monotonic()
                 stream = self.provider.stream(self.system, self.conv.messages, tool_specs)
                 try:
                     for ev in stream:
@@ -222,6 +281,8 @@ class Turn:
                             if text_so_far:
                                 yield {"type": "text", "text": "\n\n"}
                             text_so_far = True
+                        if ev["type"] == "text":
+                            partial.append(ev["text"])
                         yield ev
                 finally:
                     stream.close()  # stop the model call now, not when garbage-collected
@@ -230,6 +291,14 @@ class Turn:
 
                 msg = final["message"]
                 self.conv.messages.append(msg)
+                step_usage = final.get("usage") or {}
+                self.conv.last_input_tokens = sum(
+                    int(step_usage.get(k, 0) or 0) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+                )
+                self.trace["steps"].append(
+                    {"ms": int((time.monotonic() - step_started) * 1000), "stop": final["stop_reason"], "usage": final.get("usage") or {}}
+                )
+                partial = []  # recorded with the full message
                 for k in self.usage:
                     self.usage[k] += int((final.get("usage") or {}).get(k, 0) or 0)
 
@@ -237,6 +306,7 @@ class Turn:
                 tool_uses = [b for b in msg["content"] if b["type"] == "tool_use"]
 
                 if stop == "refusal":
+                    self.trace["outcome"] = "refusal"
                     self._close_dangling_tool_uses("Not executed: the response was declined.")
                     yield {"type": "notice", "text": "The model declined to continue with this request."}
                     break
@@ -276,14 +346,28 @@ class Turn:
                     ]
                     self.conv.messages.append({"role": "user", "content": results})
             else:
+                self.trace["outcome"] = "step_limit"
                 yield {"type": "notice", "text": f"Stopped after {MAX_STEPS} steps. Ask me to continue if needed."}
         except ProviderError as exc:
+            self.trace["outcome"] = f"error:{exc.kind}"
             self._close_dangling_tool_uses("Not executed: the model call failed.")
             yield {"type": "error", "code": exc.kind, "message": str(exc), "retryable": exc.retryable}
         except _Cancelled:
+            self.trace["outcome"] = "stopped"
             self._close_dangling_tool_uses("Not executed: the user stopped the reply.")
+            if "".join(partial).strip():
+                # The user saw this text; keep it so the next turn knows what was already said.
+                self.conv.messages.append(
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "".join(partial).rstrip() + " [stopped by the user]"}],
+                        "provider": {"name": "harness"},
+                    }
+                )
             yield {"type": "notice", "text": "Stopped."}
 
+        self.trace["usage"] = self.usage
+        trace_logger.info(json.dumps(self.trace))
         yield {"type": "done", "usage": self.usage, "conversation_id": self.conv.id}
 
 

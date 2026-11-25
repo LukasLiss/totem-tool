@@ -139,6 +139,16 @@ class HarnessTests(TestCase):
         streamed = "".join(e["text"] for e in events if e["type"] == "text")
         self.assertEqual(streamed, "Checking the log.\n\nFound it.")
 
+    def test_each_turn_logs_a_metadata_trace(self):
+        p = ScriptedProvider([[tool("get_log_overview", id="t1")], [text("Six events.")]])
+        with self.assertLogs("assistant.trace", level="INFO") as logs:
+            self.run_turn(p, "secret question text")
+        record = json.loads(logs.output[0].split(":", 2)[2])
+        self.assertEqual(record["outcome"], "answered")
+        self.assertEqual([s["stop"] for s in record["steps"]], ["tool_use", "end_turn"])
+        self.assertEqual(record["tools"][0]["name"], "get_log_overview")
+        self.assertNotIn("secret question", logs.output[0])
+
     def test_conversation_continues_across_turns(self):
         p = ScriptedProvider([[text("first")], [text("second")]])
         _, cid = self.run_turn(p, "one")
@@ -299,7 +309,11 @@ class HarnessTests(TestCase):
         self.assertIn({"type": "notice", "text": "Stopped."}, events)
         self.assertEqual(events[-1]["type"], "done")
         self.assertFalse([e for e in events if e["type"] == "tool_start"])
-        assert_valid_transcript(self, self.stored(p.cid))
+        msgs = self.stored(p.cid)
+        assert_valid_transcript(self, msgs)
+        # What the user already saw is kept, marked as stopped.
+        self.assertEqual(msgs[-1]["role"], "assistant")
+        self.assertEqual(msgs[-1]["content"][0]["text"], "A long answer [stopped by the user]")
         # The flag is cleared and the lock released: the next message runs normally.
         events, _ = self.run_turn(p, "again", conversation_id=p.cid)
         self.assertEqual("".join(e["text"] for e in events if e["type"] == "text"), "next")
@@ -327,6 +341,18 @@ class HarnessTests(TestCase):
         self.assertIn("cancelled", msgs[-1]["content"][1]["content"])
         self.assertEqual(len(p.calls), 1)  # the model was not called again
 
+    def test_compaction_follows_reported_input_tokens(self):
+        p = ScriptedProvider([[text("ok")], [text("still here")]])
+        _, cid = self.run_turn(p, "remember the word avocado")
+        conv = conv_store.load(self.user.id, cid)
+        self.assertEqual(conv.last_input_tokens, 10)  # ScriptedProvider reports 10 input tokens
+        conv.last_input_tokens = conv_store.COMPACT_AT_INPUT_TOKENS + 1
+        conv_store.save(conv)
+        self.run_turn(p, "what word?", conversation_id=cid)
+        sent = p.calls[1]["messages"]
+        self.assertEqual(len(sent), 1)
+        self.assertIn("avocado", sent[0]["content"][0]["text"])
+
     def test_long_conversations_are_condensed_not_edited(self):
         p = ScriptedProvider([[text("ok")], [text("still here")]])
         _, cid = self.run_turn(p, "remember the word avocado")
@@ -339,6 +365,29 @@ class HarnessTests(TestCase):
         self.assertEqual(len(sent), 1)
         self.assertIn("avocado", sent[0]["content"][0]["text"])
         self.assertIn("earlier_conversation_recap", sent[0]["content"][0]["text"])
+
+
+class ResultShrinkTests(TestCase):
+    def test_large_results_stay_valid_json_and_say_what_was_cut(self):
+        from .harness import _shrink
+
+        payload = {"file_name": "log.duckdb", "rows": [[i, f"activity {i}", "x" * 50] for i in range(5000)], "row_count": 5000}
+        text = _shrink(payload, 24_000)
+        self.assertLessEqual(len(text), 24_000)
+        data = json.loads(text)
+        self.assertEqual(data["file_name"], "log.duckdb")
+        self.assertEqual(data["rows"][0][0], 0)  # keeps the head of the list
+        self.assertIn("of 5000", data["rows_truncated"])
+
+    def test_nested_lists_and_small_payloads(self):
+        from .harness import _shrink
+
+        small = {"a": [1, 2, 3]}
+        self.assertEqual(json.loads(_shrink(small, 1000)), small)
+        nested = {"variants": [{"activity_sequence": ["x" * 40] * 200} for _ in range(50)]}
+        data = json.loads(_shrink(nested, 6_000))
+        self.assertIn("variants_truncated", data)
+        self.assertLessEqual(len(json.dumps(data)), 6_000 + 200)
 
 
 class PromptTests(TestCase):
@@ -612,6 +661,7 @@ class _FakeResponse:
         self.lines = lines
         self.status_code = status_code
         self.text = body
+        self.headers = {}
 
     def iter_lines(self, decode_unicode=False):
         return iter(self.lines)
@@ -653,8 +703,23 @@ class GeminiProviderTests(TestCase):
         self.assertEqual(native[1]["parts"][1]["thoughtSignature"], "SIG")
         self.assertEqual(native[2]["parts"][0]["functionResponse"], {"name": "get_log_overview", "response": {"result": {"events": 6}}})
 
+    def test_transient_errors_are_retried_then_succeed(self):
+        chunk = {"candidates": [{"content": {"parts": [{"text": "hi"}]}, "finishReason": "STOP"}]}
+        responses = [_FakeResponse([], 503, '{"error": {"message": "overloaded"}}'), _FakeResponse([b"data: " + json.dumps(chunk).encode()])]
+        with mock.patch("assistant.providers.requests.post", side_effect=responses) as post, mock.patch("assistant.providers.time.sleep") as sleep:
+            out = list(GeminiProvider("AIza-test").stream("S", [{"role": "user", "content": [text("hi")]}], []))
+        self.assertEqual(post.call_count, 2)
+        sleep.assert_called_once()
+        self.assertEqual(out[-1]["message"]["content"], [text("hi")])
+
+    def test_auth_errors_are_not_retried(self):
+        with mock.patch("assistant.providers.requests.post", return_value=_FakeResponse([], 401, '{"error": {"message": "bad key"}}')) as post:
+            with self.assertRaises(ProviderError):
+                list(GeminiProvider("AIza-bad").stream("S", [{"role": "user", "content": [text("hi")]}], []))
+        self.assertEqual(post.call_count, 1)
+
     def test_quota_error_is_rate_limit_not_a_fake_answer(self):
-        with mock.patch("assistant.providers.requests.post", return_value=_FakeResponse([], 429, '{"error": {"message": "quota"}}')):
+        with mock.patch("assistant.providers.time.sleep"), mock.patch("assistant.providers.requests.post", return_value=_FakeResponse([], 429, '{"error": {"message": "quota"}}')):
             with self.assertRaises(ProviderError) as cm:
                 list(GeminiProvider("AIza-test").stream("S", [{"role": "user", "content": [text("hi")]}], []))
         self.assertEqual(cm.exception.kind, "rate_limit")
