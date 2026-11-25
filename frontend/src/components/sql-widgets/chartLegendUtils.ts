@@ -5,6 +5,7 @@
  */
 
 import type { ChartColors } from "./chartColors";
+import { withUnit } from "./sqlWidgetUtils";
 
 // "none" hides the legend (scatter plot; the pie chart uses show_legend instead).
 export type LegendPosition = "none" | "bottom" | "columns" | "callouts";
@@ -29,6 +30,19 @@ export interface ChartStyle {
     position?: LegendPosition;
     values?: LegendValues;
   };
+  /**
+   * Units shown after the numbers (tooltips, value labels, legends; not on
+   * the axis ticks). `value`: bar and pie chart values; `x` / `y`: the
+   * scatter plot's axes; `color`: its "By value" color column.
+   */
+  units?: ChartUnits;
+}
+
+export interface ChartUnits {
+  value?: string;
+  x?: string;
+  y?: string;
+  color?: string;
 }
 
 export interface LegendItem {
@@ -40,17 +54,20 @@ export interface LegendItem {
 
 export function formatPercent(share: number): string {
   const pct = share * 100;
-  return `${pct >= 10 || pct === 0 ? pct.toFixed(0) : pct.toFixed(1)}%`;
+  // In the browser's number format like all other numbers ("12.5%" or "12,5%").
+  const digits = pct >= 10 || pct === 0 ? 0 : 1;
+  return `${pct.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits })}%`;
 }
 
-export function formatLegendValue(value: number, share: number, mode: LegendValues): string {
+/** A legend entry's / callout's value text; `unit` goes after the value, not the percent. */
+export function formatLegendValue(value: number, share: number, mode: LegendValues, unit?: string): string {
   switch (mode) {
     case "value":
-      return value.toLocaleString();
+      return withUnit(value.toLocaleString(), unit);
     case "percent":
       return formatPercent(share);
     case "both":
-      return `${value.toLocaleString()} (${formatPercent(share)})`;
+      return `${withUnit(value.toLocaleString(), unit)} (${formatPercent(share)})`;
     default:
       return "";
   }
@@ -207,13 +224,14 @@ export function fitPieCallouts(
   items: { label: string; value: number }[],
   values: LegendValues,
   width: number,
-  height: number
+  height: number,
+  unit?: string
 ): { radius: number; twoLines: boolean } {
   const total = items.reduce((acc, item) => acc + item.value, 0);
   const shares = items.map((item) => (total ? item.value / total : 0));
   const angles = sliceAngles(shares);
   const labelWidths = items.map((item) => textWidth(calloutLabel(item.label)));
-  const valueWidths = items.map((item, i) => textWidth(formatLegendValue(item.value, shares[i], values)));
+  const valueWidths = items.map((item, i) => textWidth(formatLegendValue(item.value, shares[i], values, unit)));
 
   const oneLine = radiusForCallouts(
     angles,

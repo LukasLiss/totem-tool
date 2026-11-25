@@ -30,6 +30,8 @@ import { CHART_SKETCH_HINT } from "./constants";
 import {
   COLOR_SCHEME_OPTIONS,
   DEFAULT_COLOR_SCHEME,
+  DEFAULT_HIGH_COLOR,
+  DEFAULT_LOW_COLOR,
   DEFAULT_SHADES_BASE,
   DEFAULT_SINGLE_COLOR,
   DEFAULT_SINGLE_PICKER,
@@ -354,6 +356,38 @@ export function SettingRow({ label, htmlFor, disabled = false, children }: {
   );
 }
 
+// Longest unit kept (the backend keeps the same), so it stays a unit, not a sentence.
+const UNIT_MAX_LENGTH = 16;
+
+/**
+ * A unit shown after a chart's numbers (tooltips, value labels, legends),
+ * e.g. "h", "%" or "€"; empty means none.
+ */
+export function UnitRow({ id, label, value, onChange, disabled = false }: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (unit: string) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <SettingRow label={label} htmlFor={id} disabled={disabled}>
+      <span className={cn("flex items-center gap-2", disabled && "opacity-50")}>
+        <span className="text-xs text-muted-foreground">after the numbers, not on the axis</span>
+        <Input
+          id={id}
+          value={value}
+          maxLength={UNIT_MAX_LENGTH}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="e.g. h, %, €"
+          className="h-8 w-28"
+        />
+      </span>
+    </SettingRow>
+  );
+}
+
 /** "Max categories" with a number field; empty means `placeholder` (all, by default). */
 export function MaxCategoriesRow({
   id,
@@ -426,6 +460,27 @@ const COLOR_MODE_OPTIONS = [
   { value: "single", label: "Single color" },
   { value: "category", label: "Per category" },
 ] as const;
+const COLOR_MODE_OPTIONS_WITH_VALUE = [
+  ...COLOR_MODE_OPTIONS,
+  { value: "value", label: "By value" },
+] as const;
+
+/** A color setting row: the hex value and a swatch to pick the color. */
+function ColorPickerRow({ label, color, onChange }: {
+  label: string;
+  /** #rrggbb */
+  color: string;
+  onChange: (hex: string) => void;
+}) {
+  return (
+    <SettingRow label={label}>
+      <span className="flex items-center gap-2 font-mono text-xs text-muted-foreground">
+        {color}
+        <ColorSwatchInput label={label} color={color} value={color} onChange={onChange} />
+      </span>
+    </SettingRow>
+  );
+}
 
 /**
  * Colors: the color scheme cards (with "Same color per category" and the
@@ -439,6 +494,7 @@ export function ColorSettings({
   categories,
   singleColorLabel,
   singleOnly = false,
+  byValue,
 }: {
   idPrefix: string;
   colors: ChartColors;
@@ -454,8 +510,25 @@ export function ColorSettings({
    * scatter plot without a series column has no categories to color).
    */
   singleOnly?: boolean;
+  /**
+   * Also offer "By value" in "Color by" (with `singleColorLabel`): a color
+   * for the smallest and the largest value, the ones between in between.
+   */
+  byValue?: {
+    /** What gets colored how, shown below the two colors. */
+    description: string;
+    /** A warning below, e.g. that the column has no numbers to order. */
+    notice?: string;
+    /** Keep the per-category colors in "By value" mode (bars: yes; points: no). */
+    categoryColors: boolean;
+  };
 }) {
-  const mode = singleOnly ? "single" : singleColorLabel ? colors.mode ?? "single" : "category";
+  const chosen = colors.mode ?? "single";
+  const mode = singleOnly
+    ? "single"
+    : singleColorLabel
+      ? chosen === "value" && !byValue ? "single" : chosen
+      : "category";
   const scheme = colors.scheme ?? DEFAULT_COLOR_SCHEME;
   const overrides = colors.overrides ?? {};
   const fills = categoryFills(categories.slices, { ...colors, mode });
@@ -476,12 +549,38 @@ export function ColorSettings({
             <SegmentedControl
               ariaLabel="Color by"
               value={mode}
-              options={COLOR_MODE_OPTIONS}
+              options={byValue ? COLOR_MODE_OPTIONS_WITH_VALUE : COLOR_MODE_OPTIONS}
               onChange={(v) => update({ mode: v })}
             />
           </SettingRow>
         )}
-        {mode === "single" ? (
+        {mode === "value" ? (
+          <>
+            <ColorPickerRow
+              label="Smallest value"
+              color={colors.low ?? DEFAULT_LOW_COLOR}
+              onChange={(hex) => update({ low: hex })}
+            />
+            <ColorPickerRow
+              label="Largest value"
+              color={colors.high ?? DEFAULT_HIGH_COLOR}
+              onChange={(hex) => update({ high: hex })}
+            />
+            <span
+              aria-hidden
+              className="block h-3 rounded-sm"
+              style={{
+                background: `linear-gradient(to right in oklab, ${colors.low ?? DEFAULT_LOW_COLOR}, ${colors.high ?? DEFAULT_HIGH_COLOR})`,
+              }}
+            />
+            <p className="text-xs text-muted-foreground">{byValue?.description}</p>
+            {byValue?.notice && (
+              <p role="status" className="text-xs text-amber-700 dark:text-amber-400">
+                {byValue.notice}
+              </p>
+            )}
+          </>
+        ) : mode === "single" ? (
           <SettingRow label={singleColorLabel ?? "Color"}>
             <span className="flex items-center gap-2 font-mono text-xs text-muted-foreground">
               {colors.single ?? "black"}
@@ -549,7 +648,7 @@ export function ColorSettings({
         )}
       </div>
 
-      {!singleOnly && (
+      {!singleOnly && !(mode === "value" && !byValue?.categoryColors) && (
       <div className="space-y-2 pt-2">
         <div className="flex items-center justify-between">
           <Label>Category colors</Label>

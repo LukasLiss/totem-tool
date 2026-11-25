@@ -432,6 +432,20 @@ export function TextBoxToolbar({
   // selection's own size".
   const [sizeDraft, setSizeDraft] = useState<string | null>(null);
 
+  // While the field changes (typing, arrow keys, the spin buttons): apply the
+  // size right away when it is already a valid size, so the selected text
+  // grows and shrinks along. Without focusing the editor, so the caret stays
+  // in the field; the editor keeps its selection meanwhile. Values outside
+  // the range (the "2" on the way to "24") wait for blur / Enter.
+  const changeFontSize = (raw: string) => {
+    setSizeDraft(raw);
+    const next = Number(raw);
+    if (!editor || raw.trim() === '' || !Number.isFinite(next)) return;
+    const rounded = Math.round(next);
+    if (rounded < FONT_SIZE_MIN || rounded > FONT_SIZE_MAX) return;
+    editor.chain().setFontSize(`${rounded}px`).run();
+  };
+
   const commitFontSize = () => {
     if (sizeDraft === null) return;
     const next = Number(sizeDraft);
@@ -444,9 +458,10 @@ export function TextBoxToolbar({
 
   return (
     <div className="flex flex-wrap items-center gap-1.5 border-b border-border bg-card px-2 py-1.5">
-      {/* Clamped on blur or Enter, never per keystroke: the first digit of
-          "24" clamps to the 8 minimum and rewrites the field, so most sizes
-          could not be typed at all. */}
+      {/* Applied live while valid (changeFontSize); clamped only on blur or
+          Enter, never per keystroke: the first digit of "24" would clamp to
+          the 8 minimum and rewrite the field, so most sizes could not be
+          typed at all. */}
       <input
         type="number"
         min={FONT_SIZE_MIN}
@@ -455,7 +470,7 @@ export function TextBoxToolbar({
         disabled={disabled}
         aria-label="Font size"
         title="Font size"
-        onChange={(event) => setSizeDraft(event.target.value)}
+        onChange={(event) => changeFontSize(event.target.value)}
         onBlur={commitFontSize}
         onKeyDown={(event) => {
           if (event.key === 'Enter') {

@@ -48,7 +48,7 @@ import ProcessAreaSketch from './ProcessAreaSketch';
 import TotemModelSketch from './TotemModelSketch';
 import { GRAPH_SKETCH_MAX_WIDTH } from './sketchScale';
 import OcdfgSketch from './OcdfgSketch';
-import OcdfgSettingsBody from './OcdfgSettingsDialog';
+import OcdfgSettingsBody, { type OcdfgSettings } from './OcdfgSettingsDialog';
 import OcpnSketch from './OcpnSketch';
 import OcpnSettingsBody from './OcpnSettingsDialog';
 import OccnSketch from './OccnSketch';
@@ -72,7 +72,8 @@ import { listAssets, type ProjectAsset } from '@/api/assetsApi';
 import { toast } from "sonner";
 import { saveOcdfgWidgetLayout } from "@/api/dashboardApi";
 import type { SaveLayout } from "@/react_component/ocdfg-layout/useLayoutOptions";
-import type { StoredLayout } from "@/react_component/ocdfg-layout/preferences";
+import { parseStoredLayout, withStoredOptions, type StoredLayout } from "@/react_component/ocdfg-layout/preferences";
+import { DEFAULT_OPTIONS } from "@/react_component/ocdfg-layout/options";
 import OCCNVisualizer from '@/react_component/OCCNVisualizer';
 import LogStatistics from './LogStatistics';
 import LogStatisticsSketch from './LogStatisticsSketch';
@@ -102,7 +103,7 @@ import SqlQueryEditor, {
 import { useFilterVersion } from '@/store/filterStore';
 import { WidgetHeader } from '@/components/ui/WidgetTitle';
 import { useDashboardLocalFilter } from '@/hooks/useDashboardLocalFilter';
-import TextBoxEditor from '@/components/text-box/TextBoxEditor';
+import TextBoxEditDialog, { type TextBoxEdit } from '@/components/text-box/TextBoxEditDialog';
 import RichTextRenderer from '@/components/text-box/RichTextRenderer';
 import { useProjectDashboards } from '@/components/text-box/useProjectDashboards';
 import {
@@ -258,8 +259,8 @@ export interface ComponentProps {
 
 
 // TextBoxComponent: free text plus block-level formatting (#373). Edit mode
-// shows a formatting toolbar above the textarea, the way ImageComponent
-// shows its settings; view mode renders the same styles on a paragraph.
+// shows the real text as a draft tile; a double-click opens the editor popup
+// (TextBoxEditDialog), which edits it at the tile's exact size.
 // The text is a React text node throughout, never HTML, so there is no
 // markup to sanitise.
 export const TextBoxComponent: React.FC<ComponentProps> = ({
@@ -352,48 +353,102 @@ export const TextBoxComponent: React.FC<ComponentProps> = ({
     onUpdate?.({ ...conversionPatch(next), text: plain } as Partial<GridStackNode>);
   };
 
+  // Edit mode: the popup, opened with the tile's exact size so the text is
+  // edited exactly as it will look.
+  const tileRef = React.useRef<HTMLDivElement>(null);
+  const [editFrame, setEditFrame] = React.useState<{ width: number; height: number } | null>(null);
+  const openEditor = () => {
+    const tile = tileRef.current;
+    // offsetWidth / offsetHeight: the layout size, unaffected by any zoom transform.
+    if (tile) setEditFrame({ width: tile.offsetWidth, height: tile.offsetHeight });
+  };
+  const applyEdit = (edit: TextBoxEdit) => {
+    if (Object.keys(edit.format).length > 0) handleFormatChange(edit.format);
+    if (edit.doc) handleDocChange(edit.doc);
+  };
+
+  // The text as on the dashboard; edit mode shows the same, with a draft label.
+  const textCard = (
+    // min-h is deliberately absent: the card fills whatever the grid tile
+    // is, rather than forcing 320px into a 2-row widget.
+    <Card className="w-full h-full rounded-none py-0 overflow-hidden">
+      <CardContent className="h-full p-3" style={containerStyle}>
+        {hasRichText ? (
+          // The document carries its own styling; the container only
+          // supplies the plain defaults for anything a run leaves unset.
+          <div
+            style={{
+              fontSize: TEXT_BOX_FORMAT_DEFAULTS.font_size,
+              color: TEXT_BOX_FORMAT_DEFAULTS.text_color,
+              lineHeight: TEXT_BOX_FORMAT_DEFAULTS.line_height,
+              // Mirrors TextBoxEditor: without it an unaligned block
+              // inherits `text-align: center` from `.grid-stack-item-content`.
+              textAlign: TEXT_BOX_FORMAT_DEFAULTS.text_align,
+            }}
+          >
+            <RichTextRenderer
+              doc={doc}
+              // Links don't navigate while the dashboard is being edited.
+              onDashboardLink={isEditMode ? () => {} : setPendingDashboard}
+              knownDashboardIds={knownDashboardIds}
+            />
+          </div>
+        ) : (
+          <p style={{ ...textStyle, whiteSpace: 'pre-wrap', margin: 0 }}>{text}</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+
   return (
-    <div style={{ height: '100%', width: '100%' }}>
+    <div ref={tileRef} style={{ height: '100%', width: '100%' }}>
       {isEditMode ? (
-        <Card className="w-full h-full rounded-none flex flex-col gap-0 py-0 overflow-hidden">
-          <TextBoxEditor
-            doc={doc}
-            format={format}
-            onDocChange={handleDocChange}
-            onFormatChange={handleFormatChange}
-            idPrefix={`text-box-${node.component_id}`}
-            dashboards={dashboards}
-          />
-        </Card>
+        // The real text, like other widgets' draft tiles: a label in the corner,
+        // double-click (or Enter / Space) opens the editor popup.
+        <div
+          className="group relative h-full w-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          role="button"
+          tabIndex={0}
+          aria-label="Edit text box"
+          onDoubleClick={openEditor}
+          onKeyDown={(e) => {
+            // Only keys on the tile itself; the popup's events bubble up here through React.
+            if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
+              e.preventDefault();
+              openEditor();
+            }
+          }}
+        >
+          {textCard}
+          <span className="pointer-events-none absolute left-2 top-1.5 rounded bg-background/80 px-1.5 text-xs font-medium text-muted-foreground">
+            Text
+          </span>
+          <span className="pointer-events-none absolute inset-x-0 bottom-1.5 text-center text-xs text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100">
+            Double-click to edit
+          </span>
+          {!text.trim() && (
+            <span className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
+              Empty text box
+            </span>
+          )}
+        </div>
       ) : (
-        // min-h is deliberately absent: the card fills whatever the grid tile
-        // is, rather than forcing 320px into a 2-row widget.
-        <Card className="w-full h-full rounded-none py-0 overflow-hidden">
-          <CardContent className="h-full p-3" style={containerStyle}>
-            {hasRichText ? (
-              // The document carries its own styling; the container only
-              // supplies the plain defaults for anything a run leaves unset.
-              <div
-                style={{
-                  fontSize: TEXT_BOX_FORMAT_DEFAULTS.font_size,
-                  color: TEXT_BOX_FORMAT_DEFAULTS.text_color,
-                  lineHeight: TEXT_BOX_FORMAT_DEFAULTS.line_height,
-                  // Mirrors TextBoxEditor: without it an unaligned block
-                  // inherits `text-align: center` from `.grid-stack-item-content`.
-                  textAlign: TEXT_BOX_FORMAT_DEFAULTS.text_align,
-                }}
-              >
-                <RichTextRenderer
-                  doc={doc}
-                  onDashboardLink={setPendingDashboard}
-                  knownDashboardIds={knownDashboardIds}
-                />
-              </div>
-            ) : (
-              <p style={{ ...textStyle, whiteSpace: 'pre-wrap', margin: 0 }}>{text}</p>
-            )}
-          </CardContent>
-        </Card>
+        textCard
+      )}
+
+      {editFrame && (
+        <TextBoxEditDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setEditFrame(null);
+          }}
+          frame={editFrame}
+          doc={doc}
+          format={format}
+          idPrefix={`text-box-${node.component_id}`}
+          dashboards={dashboards}
+          onApply={applyEdit}
+        />
       )}
 
       {/* The same Dialog grid.tsx uses to confirm discarding changes. It
@@ -1311,11 +1366,14 @@ export const OCDottedChartComponent: React.FC<ComponentProps> = ({
   );
 
   const effectiveFileId = selectedFile?.id;
-  const config = nodeToDottedChartConfig(node);
+  // Kept the same object while the saved settings stay the same: the chart
+  // starts over from these whenever they change, dropping what was picked in
+  // its View panel (which is only for the moment, not saved).
+  const configJson = JSON.stringify(nodeToDottedChartConfig(node));
+  const config = React.useMemo<DottedChartConfig>(() => JSON.parse(configJson), [configJson]);
 
   // Edit mode: the settings as last applied, for the draft (onUpdate changes
   // the node without re-rendering), synced when the saved settings change.
-  const configJson = JSON.stringify(config);
   const [editConfig, setEditConfig] = useState<DottedChartConfig>(config);
   useEffect(() => { setEditConfig(JSON.parse(configJson)); }, [configJson]);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1376,9 +1434,17 @@ export const OCDottedChartComponent: React.FC<ComponentProps> = ({
 
   return (
     <div className="w-full h-full flex flex-col">
-      <WidgetHeader label="OC Dotted Chart" filterEnabled={filterEnabled} onToggleFilter={() => setFilterEnabled(p => !p)} fileId={effectiveFileId} onLocalFilterChange={handleLocalFilterChange} localFilterParams={localFilterParams} />
-      <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
         <DottedChart
+          // Drawn on the canvas, 16 px from its corner, like the other canvas cards' titles.
+          title={{
+            label: "OC Dotted Chart",
+            fileId: effectiveFileId,
+            filterEnabled,
+            onToggleFilter: () => setFilterEnabled(p => !p),
+            localFilterParams,
+            onLocalFilterChange: handleLocalFilterChange,
+          }}
           fileId={effectiveFileId}
           xAxis={config.xAxis}
           yAxis={config.yAxis}
@@ -1387,7 +1453,8 @@ export const OCDottedChartComponent: React.FC<ComponentProps> = ({
           rowOrder={config.rowOrder}
           rowOrderDirection={config.rowOrderDirection}
           maxPoints={config.maxPoints}
-          showControls={false}
+          // The View panel: changes for the moment; saved ones come from the edit-mode settings.
+          showControls={true}
           showMinimap={true}
           filterEnabled={filterEnabled}
           localFilterParams={localFilterParams}
@@ -1477,6 +1544,30 @@ function useDashboardOcdfgLayout(
   };
 }
 
+/**
+ * The settings popup's arc switches, read from the widget's stored layout
+ * (where the layout panel keeps them too). Read on every render: the node is
+ * updated in place, e.g. when the layout panel changes them in view mode.
+ */
+function arcSettingsOf(node: ComponentProps["node"]) {
+  const stored = parseStoredLayout(withoutDirection(node.layout_options ?? null)) ?? {};
+  return {
+    frequencyLabels: (stored.arcLabels ?? DEFAULT_OPTIONS.arcLabels) === "frequency",
+    durationShade: stored.arcDurationShade ?? DEFAULT_OPTIONS.arcDurationShade,
+  };
+}
+
+/** The widget's stored layout with the popup's arc switches applied. */
+function withArcSettings(
+  node: ComponentProps["node"],
+  next: Pick<OcdfgSettings, "frequencyLabels" | "durationShade">,
+): StoredLayout | null {
+  return withStoredOptions(withoutDirection(node.layout_options ?? null), {
+    arcLabels: next.frequencyLabels ? "frequency" : "none",
+    arcDurationShade: next.durationShade,
+  });
+}
+
 // NewOCDFGComponent: Dashboard wrapper for the Object-Centric DFG (arc weight)
 export const NewOCDFGComponent: React.FC<ComponentProps> = ({
   node,
@@ -1515,6 +1606,7 @@ export const NewOCDFGComponent: React.FC<ComponentProps> = ({
             layoutDirection={layoutDirection}
             showControls={showControls}
             interactionLocked={initialInteractionLocked}
+            {...arcSettingsOf(node)}
             className="h-full w-full"
           />
         }
@@ -1524,7 +1616,7 @@ export const NewOCDFGComponent: React.FC<ComponentProps> = ({
             id={`ocdfg-${node.component_id}`}
             heading="Object-Centric DFG (Arc Weight) settings"
             description="Object-Centric Directly Follows Graph with a minimum arc weight per object type."
-            initial={{ showControls, initialInteractionLocked, layoutDirection }}
+            initial={{ showControls, initialInteractionLocked, layoutDirection, ...arcSettingsOf(node) }}
             sketchHint={OCDFG_SKETCH_HINT}
             onApply={(next) => {
               setShowControls(next.showControls);
@@ -1534,6 +1626,7 @@ export const NewOCDFGComponent: React.FC<ComponentProps> = ({
                 show_controls: next.showControls,
                 initial_interaction_locked: next.initialInteractionLocked,
                 layout_direction: next.layoutDirection,
+                layout_options: withArcSettings(node, next),
               });
               setSettingsOpen(false);
             }}
@@ -1600,6 +1693,7 @@ export const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
             layoutDirection={layoutDirection}
             showControls={showControls}
             interactionLocked={initialInteractionLocked}
+            {...arcSettingsOf(node)}
             className="h-full w-full"
           />
         }
@@ -1609,7 +1703,7 @@ export const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
             id={`ocdfg-variants-${node.component_id}`}
             heading="OCDFG (variants) settings"
             description="Object-Centric Directly Follows Graph (OCDFG) visualization with Variant/Trace filtering."
-            initial={{ showControls, initialInteractionLocked, layoutDirection }}
+            initial={{ showControls, initialInteractionLocked, layoutDirection, ...arcSettingsOf(node) }}
             sketchHint={OCDFG_SKETCH_HINT}
             onApply={(next) => {
               setShowControls(next.showControls);
@@ -1619,6 +1713,7 @@ export const NewOCDFGVariantsComponent: React.FC<ComponentProps> = ({
                 show_controls: next.showControls,
                 initial_interaction_locked: next.initialInteractionLocked,
                 layout_direction: next.layoutDirection,
+                layout_options: withArcSettings(node, next),
               });
               setSettingsOpen(false);
             }}

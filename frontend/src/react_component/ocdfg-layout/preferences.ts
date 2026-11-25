@@ -83,3 +83,21 @@ export function toStoredLayout(options: LayoutOptions, defaults: LayoutOptions):
   }
   return Object.keys(diff).length > 0 ? { version: LAYOUT_PREFERENCES_VERSION, options: diff } : null;
 }
+
+/**
+ * A stored entry with `patch` applied (e.g. from a widget's settings popup),
+ * stored like the layout panel stores it: options equal to `defaults` are
+ * left out, and null when nothing differs. An unusable entry starts over
+ * (it was ignored anyway).
+ */
+export function withStoredOptions(
+  raw: unknown,
+  patch: Partial<LayoutOptions>,
+  defaults: LayoutOptions = DEFAULT_OPTIONS,
+): StoredLayout | null {
+  const options: Partial<LayoutOptions> = { ...(parseStoredLayout(raw) ?? {}), ...patch };
+  for (const key of Object.keys(patch) as Array<keyof LayoutOptions>) {
+    if (JSON.stringify(options[key]) === JSON.stringify(defaults[key])) delete options[key];
+  }
+  return Object.keys(options).length > 0 ? { version: LAYOUT_PREFERENCES_VERSION, options } : null;
+}

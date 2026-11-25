@@ -3,8 +3,9 @@
  * the settings their edit forms always had beside a draft of the graph. It
  * works on a draft of the settings, mounted on every open, and only hands it
  * over on Apply. The flow direction set here is the one the widget opens
- * with; the rest of the layout is changed with the layout button in the
- * widget's toolbar and stored with the widget.
+ * with. The arc labels and arc strength are layout options: set here or in
+ * the layout panel of the widget's toolbar, they are stored with the widget
+ * either way, like the rest of the layout.
  */
 
 import React, { useState } from "react";
@@ -19,10 +20,14 @@ const LAYOUT_DIRECTION_OPTIONS: readonly { value: "TB" | "LR"; label: string }[]
   { value: "LR", label: "Left to Right" },
 ];
 
-type OcdfgSettings = {
+export type OcdfgSettings = {
   showControls: boolean;
   initialInteractionLocked: boolean;
   layoutDirection: "TB" | "LR";
+  /** "Frequency labels on arcs" of the layout options. */
+  frequencyLabels: boolean;
+  /** "Arc strength by duration" of the layout options. */
+  durationShade: boolean;
 };
 
 const OcdfgSettingsBody: React.FC<{
@@ -39,12 +44,16 @@ const OcdfgSettingsBody: React.FC<{
   const [showControls, setShowControls] = useState(initial.showControls);
   const [initialInteractionLocked, setInitialInteractionLocked] = useState(initial.initialInteractionLocked);
   const [layoutDirection, setLayoutDirection] = useState(initial.layoutDirection);
+  const [frequencyLabels, setFrequencyLabels] = useState(initial.frequencyLabels);
+  const [durationShade, setDurationShade] = useState(initial.durationShade);
 
   return (
     <ChartSettingsLayout
       heading={heading}
       idPrefix={id}
-      onApply={() => onApply({ showControls, initialInteractionLocked, layoutDirection })}
+      onApply={() =>
+        onApply({ showControls, initialInteractionLocked, layoutDirection, frequencyLabels, durationShade })
+      }
       onCancel={onCancel}
       dataTab={
         <div className="space-y-4 text-left">
@@ -81,8 +90,31 @@ const OcdfgSettingsBody: React.FC<{
               graph is shown, it starts in this direction again.
             </p>
           </div>
+          <div className="flex items-center justify-between">
+            <Label htmlFor={`${id}-frequency-labels`}>Frequency labels on arcs</Label>
+            <Switch
+              id={`${id}-frequency-labels`}
+              checked={frequencyLabels}
+              onCheckedChange={setFrequencyLabels}
+            />
+          </div>
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <Label htmlFor={`${id}-duration-shade`}>Arc strength by duration</Label>
+              <Switch
+                id={`${id}-duration-shade`}
+                checked={durationShade}
+                onCheckedChange={setDurationShade}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Each arc keeps its object type&apos;s color; the slower its average time, the
+              stronger it is drawn (faint = fast, strong = slow), as in the handover graph.
+            </p>
+          </div>
           <p className="text-xs text-muted-foreground">
-            The rest of the layout is changed with the layout button in the widget&apos;s toolbar and stored with this widget.
+            Both can also be switched in the layout panel of the widget&apos;s toolbar. The rest of
+            the layout is changed there and stored with this widget.
           </p>
         </div>
       }
@@ -91,6 +123,8 @@ const OcdfgSettingsBody: React.FC<{
           layoutDirection={layoutDirection}
           showControls={showControls}
           interactionLocked={initialInteractionLocked}
+          frequencyLabels={frequencyLabels}
+          durationShade={durationShade}
           className="w-full max-w-xs md:max-w-md"
         />
       }

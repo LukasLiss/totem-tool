@@ -1,13 +1,18 @@
-import React, { useContext, useEffect, useRef, useState } from "react";
+/**
+ * The global filter in the top bar: a summary of what the filters leave
+ * (events and objects, with a bar for the share of events), one chip per
+ * filter type — filled with a short summary and ✕ while set, a dashed
+ * "+ <type>" while not — and an Apply button while there are changes.
+ * Clicking a chip opens the type's dialog (FilterConfigDialog). On narrow
+ * windows only the summary shows, with the chips in a popover.
+ *
+ * Applying stays explicit: every view reloads its data on it.
+ */
+import React, { useContext, useEffect, useState } from "react";
 import axios from "axios";
-import {
-  Filter, Calendar, Layers, Zap, X, ChevronDown, ChevronRight, CheckCheck, GripVertical,
-} from "lucide-react";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Calendar, CheckCheck, Filter, Layers, Plus, X, Zap } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   type FilterRule,
   type FilterType,
@@ -17,6 +22,8 @@ import {
 } from "@/contexts/FilterStackContext";
 import { useFilterStack } from "@/contexts/filterStackHooks";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { cn } from "@/lib/utils";
 import { FilterConfigDialog } from "./FilterConfigDialog";
 import { useFilterStore, type FilterStats } from "@/store/filterStore";
 import {
@@ -31,34 +38,16 @@ import {
   putProjectViewSetting,
 } from "@/api/projectApi";
 
-
-const PIPE_BG = "var(--secondary)";
-const PIPE_FG = "var(--secondary-foreground)";
-const TIP    = 20;   
-const HEIGHT = 50;  
-const R      = 8;    
-const APPLY_W = 120;
-const SLOT_CLIP = `polygon(0 0, calc(100% - ${TIP}px) 0, 100% 50%, calc(100% - ${TIP}px) 100%, 0 100%, ${TIP}px 50%)`;
-const applyClipPath = `path('M ${TIP} ${HEIGHT / 2} L 0 0 L ${APPLY_W - R} 0 A ${R} ${R} 0 0 1 ${APPLY_W} ${R} L ${APPLY_W} ${HEIGHT - R} A ${R} ${R} 0 0 1 ${APPLY_W - R} ${HEIGHT} L 0 ${HEIGHT} Z')`;
-
-
-const arrowBase: React.CSSProperties = {
-  height:     HEIGHT,
-  display:    "flex",
-  alignItems: "center",
-  userSelect: "none",
-  flexShrink: 0,
-  position:   "relative",
-  transition: "background 0.15s, opacity 0.15s",
-};
-
 const FILTER_TYPE_ORDER: FilterType[] = ["time_range", "object_types", "activity"];
 
-const TYPE_CONFIG: Record<FilterType, { bg: string; fg: string; icon: React.ReactElement; label: string }> = {
-  time_range:   { bg: "var(--primary)", fg: "var(--primary-foreground)", icon: <Calendar size={14} />, label: "Time Range"   },
-  object_types: { bg: "var(--primary)", fg: "var(--primary-foreground)", icon: <Layers   size={14} />, label: "Object Types" },
-  activity:     { bg: "var(--primary)", fg: "var(--primary-foreground)", icon: <Zap      size={14} />, label: "Activities"   },
+const TYPE_CONFIG: Record<FilterType, { icon: React.ReactElement; label: string }> = {
+  time_range:   { icon: <Calendar className="size-3.5 shrink-0" />, label: "Time range"   },
+  object_types: { icon: <Layers   className="size-3.5 shrink-0" />, label: "Object types" },
+  activity:     { icon: <Zap      className="size-3.5 shrink-0" />, label: "Activities"   },
 };
+
+/** The chips' shared shape: 32 px tall, round, small text (the height of the other bar controls). */
+const CHIP = "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-xs font-medium whitespace-nowrap";
 
 function fmtDate(unix: number): string {
   return new Date(unix * 1000).toLocaleDateString(undefined, {
@@ -77,7 +66,7 @@ function getSlotLabel(rule: FilterRule): string {
     }
     case "object_types": {
       const { include } = rule.params as ObjectTypesParams;
-      return include.length === 0 ? "No object types" : `Object Types (${include.length})`;
+      return include.length === 0 ? "No object types" : `Object types (${include.length})`;
     }
     case "activity": {
       const { include } = rule.params as ActivityParams;
@@ -86,303 +75,133 @@ function getSlotLabel(rule: FilterRule): string {
   }
 }
 
-
-// ── arc stat indicator around the filter icon ─────────────────────────────────
-const ARC_SIZE = 38;
-const ARC_OR   = 16;   // outer radius — activities
-const ARC_IR   = 10;   // inner radius — objects
-const ARC_SW   = 2.5;  // stroke width
-const ARC_C    = ARC_SIZE / 2;
-
-function FilterIconWithArcs({
-  objectPct,
-  eventPct,
-}: {
-  objectPct: number;
-  eventPct:  number;
-}) {
-  const outerCirc = 2 * Math.PI * ARC_OR;
-  const innerCirc = 2 * Math.PI * ARC_IR;
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <div style={{ position: "relative", width: ARC_SIZE, height: ARC_SIZE, flexShrink: 0, cursor: "default" }}>
-          <svg
-            width={ARC_SIZE}
-            height={ARC_SIZE}
-            viewBox={`0 0 ${ARC_SIZE} ${ARC_SIZE}`}
-            style={{ position: "absolute", top: 0, left: 0, overflow: "visible" }}
-          >
-            <circle cx={ARC_C} cy={ARC_C} r={ARC_OR} fill="none"
-              style={{ stroke: "currentColor", opacity: 0.2 }} strokeWidth={ARC_SW} />
-            <circle cx={ARC_C} cy={ARC_C} r={ARC_IR} fill="none"
-              style={{ stroke: "currentColor", opacity: 0.2 }} strokeWidth={ARC_SW} />
-            <circle
-              cx={ARC_C} cy={ARC_C} r={ARC_OR}
-              fill="none"
-              strokeWidth={ARC_SW}
-              strokeLinecap="round"
-              transform={`rotate(-90 ${ARC_C} ${ARC_C})`}
-              style={{
-                stroke: "var(--foreground)",
-                strokeDasharray: `${outerCirc * eventPct} ${outerCirc}`,
-                transition: "stroke-dasharray 0.5s ease",
-              }}
-            />
-            <circle
-              cx={ARC_C} cy={ARC_C} r={ARC_IR}
-              fill="none"
-              strokeWidth={ARC_SW}
-              strokeLinecap="round"
-              transform={`rotate(-90 ${ARC_C} ${ARC_C})`}
-              style={{
-                stroke: "var(--foreground)",
-                opacity: 0.45,
-                strokeDasharray: `${innerCirc * objectPct} ${innerCirc}`,
-                transition: "stroke-dasharray 0.5s ease",
-              }}
-            />
-          </svg>
-          <div style={{
-            position:        "absolute",
-            top:             "50%",
-            left:            "50%",
-            transform:       "translate(-50%, -50%)",
-            display:         "flex",
-            alignItems:      "center",
-            justifyContent:  "center",
-            pointerEvents:   "none",
-          }}>
-            <Filter size={14} />
-          </div>
-        </div>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">
-        Objects: {Math.round(objectPct * 100)}% · Events: {Math.round(eventPct * 100)}%
-      </TooltipContent>
-    </Tooltip>
-  );
-}
+/** What a rule does, without its id: two rules that filter alike compare equal. */
+const ruleKey = (rule: FilterRule | undefined) =>
+  rule ? JSON.stringify({ type: rule.type, enabled: rule.enabled, params: rule.params }) : "";
 
 const fmtStat = (n: number) => n.toLocaleString();
 
-function FilterHeaderArrow({
-  expanded,
-  objectPct,
-  eventPct,
-  objectBefore,
-  objectAfter,
-  eventBefore,
-  eventAfter,
+/** A thin bar with the share left (0–1), right after the count it belongs to. */
+function ShareBar({ share, what }: { share: number; what: string }) {
+  const pct = Math.round(share * 100);
+  return (
+    <span
+      className="relative mx-1.5 inline-block h-1 w-8 shrink-0 overflow-hidden rounded-full bg-muted-foreground/20 align-middle"
+      title={`${what}: ${pct}% left`}
+      aria-label={`${what}: ${pct}% left`}
+    >
+      <span
+        className="absolute inset-y-0 left-0 rounded-full bg-foreground transition-[width] duration-500"
+        style={{ width: `${Math.max(2, pct)}%` }}
+      />
+    </span>
+  );
+}
+
+/** What the filters leave: events and objects, each with a bar for its share. */
+function FilterSummary({
+  stats,
   hasFile,
-  onClick,
+  filterCount,
+  showIcon = true,
 }: {
-  expanded:     boolean;
-  objectPct:    number;
-  eventPct:     number;
-  objectBefore: number;
-  objectAfter:  number;
-  eventBefore:  number;
-  eventAfter:   number;
-  hasFile:      boolean;
-  onClick:      () => void;
+  stats: FilterStats;
+  hasFile: boolean;
+  filterCount?: number;
+  /** Off inside the framed bar, whose "Filters" label carries the icon. */
+  showIcon?: boolean;
 }) {
-  const bg = PIPE_BG;
-  const fg = PIPE_FG;
-
-  
-  const hasFiltered = objectBefore > 0 && (objectAfter < objectBefore || eventAfter < eventBefore);
-
+  const known = hasFile && stats.eventBefore > 0;
+  const filtered = known && (stats.eventAfter < stats.eventBefore || stats.objectAfter < stats.objectBefore);
   return (
-    <div
-      onClick={onClick}
-      title={expanded ? "Collapse filters" : "Expand filters"}
-      style={{
-        ...arrowBase,
-        borderRadius: `${R}px 0 0 ${R}px`,
-        background:   bg,
-        color:        fg,
-        paddingLeft:  10,
-        paddingRight: TIP + 10,
-        gap:          expanded && hasFiltered ? 10 : 4,
-        cursor:       "pointer",
-        minWidth:     expanded && hasFiltered ? 210 : 80,
-        zIndex:       100,
-        overflow:     "visible",
-      }}
-    >
-      {hasFile
-        ? <FilterIconWithArcs objectPct={objectPct} eventPct={eventPct} />
-        : <Filter size={14} style={{ flexShrink: 0 }} />
-      }
-
-      {expanded && hasFiltered && (
-        <div style={{
-          display: "flex", flexDirection: "column", gap: 3,
-          fontSize: 10.5, lineHeight: 1.2, overflow: "hidden",
-        }}>
-          <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
-            <span style={{ opacity: 0.65, width: 24, flexShrink: 0 }}>Obj</span>
-            <span style={{ fontWeight: 700, whiteSpace: "nowrap" }}>
-              {fmtStat(objectAfter)}
-              <span style={{ opacity: 0.55, fontWeight: 400 }}> / {fmtStat(objectBefore)}</span>
-            </span>
-          </div>
-          <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
-            <span style={{ opacity: 0.65, width: 24, flexShrink: 0 }}>Evt</span>
-            <span style={{ fontWeight: 700, whiteSpace: "nowrap" }}>
-              {fmtStat(eventAfter)}
-              <span style={{ opacity: 0.55, fontWeight: 400 }}> / {fmtStat(eventBefore)}</span>
-            </span>
-          </div>
-        </div>
-      )}
-
-      {expanded
-        ? <ChevronDown  size={13} style={{ flexShrink: 0, marginLeft: "auto" }} />
-        : <ChevronRight size={13} style={{ flexShrink: 0 }} />}
-      <div style={{
-        position:     "absolute",
-        right:        -TIP,
-        top:          0,
-        width:        0,
-        height:       0,
-        borderTop:    `${HEIGHT / 2}px solid transparent`,
-        borderBottom: `${HEIGHT / 2}px solid transparent`,
-        borderLeft:   `${TIP}px solid ${bg}`,
-        pointerEvents: "none",
-      }} />
-    </div>
-  );
-}
-
-type SlotArrowProps = {
-  type:        FilterType;
-  activeRule:  FilterRule | undefined;
-  zIndex:      number;
-  isDragging:  boolean;
-  onClick:     () => void;
-  onRemove:    () => void;
-  onDragStart: (e: React.DragEvent) => void;
-  onDragEnter: (e: React.DragEvent) => void;
-  onDragEnd:   () => void;
-};
-
-function FilterSlotArrow({
-  type, activeRule, zIndex, isDragging,
-  onClick, onRemove, onDragStart, onDragEnter, onDragEnd,
-}: SlotArrowProps) {
-  const isActive = !!activeRule;
-  const text     = isActive ? getSlotLabel(activeRule!) : TYPE_CONFIG[type].label;
-
-  const bg      = isActive ? TYPE_CONFIG[type].bg : PIPE_BG;
-  const fgColor = isActive ? TYPE_CONFIG[type].fg : PIPE_FG;
-
-  return (
-    <div
-      draggable
-      onClick={onClick}
-      onDragStart={onDragStart}
-      onDragEnter={onDragEnter}
-      onDragOver={(e) => e.preventDefault()}
-      onDragEnd={onDragEnd}
-      title={isActive ? `Edit: ${text} (click to change)` : `Add ${TYPE_CONFIG[type].label} filter`}
-      style={{
-        ...arrowBase,
-        clipPath:       SLOT_CLIP,
-        WebkitClipPath: SLOT_CLIP,
-        marginLeft:     -TIP,
-        zIndex:         isDragging ? 200 : zIndex,
-        background:     bg,
-        color:          fgColor,
-        paddingLeft:    TIP + 6,
-        paddingRight:   TIP + 14,
-        gap:            5,
-        cursor:         "grab",
-        opacity:        isDragging ? 0.4 : isActive && !activeRule?.enabled ? 0.55 : 1,
-        minWidth:       120,
-      }}
-    >
-      <GripVertical size={13} style={{ flexShrink: 0, opacity: 0.5, cursor: "grab" }} />
-      {TYPE_CONFIG[type].icon}
-      <span style={{
-        fontSize:     13,
-        fontWeight:   600,
-        maxWidth:     120,
-        overflow:     "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace:   "nowrap",
-      }}>
-        {text}
-      </span>
-      {isActive && (
-        <button
-          onClick={(e) => { e.stopPropagation(); onRemove(); }}
-          style={{
-            background: "none", border: "none", padding: 0,
-            color: "inherit", opacity: 0.8, cursor: "pointer",
-            display: "flex", alignItems: "center", marginLeft: 2,
-          }}
-          aria-label={`Remove ${TYPE_CONFIG[type].label} filter`}
-        >
-          <X size={13} />
-        </button>
-      )}
-    </div>
-  );
-}
-
-
-
-function ApplyButton({
-  applying,
-  dirty,
-  disabled,
-  onClick,
-}: {
-  applying: boolean;
-  dirty:    boolean;
-  disabled: boolean;
-  onClick:  () => void;
-}) {
-  const bg = dirty ? "var(--primary)" : PIPE_BG;
-  const fg = dirty ? "var(--primary-foreground)" : PIPE_FG;
-
-  return (
-    <div
-      onClick={disabled ? undefined : onClick}
-      title={dirty ? "Apply filters" : "No changes to apply"}
-      style={{
-        ...arrowBase,
-        clipPath:       applyClipPath,
-        WebkitClipPath: applyClipPath,
-        marginLeft:     -TIP,
-        zIndex:         10,
-        width:          APPLY_W,
-        background:     bg,
-        color:          fg,
-        paddingLeft:    TIP + 14,
-        paddingRight:   20,
-        gap:            6,
-        cursor:         disabled ? "not-allowed" : "pointer",
-        opacity:        applying ? 0.75 : 1,
-        transition:     "background 0.15s, color 0.15s, opacity 0.15s",
-      }}
-    >
-      {applying ? (
-        <div style={{
-          width: 14, height: 14, borderRadius: "50%", flexShrink: 0,
-          border: "2px solid currentColor", borderTopColor: "transparent",
-          animation: "spin 0.6s linear infinite", opacity: 0.8,
-        }} />
+    <span className="flex min-w-0 items-center gap-2">
+      {showIcon && <Filter className="size-3.5 shrink-0" />}
+      {!known ? (
+        <span>{hasFile ? "Filter" : "No event log"}</span>
+      ) : filtered ? (
+        <span className="tabular-nums">
+          <b>{fmtStat(stats.eventAfter)}</b>
+          <span className="text-muted-foreground"> / {fmtStat(stats.eventBefore)} events</span>
+          <ShareBar share={stats.eventPct} what="Events" />
+          <span className="text-muted-foreground">· </span>
+          <b>{fmtStat(stats.objectAfter)}</b>
+          <span className="text-muted-foreground"> / {fmtStat(stats.objectBefore)} objects</span>
+          <ShareBar share={stats.objectPct} what="Objects" />
+        </span>
       ) : (
-        <CheckCheck size={15} style={{ flexShrink: 0 }} />
+        <span className="tabular-nums text-muted-foreground">
+          All {fmtStat(stats.eventBefore)} events · {fmtStat(stats.objectBefore)} objects
+        </span>
       )}
-      <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>
-        {applying ? "Applying…" : "Apply"}
-      </span>
-    </div>
+      {filterCount != null && filterCount > 0 && (
+        <span className="rounded-full bg-primary px-1.5 text-[10px] font-semibold leading-4 text-primary-foreground">
+          {filterCount} {filterCount === 1 ? "filter" : "filters"}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** One filter type: filled with its summary and ✕ while set, dashed "+ <type>" while not. */
+function FilterChip({
+  type,
+  rule,
+  changed,
+  onOpen,
+  onRemove,
+}: {
+  type: FilterType;
+  rule: FilterRule | undefined;
+  /** Differs from the applied filters: marked with a dot until Apply. */
+  changed: boolean;
+  onOpen: () => void;
+  onRemove: () => void;
+}) {
+  const { icon, label } = TYPE_CONFIG[type];
+  const dot = changed && (
+    <span aria-hidden className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-amber-500 ring-2 ring-background" />
+  );
+
+  if (!rule) {
+    return (
+      <button
+        type="button"
+        onClick={onOpen}
+        title={`Add a ${label.toLowerCase()} filter`}
+        className={cn(CHIP, "relative border border-dashed border-border text-muted-foreground hover:border-foreground/40 hover:text-foreground")}
+      >
+        <Plus className="size-3.5 shrink-0" />
+        {label}
+        {dot}
+      </button>
+    );
+  }
+
+  const text = getSlotLabel(rule);
+  return (
+    <span
+      className={cn(CHIP, "relative bg-primary pl-0 pr-1 text-primary-foreground", !rule.enabled && "opacity-55")}
+    >
+      <button
+        type="button"
+        onClick={onOpen}
+        title={`Edit: ${text}`}
+        className="flex h-full min-w-0 items-center gap-1.5 rounded-l-full pl-3"
+      >
+        {icon}
+        <span className="max-w-[140px] truncate">{text}</span>
+      </button>
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label={`Remove ${label.toLowerCase()} filter`}
+        title={`Remove ${label.toLowerCase()} filter`}
+        className="flex size-6 items-center justify-center rounded-full opacity-80 hover:bg-primary-foreground/15 hover:opacity-100"
+      >
+        <X className="size-3.5" />
+      </button>
+      {dot}
+    </span>
   );
 }
 
@@ -397,8 +216,8 @@ export default function FilterChipStack() {
   const { selectedFile } = useContext(SelectedFileContext);
   const fileId: number | undefined = selectedFile?.id;
   const projectId: number | undefined = selectedFile?.project as number | undefined;
+  const isMobile = useIsMobile();
 
-  const [expanded,      setExpanded]      = useState(false);
   const [dialogOpen,    setDialogOpen]    = useState(false);
   const [activeType,    setActiveType]    = useState<FilterType>("object_types");
   const [editingRule,   setEditingRule]   = useState<FilterRule | undefined>();
@@ -414,12 +233,6 @@ export default function FilterChipStack() {
   const appliedKey = JSON.stringify(appliedRules);
 
 
-  const [typeOrder,     setTypeOrder]     = useState<FilterType[]>(FILTER_TYPE_ORDER);
-  const [draggingType,  setDraggingType]  = useState<FilterType | null>(null);
-
-  const dragSrcIdx = useRef<number | null>(null);
-
-
   useEffect(() => {
     if (!fileId) {
       useFilterStore.getState().clear();
@@ -431,9 +244,11 @@ export default function FilterChipStack() {
 
     const sessionKey = `totem_filters_${fileId}`;
     let stale = false;
-    // Set once the restore has decided, so the statistics request below knows
-    // whether it is allowed to publish unfiltered counts.
-    let restoredRules: FilterRule[] | null = null;
+    // Started right away, but only published once the restore has found no
+    // filter: publishing earlier would be wiped by the reset below.
+    const unfilteredStats = axios.get<{ num_objects: number; num_events: number }>(
+      `/api/files/${fileId}/statistics/`, { _skipGlobalFilter: true }
+    ).then(({ data }) => data).catch(() => null);
 
     /** The filter saved with the project, or null. */
     const savedProjectFilter = async (): Promise<FilterRule[] | null> => {
@@ -465,15 +280,10 @@ export default function FilterChipStack() {
       // project should see.
       const rules = (await savedProjectFilter()) ?? cachedFilter();
       if (stale) return;
-      restoredRules = rules;
 
       if (rules) {
         replaceFilters(["time_range", "object_types", "activity"], rules);
         applyGlobalFilterRules(fileId, rules).catch(() => {});
-        // Active rules are shown, not hidden behind the collapsed header: a
-        // filter the user did not add by hand (the large-log time window) must
-        // be visible to be understood.
-        setExpanded(true);
         return;
       }
 
@@ -481,9 +291,21 @@ export default function FilterChipStack() {
       // and resend its request — for nothing when no filter is applied.
       if (useFilterStore.getState().isApplied) useFilterStore.getState().clear();
       useFilterStore.getState().setStats(null);
+      unfilteredStats.then((data) => {
+        // A filter applied meanwhile (the large-log one below) has its own stats.
+        if (!data || stale || useFilterStore.getState().isApplied) return;
+        useFilterStore.getState().setStats({
+          objectPct:    1,
+          eventPct:     1,
+          objectBefore: data.num_objects,
+          objectAfter:  data.num_objects,
+          eventBefore:  data.num_events,
+          eventAfter:   data.num_events,
+        });
+      });
       // A large log gets a time-range filter straight away: the analyses on
       // the overview page would otherwise run over the whole log, which can
-      // take minutes. The user sees the rule in the chip stack and can
+      // take minutes. The user sees the rule as a chip in the bar and can
       // change or remove it like any other filter. Only reached when the
       // project saved no filter of its own — otherwise this would silently
       // discard the one an exported project was published with.
@@ -497,8 +319,6 @@ export default function FilterChipStack() {
         return;
       }
       if (stale) return;
-      restoredRules = proposed;
-      setExpanded(true);
       toast.info("Large event log: showing the first events only", {
         description:
           `This log has more than ${LARGE_LOG_EVENT_LIMIT.toLocaleString()} events, so a global time-range ` +
@@ -513,21 +333,6 @@ export default function FilterChipStack() {
     axios.get<{ name: string; count: number }[]>(`/api/files/${fileId}/activities/`, { _skipGlobalFilter: true })
       .then(({ data }) => setActivities(Array.isArray(data) ? data : []))
       .catch(() => { toast.error("Activities could not be loaded"); setActivities([]); });
-
-    axios.get<{ num_objects: number; num_events: number }>(
-      `/api/files/${fileId}/statistics/`, { _skipGlobalFilter: true }
-    ).then(({ data }) => {
-      if ((!restoredRules || restoredRules.length === 0) && !useFilterStore.getState().isApplied) {
-        useFilterStore.getState().setStats({
-          objectPct:    1,
-          eventPct:     1,
-          objectBefore: data.num_objects,
-          objectAfter:  data.num_objects,
-          eventBefore:  data.num_events,
-          eventAfter:   data.num_events,
-        });
-      }
-    }).catch(() => {});
     return () => { stale = true; };
   }, [fileId, projectId]);
 
@@ -535,30 +340,7 @@ export default function FilterChipStack() {
   const dirty = currentKey !== appliedKey;
 
   const ruleForType = (type: FilterType) => filters.find(f => f.type === type);
-
-  function handleDragStart(e: React.DragEvent, idx: number) {
-    dragSrcIdx.current = idx;
-    setDraggingType(typeOrder[idx]);
-    e.dataTransfer.effectAllowed = "move";
-  }
-
-  function handleDragEnter(e: React.DragEvent, idx: number) {
-    e.preventDefault();
-    const src = dragSrcIdx.current;
-    if (src === null || src === idx) return;
-    setTypeOrder(prev => {
-      const next = [...prev];
-      const [moved] = next.splice(src, 1);
-      next.splice(idx, 0, moved);
-      return next;
-    });
-    dragSrcIdx.current = idx;
-  }
-
-  function handleDragEnd() {
-    dragSrcIdx.current = null;
-    setDraggingType(null);
-  }
+  const appliedRuleForType = (type: FilterType) => appliedRules.find(f => f.type === type);
 
   function openSlot(type: FilterType) {
     const existing = ruleForType(type);
@@ -616,63 +398,100 @@ export default function FilterChipStack() {
     await applyFilters();
   }
 
-  return (
-    <div style={{
-      display: "flex", alignItems: "center", overflowX: "auto", paddingBottom: 2,
-      filter: "drop-shadow(0 1px 3px rgba(0,0,0,0.13))",
-    }}>
-      <FilterHeaderArrow
-        expanded={expanded}
-        objectPct={stats.objectPct}
-        eventPct={stats.eventPct}
-        objectBefore={stats.objectBefore}
-        objectAfter={stats.objectAfter}
-        eventBefore={stats.eventBefore}
-        eventAfter={stats.eventAfter}
-        hasFile={!!fileId}
-        onClick={() => setExpanded(e => !e)}
-      />
+  const chips = FILTER_TYPE_ORDER.map((type) => (
+    <FilterChip
+      key={type}
+      type={type}
+      rule={ruleForType(type)}
+      changed={ruleKey(ruleForType(type)) !== ruleKey(appliedRuleForType(type))}
+      onOpen={() => openSlot(type)}
+      onRemove={() => {
+        const r = ruleForType(type);
+        if (r) removeFilter(r.id);
+      }}
+    />
+  ));
 
-      {expanded && typeOrder.map((type, i) => (
-        <FilterSlotArrow
-          key={type}
-          type={type}
-          activeRule={ruleForType(type)}
-          zIndex={i + 1}
-          isDragging={draggingType === type}
-          onClick={() => openSlot(type)}
-          onRemove={() => {
-            const r = ruleForType(type);
-            if (r) removeFilter(r.id);
-          }}
-          onDragStart={(e) => handleDragStart(e, i)}
-          onDragEnter={(e) => handleDragEnter(e, i)}
-          onDragEnd={handleDragEnd}
-        />
-      ))}
-
-      {expanded && (
-        <ApplyButton
-          applying={applying}
-          dirty={dirty}
-          disabled={!dirty || !fileId}
-          onClick={handleApply}
-        />
+  // Shown while there are changes (and while they are being applied).
+  const applyButton = (dirty || applying) && (
+    <Button
+      type="button"
+      size="sm"
+      onClick={handleApply}
+      disabled={applying || !fileId}
+      className="h-8 shrink-0 gap-1.5 rounded-full px-3 text-xs"
+      title="Apply the filters to every view"
+    >
+      {applying ? (
+        <span className="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+      ) : (
+        <CheckCheck className="size-3.5" />
       )}
+      {applying ? "Applying…" : "Apply"}
+    </Button>
+  );
 
-      <FilterConfigDialog
-        open={dialogOpen}
-        onClose={() => setDialogOpen(false)}
-        filterType={activeType}
-        existingRule={editingRule}
-        availableObjectTypes={objectTypes}
-        availableActivities={activities}
-        onSubmit={handleSubmit}
-        icon={TYPE_CONFIG[activeType].icon}
-        titleLabel={TYPE_CONFIG[activeType].label}
-        hasFile={!!fileId}
-        fileId={fileId}
-      />
+  const dialog = (
+    <FilterConfigDialog
+      open={dialogOpen}
+      onClose={() => setDialogOpen(false)}
+      filterType={activeType}
+      existingRule={editingRule}
+      availableObjectTypes={objectTypes}
+      availableActivities={activities}
+      onSubmit={handleSubmit}
+      icon={TYPE_CONFIG[activeType].icon}
+      titleLabel={TYPE_CONFIG[activeType].label}
+      hasFile={!!fileId}
+      fileId={fileId}
+    />
+  );
+
+  if (isMobile) {
+    // Narrow: the summary (with the number of filters) opens the chips in a popover.
+    return (
+      <div className="flex items-center gap-2">
+        <Popover>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className={cn(CHIP, "relative min-w-0 border border-border bg-background hover:bg-muted")}
+              title="Filters"
+            >
+              <FilterSummary stats={stats} hasFile={!!fileId} filterCount={filters.length} />
+              {dirty && (
+                <span aria-hidden className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-amber-500 ring-2 ring-background" />
+              )}
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="flex w-auto flex-col items-start gap-2 p-3">
+            {chips}
+            {applyButton}
+          </PopoverContent>
+        </Popover>
+        {dialog}
+      </div>
+    );
+  }
+
+  // One frame around the whole filter (label, summary, chips, Apply), so it
+  // reads as one control: the global filter of every view.
+  return (
+    <div className="py-1">
+      <div className="inline-flex h-10 items-center gap-1.5 rounded-full border border-border bg-muted/40 py-1 pl-3 pr-1">
+        <span className="flex shrink-0 items-center gap-1.5 text-xs font-semibold">
+          <Filter className="size-3.5 shrink-0" />
+          Filters
+        </span>
+        <div className="mx-1.5 h-5 w-px shrink-0 bg-border" />
+        <span className="shrink-0 text-xs">
+          <FilterSummary stats={stats} hasFile={!!fileId} showIcon={false} />
+        </span>
+        <div className="mx-1.5 h-5 w-px shrink-0 bg-border" />
+        {chips}
+        {applyButton}
+      </div>
+      {dialog}
     </div>
   );
 }

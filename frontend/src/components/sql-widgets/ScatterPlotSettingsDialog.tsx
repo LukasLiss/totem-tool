@@ -23,10 +23,18 @@ import {
   ColorSettings,
   MaxCategoriesRow,
   SettingRow,
+  UnitRow,
   type ChartSettingsTab,
 } from "./chartSettings";
 import { useDiscoverOnOpen, type CategoryList } from "./chartSettingsUtils";
-import { DEFAULT_MAX_SERIES, buildScatterSeries, scatterColors } from "./scatterUtils";
+import {
+  DEFAULT_MAX_SERIES,
+  buildScatterSeries,
+  columnOrderability,
+  notOrderableNotice,
+  scatterColors,
+  valueGradient,
+} from "./scatterUtils";
 import ScatterPlotSketch from "./ScatterPlotSketch";
 
 export interface ScatterPlotSettings {
@@ -45,6 +53,10 @@ export interface ScatterPlotSettings {
   colors: ChartColors;
   /** Series with their own color, the rest grouped as "Other"; null = DEFAULT_MAX_SERIES. */
   maxSeries: number | null;
+  /** Shown after the x / y values and the "By value" color values (tooltip, legend); empty = none. */
+  xUnit: string;
+  yUnit: string;
+  colorUnit: string;
 }
 
 const POINT_SIZE_OPTIONS = [
@@ -88,6 +100,17 @@ function SettingsBody({ widgetId, initial, onApply, onCancel, fileId, projectId 
     enabled: tab === "style" && hasSeries,
     limit: 5000,
   });
+  // "By value" needs a series column with numbers only; checked on the loaded result.
+  const valueMode = hasSeries && colors.mode === "value";
+  const orderability = useMemo(
+    () => (hasSeries && !result.loading && !result.error && result.rows.length > 0
+      ? columnOrderability(result.rows, draft.seriesColumn)
+      : null),
+    [hasSeries, result.loading, result.error, result.rows, draft.seriesColumn]
+  );
+  const valueNotice = orderability && !orderability.orderable
+    ? notOrderableNotice(draft.seriesColumn, orderability.example)
+    : undefined;
   const categories: CategoryList = useMemo(
     () => ({
       slices: hasSeries ? buildScatterSeries(result.rows, result.columns, draft).slices : [],
@@ -157,6 +180,7 @@ function SettingsBody({ widgetId, initial, onApply, onCancel, fileId, projectId 
               className="h-8 max-w-56"
             />
           </SettingRow>
+          <UnitRow id={`${idPrefix}-x-unit`} label="X unit" value={draft.xUnit} onChange={(v) => set("xUnit", v)} />
           <SettingRow label="Y axis label" htmlFor={`${idPrefix}-y-label`}>
             <Input
               id={`${idPrefix}-y-label`}
@@ -166,6 +190,7 @@ function SettingsBody({ widgetId, initial, onApply, onCancel, fileId, projectId 
               className="h-8 max-w-56"
             />
           </SettingRow>
+          <UnitRow id={`${idPrefix}-y-unit`} label="Y unit" value={draft.yUnit} onChange={(v) => set("yUnit", v)} />
           {/* Legend and max series only apply with a series column. */}
           <SettingRow label="Point size">
             <SegmentedControl
@@ -197,8 +222,8 @@ function SettingsBody({ widgetId, initial, onApply, onCancel, fileId, projectId 
             placeholder={String(DEFAULT_MAX_SERIES)}
             value={draft.maxSeries}
             onChange={(v) => set("maxSeries", v)}
-            hint="rest grouped as “Other”"
-            disabled={!hasSeries}
+            hint={valueMode ? "not used when coloring by value" : "rest grouped as “Other”"}
+            disabled={!hasSeries || valueMode}
           />
           {!hasSeries && (
             <p className="text-xs text-muted-foreground">
@@ -212,7 +237,20 @@ function SettingsBody({ widgetId, initial, onApply, onCancel, fileId, projectId 
             categories={categories}
             singleColorLabel="Point color"
             singleOnly={!hasSeries}
+            byValue={{
+              description: `Each point gets a color between these two by its value in “${draft.seriesColumn}”: the smallest value the first, the largest the second. Points without a value are grey.`,
+              notice: valueNotice,
+              categoryColors: false,
+            }}
           />
+          {valueMode && (
+            <UnitRow
+              id={`${idPrefix}-color-unit`}
+              label="Color value unit"
+              value={draft.colorUnit}
+              onChange={(v) => set("colorUnit", v)}
+            />
+          )}
         </>
       }
       sketch={
@@ -224,7 +262,12 @@ function SettingsBody({ widgetId, initial, onApply, onCancel, fileId, projectId 
           legendPosition={draft.legendPosition}
           pointSize={draft.pointSize}
           transparentPoints={draft.transparentPoints}
-          colors={previewColors(colors, categories.slices.map((slice) => slice.label))}
+          // Without numbers to order, the chart falls back to category colors; so does the sketch.
+          colors={previewColors(
+            valueNotice ? { ...colors, mode: "category" } : colors,
+            categories.slices.map((slice) => slice.label)
+          )}
+          gradient={valueMode && !valueNotice ? valueGradient(colors) : undefined}
           className="w-full max-w-xs md:max-w-md"
         />
       }

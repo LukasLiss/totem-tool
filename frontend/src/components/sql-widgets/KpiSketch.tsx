@@ -5,13 +5,13 @@
  * formatted with the chosen decimals, drawn faded since it only stands in.
  */
 
-import React from "react";
+import React, { useRef } from "react";
 import { cn } from "@/lib/utils";
+import { useSvgUnitsPerPixel } from "@/components/sketchScale";
+import { kpiSampleNumber, type KpiSize } from "./kpiUtils";
 
 const WIDTH = 240;
 const HEIGHT = 120;
-// Stands in for the query result; formatted like the real number.
-const SAMPLE_VALUE = 12345.6789012345;
 const NUMBER_MAX_SIZE = 40;
 // Prefix / suffix size relative to the number (text-lg next to the large number).
 const AFFIX_SHARE = 0.45;
@@ -30,20 +30,23 @@ interface KpiSketchProps {
   value?: string;
   /** The column `value` was read from, shown below the number when there is no title. */
   column?: string;
+  /**
+   * The widget's size step (edit tile): the number is drawn at that size on
+   * screen, so a small card shows a small number like the widget. Without
+   * it (settings popup) the number fills the sketch's width.
+   */
+  size?: KpiSize;
   /** Sizing of the SVG; defaults to the full width, at most `max-w-sm`. */
   className?: string;
 }
 
-const KpiSketch: React.FC<KpiSketchProps> = ({ title, prefix, suffix, decimals, value, column, className }) => {
+const KpiSketch: React.FC<KpiSketchProps> = ({ title, prefix, suffix, decimals, value, column, size: step, className }) => {
+  const svgRef = useRef<SVGSVGElement>(null);
+  const unitsPerPixel = useSvgUnitsPerPixel(svgRef, WIDTH, HEIGHT);
   const showTitle = title.trim() !== "";
   const shortTitle = title.length > TITLE_MAX_CHARS ? `${title.slice(0, TITLE_MAX_CHARS - 1)}…` : title;
   const isReal = value != null;
-  const number =
-    value ??
-    SAMPLE_VALUE.toLocaleString(undefined, {
-      minimumFractionDigits: decimals,
-      maximumFractionDigits: decimals,
-    });
+  const number = value ?? kpiSampleNumber(decimals);
 
   // Shrink the line so prefix, number and suffix fit the width.
   const gap = 0.25;
@@ -52,12 +55,18 @@ const KpiSketch: React.FC<KpiSketchProps> = ({ title, prefix, suffix, decimals, 
     (prefix.length + suffix.length) * GLYPH_WIDTH * AFFIX_SHARE +
     (prefix ? gap : 0) +
     (suffix ? gap : 0);
-  const size = Math.min(NUMBER_MAX_SIZE, (WIDTH - 20) / units);
-  const affixSize = size * AFFIX_SHARE;
+  const fitWidth = (WIDTH - 20) / units;
+  // With the widget's size step: its on-screen size in sketch units, only kept inside the sketch
+  // (width, and half its height so the title still fits). Without: fill the width, at most 40.
+  const size = step
+    ? Math.min(fitWidth, HEIGHT * 0.5, step.number * unitsPerPixel)
+    : Math.min(NUMBER_MAX_SIZE, fitWidth);
+  const affixSize = size * (step ? step.affix / step.number : AFFIX_SHARE);
   const centerY = showTitle ? 66 : 56;
 
   return (
     <svg
+      ref={svgRef}
       viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
       className={cn("mx-auto block", className ?? "w-full max-w-sm")}
       role="img"

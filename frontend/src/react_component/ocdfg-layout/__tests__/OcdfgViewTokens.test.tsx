@@ -5,6 +5,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const get = vi.hoisted(() => vi.fn());
 vi.mock('axios', () => ({ default: { get } }));
+// These tests count the animation's requests; the log's object type list
+// (for stable type colors, tested in utils/objectColors.test.ts) stays out of them.
+vi.mock('@/hooks/useObjectTypeColors', async () => {
+  const { mapTypesToColors } = await import('@/utils/objectColors');
+  return {
+    useObjectTypeColors: (_fileId: unknown, types: string[], overrides?: Record<string, string>) =>
+      mapTypesToColors(types, overrides),
+  };
+});
 
 import OcdfgView from '../OcdfgView';
 import { fromTraces } from '../graph';

@@ -58,14 +58,20 @@ const ARCS: [string, string, number][] = [
   ["c", "d", 0], ["c", "e", 1], ["c", "e", 2],
   ["d", "e0", 0], ["e", "e1", 1], ["e", "e2", 2],
 ];
+// Sample average times per arc (share of the longest), for "Arc strength by duration".
+const DURATION_SHARES = [0.1, 0.25, 0.15, 0.9, 0.4, 0.3, 1, 0.55, 0.2, 0.15, 0.35, 0.05];
 
 const OcdfgSketch: React.FC<{
   layoutDirection: "TB" | "LR";
   showControls: boolean;
   interactionLocked: boolean;
+  /** A small value label on each arc, like "Frequency labels on arcs". */
+  frequencyLabels?: boolean;
+  /** Arcs in different strengths, like "Arc strength by duration". */
+  durationShade?: boolean;
   /** Sizing of the SVG; defaults to the full width, at most `max-w-sm`. */
   className?: string;
-}> = ({ layoutDirection, showControls, interactionLocked, className }) => {
+}> = ({ layoutDirection, showControls, interactionLocked, frequencyLabels = false, durationShade = false, className }) => {
   const lr = layoutDirection === "LR";
   // The controls panel takes the left edge. The graph's room is the same
   // either way, so it keeps its size: without the panel it just moves to the middle.
@@ -90,6 +96,7 @@ const OcdfgSketch: React.FC<{
     const lane = (type - 1) * 4;
     let d: string;
     let head: string;
+    let mid: [number, number];
     if (lr) {
       const sx = x1 + size(a).w / 2;
       const ex = x2 - size(b).w / 2;
@@ -98,6 +105,7 @@ const OcdfgSketch: React.FC<{
       const mx = (sx + ex) / 2;
       d = `M${sx},${sy} C${mx},${sy} ${mx},${ey} ${ex - ARROW},${ey}`;
       head = `${ex},${ey} ${ex - ARROW},${ey - 2.2} ${ex - ARROW},${ey + 2.2}`;
+      mid = [mx, (sy + ey) / 2];
     } else {
       const sy = y1 + size(a).h / 2;
       const ey = y2 - size(b).h / 2;
@@ -106,11 +114,23 @@ const OcdfgSketch: React.FC<{
       const my = (sy + ey) / 2;
       d = `M${sx},${sy} C${sx},${my} ${ex},${my} ${ex},${ey - ARROW}`;
       head = `${ex},${ey} ${ex - 2.2},${ey - ARROW} ${ex + 2.2},${ey - ARROW}`;
+      mid = [(sx + ex) / 2, my];
     }
+    // As in the graph: opacity 0.1 (fast) to 0.85 (slow) by the sample time.
+    const opacity = durationShade ? 0.1 + 0.75 * DURATION_SHARES[i] : 1;
     return (
       <g key={i}>
-        <path d={d} fill="none" stroke={TYPE_COLORS[type]} strokeWidth={1.4} />
-        <polygon points={head} fill={TYPE_COLORS[type]} />
+        <g opacity={opacity}>
+          <path d={d} fill="none" stroke={TYPE_COLORS[type]} strokeWidth={1.4} />
+          <polygon points={head} fill={TYPE_COLORS[type]} />
+        </g>
+        {frequencyLabels && (
+          // A placeholder for the number, in the type's color on a white backing.
+          <g>
+            <rect x={mid[0] - 6} y={mid[1] - 3.5} width={12} height={7} rx={2} fill="#ffffff" />
+            <rect x={mid[0] - 4} y={mid[1] - 1.3} width={8} height={2.6} rx={1.3} fill={TYPE_COLORS[type]} />
+          </g>
+        )}
       </g>
     );
   });

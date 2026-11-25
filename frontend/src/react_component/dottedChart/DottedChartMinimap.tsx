@@ -1,5 +1,6 @@
 import { memo, useEffect, useState, type MouseEvent } from "react";
 
+import { CANVAS_PANEL_SHELL } from "@/components/canvas/panelHeader";
 import { colorGroupKey, type ChartPoint } from "./dottedChartUtils";
 
 type MinimapRange = {
@@ -64,15 +65,21 @@ export const DottedChartMinimap = memo(function DottedChartMinimap({
 
   return (
     <div
-      className="rounded-md border bg-background/90 p-1.5 shadow-sm"
-      onMouseDown={(event) => {
+      // The frosted frame of the other canvas panels.
+      style={{ ...CANVAS_PANEL_SHELL, padding: 6, userSelect: "none", touchAction: "none" }}
+      // The pointer is captured while the square is dragged: pushed against an
+      // edge it usually leaves the small minimap, and the release must still
+      // count (before, a release outside was lost and the range not applied).
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
         event.preventDefault();
         event.stopPropagation();
         if (!viewport) return;
+        event.currentTarget.setPointerCapture(event.pointerId);
         setDraftViewport(startViewportDrag(event, viewport, yTicks.length));
       }}
-      onMouseMove={(event) => {
-        if (event.buttons !== 1 || !draftViewport) return;
+      onPointerMove={(event) => {
+        if (!draftViewport) return;
         event.preventDefault();
         event.stopPropagation();
         setDraftViewport({
@@ -80,21 +87,22 @@ export const DottedChartMinimap = memo(function DottedChartMinimap({
           rect: moveViewportRect(event, draftViewport),
         });
       }}
-      onMouseUp={(event) => {
+      onPointerUp={(event) => {
+        if (!draftViewport) return;
         event.preventDefault();
         event.stopPropagation();
-        const finalRect = draftViewport?.rect ?? viewport;
-        const nextRange = finalRect
-          ? rangesFromViewportRect(finalRect, framePoints, yTicks, xRange, yRange, xDomain)
-          : null;
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }
+        const nextRange = rangesFromViewportRect(draftViewport.rect, framePoints, yTicks, xRange, yRange, xDomain);
         if (nextRange) {
           onRangeChange(nextRange.xRange, nextRange.yRange);
         }
         setDraftViewport(null);
       }}
-      onMouseLeave={(event) => {
-        event.stopPropagation();
-      }}
+      onPointerCancel={() => setDraftViewport(null)}
+      // Keeps presses on the minimap from starting a selection on the chart below.
+      onMouseDown={(event) => event.stopPropagation()}
     >
       <svg
         width={WIDTH}

@@ -19,6 +19,7 @@ import {
   ColorSettings,
   MaxCategoriesRow,
   SettingRow,
+  UnitRow,
   type ChartSettingsTab,
 } from "./chartSettings";
 import { useCategoryList, useDiscoverOnOpen } from "./chartSettingsUtils";
@@ -35,6 +36,8 @@ export interface BarChartSettings {
   colors: ChartColors;
   /** Only the largest N bars are shown, the rest left out; null = all. */
   maxCategories: number | null;
+  /** Shown after the values (tooltip, values on bars); empty = none. */
+  valueUnit: string;
 }
 
 const ORIENTATION_OPTIONS = [
@@ -136,6 +139,12 @@ function SettingsBody({ widgetId, initial, onApply, onCancel, fileId, projectId 
               onCheckedChange={(v) => set("showValues", v)}
             />
           </SettingRow>
+          <UnitRow
+            id={`${idPrefix}-value-unit`}
+            label="Value unit"
+            value={draft.valueUnit}
+            onChange={(v) => set("valueUnit", v)}
+          />
           <MaxCategoriesRow
             id={`${idPrefix}-max-categories`}
             value={draft.maxCategories}
@@ -148,6 +157,11 @@ function SettingsBody({ widgetId, initial, onApply, onCancel, fileId, projectId 
             onChange={(next) => set("colors", next)}
             categories={categories}
             singleColorLabel="Bar color"
+            byValue={{
+              description:
+                "Each bar gets a color between these two by its value: the smallest value the first, the largest the second.",
+              categoryColors: true,
+            }}
           />
         </>
       }

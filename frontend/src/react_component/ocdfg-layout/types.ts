@@ -131,6 +131,12 @@ export interface LayoutOptions {
   arcHalo: boolean;
   arcOpacity: number;
   arcLabels: ArcLabels;
+  /**
+   * Arc strength by duration: each arc keeps its object type's color, its
+   * opacity follows its average time (faint = fast, strong = slow), like
+   * the handover graph's time metric.
+   */
+  arcDurationShade: boolean;
   // Nodes
   nodeStyle: NodeStyle;
   terminalStyle: TerminalStyle;
@@ -209,6 +215,8 @@ export interface SelfLoop {
   node: string;
   type: string;
   weight: number;
+  /** Average time of the self loop's arc, passed on from the graph (null / unset: unknown). */
+  avgLeadTime?: number | null;
   width: number;
   style: SelfLoopStyle;
   /** Path for ring/side loops, already in screen space. */

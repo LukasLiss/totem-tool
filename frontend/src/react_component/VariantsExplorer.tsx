@@ -83,6 +83,8 @@ export type {
   VariantGraph,
   VariantObject,
 } from "./variants/types";
+import { useLogObjectTypes } from "@/hooks/useObjectTypeColors";
+import { colorsFromLogTypes } from "@/utils/objectColors";
 
 /* ========== main component ========== */
 type VariantsExplorerProps = {
@@ -145,6 +147,15 @@ export default function VariantsExplorer({
   filterEnabled: filterEnabledProp,
   localFilterParams,
 }: VariantsExplorerProps) {
+  // One color per object type for all rows, from the log's full type list, so
+  // a type has the same color in every variant (and in the log's other views).
+  // Colors handed in from outside (e.g. the process area) win.
+  const logObjectTypes = useLogObjectTypes(fileId);
+  const rowTypeColors = useMemo(
+    () => (logObjectTypes ? colorsFromLogTypes(logObjectTypes, logObjectTypes, typeColors) : typeColors),
+    [logObjectTypes, typeColors],
+  );
+
   const filterVersion = useFilterVersion();
   const filterEnabled = filterEnabledProp ?? true;
   const localFilterActive = !!localFilterParams && Object.keys(localFilterParams).length > 0;
@@ -797,7 +808,7 @@ export default function VariantsExplorer({
             zoom={zoom}
             labelMode={labelMode}
             colWidth={colWidth}
-            typeColors={typeColors}
+            typeColors={rowTypeColors}
           />
         ) : null}
 
@@ -830,7 +841,7 @@ export default function VariantsExplorer({
                 zoom={zoom}
                 labelMode={labelMode}
                 colWidth={colWidth}
-                typeColorsOverride={typeColors}
+                typeColorsOverride={rowTypeColors}
               />
             ))}
           </div>

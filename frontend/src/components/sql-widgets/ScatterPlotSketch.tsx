@@ -5,7 +5,7 @@
  * series column the points split into colored groups plus the chosen legend.
  */
 
-import React from "react";
+import React, { useId } from "react";
 import { cn } from "@/lib/utils";
 import type { LegendPosition, PointSize } from "./chartLegendUtils";
 import { TRANSPARENT_POINT_OPACITY } from "./scatterUtils";
@@ -106,6 +106,8 @@ interface ScatterPlotSketchProps {
   transparentPoints: boolean;
   /** Colors of the five sketch groups (without series only the first is used); grey when omitted. */
   colors?: string[];
+  /** "By value" colors: the low and high color, shown as a gradient legend instead of entries. */
+  gradient?: [string, string];
   /** Sizing of the SVG; defaults to the full width, at most `max-w-sm`. */
   className?: string;
 }
@@ -119,14 +121,18 @@ const ScatterPlotSketch: React.FC<ScatterPlotSketchProps> = ({
   pointSize,
   transparentPoints,
   colors,
+  gradient,
   className,
 }) => {
+  const gradientId = useId();
   const showTitle = title.trim() !== "";
-  const legend = hasSeries && (legendPosition === "bottom" || legendPosition === "columns") ? legendPosition : null;
+  const shownLegend = hasSeries && (legendPosition === "bottom" || legendPosition === "columns") ? legendPosition : null;
+  // A gradient legend is always one row.
+  const legend = shownLegend && gradient ? "gradient" : shownLegend;
 
   // Vertical bands: title, plot with x axis label below, legend.
   const top = showTitle ? 24 : 12;
-  const legendRows = legend === "bottom" ? 1 : legend === "columns" ? Math.ceil(GROUPS / 2) : 0;
+  const legendRows = legend === "bottom" || legend === "gradient" ? 1 : legend === "columns" ? Math.ceil(GROUPS / 2) : 0;
   const legendHeight = legendRows ? legendRows * LEGEND_ROW_HEIGHT + 4 : 0;
   const bottom = HEIGHT - 8 - legendHeight;
   // Plot area, leaving room for the y label (left) and x label (below) when set.
@@ -210,6 +216,31 @@ const ScatterPlotSketch: React.FC<ScatterPlotSketchProps> = ({
         return <circle key={i} cx={px(u)} cy={py(v)} r={radius} fill={color} fillOpacity={opacity} />;
       })}
 
+      {legend === "gradient" && gradient && (() => {
+        // Column name, smallest value, color ramp, largest value, centered.
+        const labelWidth = 22;
+        const valueWidth = 10;
+        const rampWidth = 60;
+        const gap = 5;
+        const total = labelWidth + rampWidth + 2 * valueWidth + 3 * gap;
+        const x0 = (WIDTH - total) / 2;
+        const y = HEIGHT - 10;
+        const rampX = x0 + labelWidth + valueWidth + 2 * gap;
+        return (
+          <g>
+            <defs>
+              <linearGradient id={gradientId}>
+                <stop offset="0%" stopColor={gradient[0]} />
+                <stop offset="100%" stopColor={gradient[1]} />
+              </linearGradient>
+            </defs>
+            <TextBar x={x0} y={y} width={labelWidth} />
+            <TextBar x={x0 + labelWidth + gap} y={y} width={valueWidth} opacity={0.18} />
+            <rect x={rampX} y={y - 2} width={rampWidth} height={4} rx={1} fill={`url(#${gradientId})`} />
+            <TextBar x={rampX + rampWidth + gap} y={y} width={valueWidth} opacity={0.18} />
+          </g>
+        );
+      })()}
       {legend === "bottom" &&
         (() => {
           // One centered row of entries.

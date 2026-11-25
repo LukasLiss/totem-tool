@@ -9,7 +9,7 @@ import { HoverTooltip, type TooltipRow } from '../MetricTooltip';
 import { useCanvasGestures } from '@/components/canvas/useCanvasGestures';
 import { bestFit, type FitRect } from './fitMargins';
 import { dist, pathD, pointAt, polylineLength, trimEnd } from './geometry';
-import type { LayoutOptions, LayoutResult, PlacedNode, Pt, RoutedArc } from './types';
+import type { LayoutOptions, LayoutResult, PlacedNode, Pt, RoutedArc, SelfLoop } from './types';
 
 export interface LabCanvasHandle {
   fit: () => void;
@@ -54,6 +54,7 @@ interface LabCanvasProps {
 /** Hovered element and the pointer position (viewport coordinates). */
 type Hover =
   | { kind: 'arc'; arc: RoutedArc; x: number; y: number }
+  | { kind: 'selfLoop'; loop: SelfLoop; x: number; y: number }
   | { kind: 'node'; node: PlacedNode; x: number; y: number }
   | null;
 
@@ -263,6 +264,21 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
   const color = (t: string) => colors[t] ?? '#64748b';
   const o = options;
 
+  // "Arc strength by duration": an arc's opacity from its average time, as
+  // the handover graph does it: 0.1 for the fastest (or no time) up to 0.85
+  // for the slowest arc. Null when the option is off.
+  const durationStrength = useMemo(() => {
+    if (!options.arcDurationShade) return null;
+    // Self loops count too: they are arcs with a time of their own.
+    const longest = Math.max(
+      0,
+      ...result.arcs.map((a) => a.avgLeadTime ?? 0),
+      ...result.selfLoops.map((s) => s.avgLeadTime ?? 0),
+    );
+    return (a: { avgLeadTime?: number | null }) =>
+      0.1 + 0.75 * (longest > 0 ? (a.avgLeadTime ?? 0) / longest : 0);
+  }, [options.arcDurationShade, result.arcs, result.selfLoops]);
+
   return (
     <div ref={wrapRef} className={`relative h-full w-full overflow-hidden ${className ?? ''}`}>
       <svg
@@ -353,6 +369,7 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
             color={color(a.type)}
             options={o}
             dim={dimArc(a)}
+            strength={durationStrength?.(a)}
             onEnter={(e) => setHover({ kind: 'arc', arc: a, ...relPos(e) })}
             onLeave={() => setHover(null)}
           />
@@ -375,25 +392,30 @@ const LabCanvas = forwardRef<LabCanvasHandle, LabCanvasProps>(function LabCanvas
         {result.selfLoops.map((s, i) => {
           const c = color(s.type);
           const dim = (activeType !== null && activeType !== s.type) || (hoverNode !== null && hoverNode !== s.node);
+          // The same hover box as the other arcs.
+          const hoverProps = {
+            onMouseEnter: (e: React.MouseEvent) => setHover({ kind: 'selfLoop', loop: s, ...relPos(e) }),
+            onMouseLeave: () => setHover(null),
+          };
           if (s.style === 'badge') {
             return (
-              <g key={`self-${i}`} opacity={dim ? 0.2 : 1}>
+              <g key={`self-${i}`} opacity={dim ? 0.2 : 1} data-self-loop={`${s.node}@${s.type}`} {...hoverProps}>
                 <circle cx={s.center.x} cy={s.center.y} r={s.radius} fill="#ffffff" stroke={c} strokeWidth={1.6} />
-                <text x={s.center.x} y={s.center.y + 0.5} textAnchor="middle" dominantBaseline="middle" fontSize={10} fontWeight={700} fill={c}>
+                <text x={s.center.x} y={s.center.y + 0.5} textAnchor="middle" dominantBaseline="middle" fontSize={10} fontWeight={700} fill={c} pointerEvents="none">
                   ↻
                 </text>
-                <title>{`${s.type} self loop · ${s.weight}`}</title>
               </g>
             );
           }
           const head = arrowHead(s.points, s.width, o);
           const pts = head ? trimEnd(s.points, head.trim) : s.points;
           return (
-            <g key={`self-${i}`} opacity={dim ? 0.15 : o.arcOpacity}>
+            <g key={`self-${i}`} opacity={dim ? 0.15 : durationStrength?.(s) ?? o.arcOpacity} data-self-loop={`${s.node}@${s.type}`} {...hoverProps}>
               {o.arcHalo && <path d={pathD(s.points)} fill="none" stroke="#fff" strokeWidth={s.width + 3} />}
               <path d={pathD(pts)} fill="none" stroke={c} strokeWidth={s.width} strokeLinecap="round" />
               {head && <HeadShape head={head} color={c} width={s.width} />}
-              <title>{`${s.type} self loop · ${s.weight}`}</title>
+              {/* A wider invisible hit area, so the thin loop is easy to hover. */}
+              <path d={pathD(s.points)} fill="none" stroke="transparent" strokeWidth={s.width + 8} pointerEvents="stroke" />
             </g>
           );
         })}
@@ -455,6 +477,10 @@ function cssId(s: string) {
 
 function tooltipTitle(result: LayoutResult, hover: NonNullable<Hover>): string {
   if (hover.kind === 'arc') return `${labelOf(result, hover.arc.source)} → ${labelOf(result, hover.arc.target)}`;
+  if (hover.kind === 'selfLoop') {
+    const label = labelOf(result, hover.loop.node);
+    return `${label} → ${label}`;
+  }
   const n = hover.node;
   return n.kind === 'activity' ? n.label : `${n.objectType} ${n.kind}`;
 }
@@ -466,6 +492,14 @@ function tooltipRows(hover: NonNullable<Hover>): TooltipRow[] {
       { label: 'Frequency', value: hover.arc.weight.toLocaleString() },
     ];
     if (hover.arc.avgLeadTime != null) rows.push({ label: 'Avg Time', value: formatDuration(hover.arc.avgLeadTime) });
+    return rows;
+  }
+  if (hover.kind === 'selfLoop') {
+    const rows: TooltipRow[] = [
+      { label: 'Object type', value: hover.loop.type },
+      { label: 'Frequency', value: hover.loop.weight.toLocaleString() },
+    ];
+    if (hover.loop.avgLeadTime != null) rows.push({ label: 'Avg Time', value: formatDuration(hover.loop.avgLeadTime) });
     return rows;
   }
   const rows: TooltipRow[] = [];
@@ -552,6 +586,7 @@ function ArcShape({
   color,
   options: o,
   dim,
+  strength,
   onEnter,
   onLeave,
 }: {
@@ -559,11 +594,14 @@ function ArcShape({
   color: string;
   options: LayoutOptions;
   dim: boolean;
+  /** "Arc strength by duration": the opacity for this arc's time, instead of the arc opacity. */
+  strength?: number;
   onEnter: (e: React.MouseEvent) => void;
   onLeave: () => void;
 }) {
   const interleave = arc.cls === 'interleave' && o.parallelArcs === 'dimmed';
-  const opacity = dim ? 0.08 : interleave ? Math.min(0.45, o.arcOpacity) : o.arcOpacity;
+  const base = strength ?? o.arcOpacity;
+  const opacity = dim ? 0.08 : interleave ? Math.min(0.45, base) : base;
   const head = arc.arrow && (!arc.mergedGroup || arc.mergedGroup.index === 0) ? arrowHead(arc.points, arc.width, o) : null;
   const pts = head ? trimEnd(arc.points, head.trim) : arc.points;
   const dash = interleave ? `${Math.max(3, arc.width * 2)} ${Math.max(3, arc.width * 2)}` : undefined;

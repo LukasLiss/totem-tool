@@ -253,6 +253,7 @@ export function OCAlignmentExplorer({
           onShowSilentMovesChange={(showSilentMoves) => onSettingsChange({ ...settings, showSilentMoves })}
           compact={compact}
           graphHeight={graphHeight}
+          fileId={fileId}
         />
       ) : batch.result || batch.running ? null : !showControls ? (
         <div role="status" className="flex flex-col items-center gap-3 p-6 text-center text-sm text-muted-foreground">

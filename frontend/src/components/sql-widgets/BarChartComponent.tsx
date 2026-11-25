@@ -21,7 +21,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import {
   ChartContainer,
   ChartTooltip,
-  ChartTooltipContent,
   type ChartConfig,
 } from "@/components/ui/chart";
 import type { LinkedQuery } from "@/react_component/sql/linkedQuery";
@@ -32,15 +31,21 @@ import { WidgetHeader } from "@/components/ui/WidgetTitle";
 import WidgetDraftTile from "@/components/WidgetDraftTile";
 import {
   firstNumericColumn,
+  formatChartNumber,
   linkedQueryOf,
   toNumber,
+  withUnit,
   type SqlWidgetNodeFields,
   type SqlWidgetProps,
 } from "./sqlWidgetUtils";
-import { categoryFills, previewColors, type ChartColors } from "./chartColors";
+import { categoryFills, colorsDependOnLabels, previewColors, type ChartColors } from "./chartColors";
 import { limitCategories } from "./chartData";
+import { useCategoryList } from "./chartSettingsUtils";
 import type { ChartStyle } from "./chartLegendUtils";
 import BarChartSketch from "./BarChartSketch";
+import TitledTick from "./TitledTick";
+import { AXIS_STYLE, GRID_DASH, yAxisWidthFor } from "./chartAxis";
+import HeadedTooltip from "./HeadedTooltip";
 import BarChartSettingsDialog, { type BarChartSettings } from "./BarChartSettingsDialog";
 import { useDashboardLocalFilter } from "@/hooks/useDashboardLocalFilter";
 
@@ -75,6 +80,7 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
   const [showValues, setShowValues] = useState(node.show_values ?? false);
   const [colors, setColors] = useState<ChartColors>(node.chart_style?.colors ?? {});
   const [maxCategories, setMaxCategories] = useState<number | null>(node.chart_style?.max_categories ?? null);
+  const [valueUnit, setValueUnit] = useState(node.chart_style?.units?.value ?? "");
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
@@ -87,6 +93,7 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
     setShowValues(node.show_values ?? false);
     setColors(node.chart_style?.colors ?? {});
     setMaxCategories(node.chart_style?.max_categories ?? null);
+    setValueUnit(node.chart_style?.units?.value ?? "");
   }, [node]);
 
   const fileId = selectedFile?.id;
@@ -94,6 +101,20 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
 
   // Bar charts default to a single color.
   const barColors: ChartColors = useMemo(() => ({ mode: "single", ...colors }), [colors]);
+
+  // The real categories for the edit-mode sketch, loaded like the settings
+  // popup does, so per-category colors show on the tile too. Only needed
+  // when the colors depend on the category names.
+  const sketchCategories = useCategoryList({
+    fileId,
+    query,
+    linked,
+    labelColumn,
+    valueColumn,
+    enabled: isEditMode && colorsDependOnLabels(barColors),
+    maxCategories,
+    groupRest: false,
+  });
 
   const settings: BarChartSettings = {
     title,
@@ -105,6 +126,7 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
     showValues,
     colors,
     maxCategories,
+    valueUnit,
   };
 
   const applySettings = (next: BarChartSettings) => {
@@ -117,6 +139,7 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
     setShowValues(next.showValues);
     setColors(next.colors);
     setMaxCategories(next.maxCategories);
+    setValueUnit(next.valueUnit);
     onUpdate?.({
       title: next.title,
       query: next.query,
@@ -130,6 +153,7 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
         ...node.chart_style,
         colors: next.colors,
         max_categories: next.maxCategories ?? undefined,
+        units: { ...node.chart_style?.units, value: next.valueUnit || undefined },
       },
     });
   };
@@ -165,6 +189,9 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
     [valueKey]
   );
 
+  // Vertical bars: the value axis as wide as its tick numbers need, from the data only (like the scatter plot).
+  const valueAxisWidth = useMemo(() => yAxisWidthFor(chartData.map((bar) => bar.value), false), [chartData]);
+
   if (isEditMode) {
     // In edit mode the tile shows a layout sketch; the settings open in a popup.
     return (
@@ -177,7 +204,7 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
             title={title}
             horizontal={horizontal}
             showValues={showValues}
-            colors={previewColors(barColors)}
+            colors={previewColors(barColors, sketchCategories.slices.map((slice) => slice.label))}
             className="h-full w-full"
           />
         }
@@ -196,7 +223,8 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
   }
 
   return (
-    <Card className="flex h-full w-full flex-col gap-0 overflow-hidden rounded-none pt-0">
+    // Same padding as the scatter plot: none above, a little below (on top of the content's p-3).
+    <Card className="flex h-full w-full flex-col gap-0 overflow-hidden rounded-none pt-0 pb-2">
       <WidgetHeader
         label={title}
         fileId={fileId}
@@ -222,37 +250,44 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
             layout={horizontal ? "vertical" : "horizontal"}
             margin={{ top: showValues ? 18 : 6, right: showValues && horizontal ? 36 : 12, bottom: 4, left: 4 }}
           >
-            <CartesianGrid vertical={horizontal} horizontal={!horizontal} strokeDasharray="3 3" />
+            {/* Grid lines along the value axis only; axes in the shared style (AXIS_STYLE). */}
+            <CartesianGrid vertical={horizontal} horizontal={!horizontal} strokeDasharray={GRID_DASH} />
             {horizontal ? (
               <>
-                <XAxis type="number" tickLine={false} axisLine={false} />
+                <XAxis type="number" {...AXIS_STYLE} tickFormatter={formatChartNumber} />
                 <YAxis
                   type="category"
                   dataKey="label"
                   width={110}
-                  tickLine={false}
-                  axisLine={false}
+                  {...AXIS_STYLE}
                   tickFormatter={(v: string) => (v.length > 16 ? `${v.slice(0, 15)}…` : v)}
+                  tick={(props) => <TitledTick {...props} />}
                 />
               </>
             ) : (
               <>
                 <XAxis
                   dataKey="label"
-                  tickLine={false}
-                  axisLine={false}
+                  {...AXIS_STYLE}
                   interval={0}
                   angle={chartData.length > 8 ? -30 : 0}
                   textAnchor={chartData.length > 8 ? "end" : "middle"}
                   height={chartData.length > 8 ? 60 : 30}
                   tickFormatter={(v: string) => (v.length > 16 ? `${v.slice(0, 15)}…` : v)}
+                  tick={(props) => <TitledTick {...props} />}
                 />
-                <YAxis tickLine={false} axisLine={false} />
+                <YAxis width={valueAxisWidth} {...AXIS_STYLE} tickFormatter={formatChartNumber} />
               </>
             )}
             <ChartTooltip
               cursor={{ fill: "var(--muted)" }}
-              content={<ChartTooltipContent labelKey="label" nameKey="value" />}
+              // Top row: the bar's category in its color; below, the value.
+              content={
+                <HeadedTooltip
+                  heading={(bar) => ({ label: String(bar.label ?? ""), color: bar.fill as string | undefined })}
+                  units={{ value: valueUnit }}
+                />
+              }
             />
             <Bar
               dataKey="value"
@@ -269,7 +304,7 @@ const BarChartComponent: React.FC<SqlWidgetProps<BarChartNodeFields>> = ({
                   position={horizontal ? "right" : "top"}
                   className="fill-foreground"
                   fontSize={11}
-                  formatter={(v: number) => v.toLocaleString()}
+                  formatter={(v: number) => withUnit(v.toLocaleString(), valueUnit)}
                 />
               )}
             </Bar>

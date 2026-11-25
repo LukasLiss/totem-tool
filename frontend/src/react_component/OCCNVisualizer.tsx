@@ -27,7 +27,9 @@ import {
 } from 'lucide-react';
 import { WidgetTitle } from '@/components/ui/WidgetTitle';
 import { VisualizerEmptyState } from '@/components/ui/VisualizerEmptyState';
-import { mapTypesToColors } from '../utils/objectColors';
+import { useObjectTypeColors } from '@/hooks/useObjectTypeColors';
+
+const NO_TYPES: string[] = [];
 import {
   occnNetToEditorGraph,
   groupSupportKey,
@@ -248,10 +250,9 @@ function OCCNVisualizer({
     };
   }, [data, fileId, threshold, objectTypesParam, filterEnabled, effectiveFilterVersion, effectiveLocalParams]);
 
-  const typeColors = useMemo(
-    () => (net ? mapTypesToColors(net.object_types, typeColorOverrides) : {}),
-    [net, typeColorOverrides],
-  );
+  // From the log's full type list, so a filter doesn't shift the colors.
+
+  const typeColors = useObjectTypeColors(fileId, net?.object_types ?? NO_TYPES, typeColorOverrides);
 
   // Convert + layout whenever the net (or direction, or the re-layout tick)
   // changes. ELK layout is async, so guard against a stale run resolving

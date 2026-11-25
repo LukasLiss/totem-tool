@@ -1,15 +1,14 @@
+/**
+ * The dotted chart's "View" panel (opened from its control pill): what the
+ * axes, colour and shape show and how the rows are ordered. Changes are a
+ * draft until "Apply", since every change loads a new sample from the server.
+ * The number of points is set in the "Sample" panel.
+ */
 import { useEffect, useMemo, useState } from "react";
-import { ArrowDownWideNarrow, ArrowUpNarrowWide, ChevronDown, SlidersHorizontal } from "lucide-react";
+import { ArrowDownWideNarrow, ArrowUpNarrowWide } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import { Label } from "@/components/ui/label";
-import { Slider } from "@/components/ui/slider";
-import { cn } from "@/lib/utils";
 import type { AxisOption, RowOrderDirection, RowOrderOption } from "./dottedChartUtils";
 import {
   OBJECT_TYPE_CONTROL_VALUE,
@@ -34,19 +33,18 @@ export type DottedChartConfig = {
   maxPoints: number;
 };
 
-type DottedChartControlsProps = {
-  fileId?: number;
-  config: DottedChartConfig;
-  onConfigChange: (config: DottedChartConfig) => void;
-  className?: string;
-};
+const SELECT_CLASS =
+  "border-input bg-background h-8 w-full rounded-md border px-2 text-xs shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50";
 
-export function DottedChartControls({
+export function DottedChartViewForm({
   fileId,
   config,
   onConfigChange,
-  className,
-}: DottedChartControlsProps) {
+}: {
+  fileId?: number;
+  config: DottedChartConfig;
+  onConfigChange: (config: DottedChartConfig) => void;
+}) {
   const { options, loading: loadingOptions, error: optionsError } = useDottedChartOptions(fileId);
   const [draftConfig, setDraftConfig] = useState<DottedChartConfig>(config);
   const hasPendingChanges = useMemo(
@@ -67,13 +65,7 @@ export function DottedChartControls({
       color_by: withCurrentOption(options.color_by, draftConfig.colorBy),
       shape_by: withCurrentOption(options.shape_by, draftConfig.shapeBy),
     }),
-    [
-      draftConfig.colorBy,
-      draftConfig.shapeBy,
-      draftConfig.xAxis,
-      draftConfig.yAxis,
-      options,
-    ]
+    [draftConfig.colorBy, draftConfig.shapeBy, draftConfig.xAxis, draftConfig.yAxis, options]
   );
 
   useEffect(() => {
@@ -83,173 +75,121 @@ export function DottedChartControls({
   const updateDraftConfig = (patch: Partial<DottedChartConfig>) => {
     setDraftConfig((current) => ({ ...current, ...patch }));
   };
-  const updateConfigWithAxisChange = (axisKey: "xAxis" | "yAxis", axis: AxisOption) => {
-    setDraftConfig((current) => ({ ...current, [axisKey]: axis }));
-  };
 
   return (
-    <Collapsible defaultOpen={false} className={cn("rounded-md border bg-background", className)}>
-      <div className="flex items-center justify-between gap-3 px-3 py-2">
-        <div className="flex items-center gap-2 text-sm font-medium">
-          <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
-          Chart configuration
-        </div>
-        <CollapsibleTrigger asChild>
-          <Button type="button" variant="ghost" size="sm" className="h-8 gap-1">
-            Configure
-            <ChevronDown className="h-4 w-4" />
-          </Button>
-        </CollapsibleTrigger>
-      </div>
-
-      <CollapsibleContent>
-        <div
-          className={cn(
-            "grid gap-3 border-t px-3 py-3 md:grid-cols-3",
-            // Give the Y Axis Order column extra room so its label and the
-            // Asc/Desc toggle fit on one line.
-            showsObjectTypeSelect
-              ? "xl:grid-cols-[repeat(5,minmax(0,1fr))_minmax(0,1.6fr)]"
-              : "xl:grid-cols-[repeat(4,minmax(0,1fr))_minmax(0,1.6fr)]"
-          )}
-        >
-          <AxisSelect
-            label="X Axis"
-            value={axisToControlValue(draftConfig.xAxis)}
-            options={selectOptions.x_axis}
-            onChange={(value) => updateConfigWithAxisChange("xAxis", controlValueToAxis(value))}
-          />
-          <AxisSelect
-            label="Y Axis"
-            value={axisToPrimaryControlValue(draftConfig.yAxis)}
-            options={selectOptions.y_axis}
-            onChange={(value) =>
-              updateConfigWithAxisChange(
-                "yAxis",
-                controlValueToAxis(
-                  value === OBJECT_TYPE_CONTROL_VALUE
-                    ? objectTypeOptions[0]?.value ?? "object_id"
-                    : value
-                )
-              )
+    <div className="grid w-[248px] gap-2.5">
+      <AxisSelect
+        label="X axis"
+        value={axisToControlValue(draftConfig.xAxis)}
+        options={selectOptions.x_axis}
+        onChange={(value) => updateDraftConfig({ xAxis: controlValueToAxis(value) })}
+      />
+      <AxisSelect
+        label="Y axis"
+        value={axisToPrimaryControlValue(draftConfig.yAxis)}
+        options={selectOptions.y_axis}
+        onChange={(value) =>
+          updateDraftConfig({
+            yAxis: controlValueToAxis(
+              value === OBJECT_TYPE_CONTROL_VALUE ? objectTypeOptions[0]?.value ?? "object_id" : value
+            ),
+          })
+        }
+      />
+      {showsObjectTypeSelect && (
+        <AxisSelect
+          label="Object type"
+          value={selectedYObjectType}
+          options={objectTypeOptions}
+          onChange={(value) => updateDraftConfig({ yAxis: controlValueToAxis(value) })}
+        />
+      )}
+      <div className="space-y-1">
+        <div className="flex items-center justify-between gap-2">
+          <Label className="text-[11px] text-muted-foreground">Y axis order</Label>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="-my-0.5 h-5 shrink-0 gap-1 px-1.5 text-[11px] text-muted-foreground"
+            title={
+              draftConfig.rowOrderDirection === "desc"
+                ? "Descending order. Click to sort ascending."
+                : "Ascending order. Click to sort descending."
             }
-          />
-          {showsObjectTypeSelect && (
-            <AxisSelect
-              label="Object Type"
-              value={selectedYObjectType}
-              options={objectTypeOptions}
-              onChange={(value) =>
-                updateConfigWithAxisChange("yAxis", controlValueToAxis(value))
-              }
-            />
-          )}
-          <AxisSelect
-            label="Color By"
-            value={axisToControlValue(draftConfig.colorBy)}
-            options={selectOptions.color_by}
-            onChange={(value) => updateDraftConfig({ colorBy: controlValueToAxis(value) })}
-          />
-          <AxisSelect
-            label="Shape By"
-            value={axisToControlValue(draftConfig.shapeBy)}
-            options={selectOptions.shape_by}
-            onChange={(value) => updateDraftConfig({ shapeBy: controlValueToAxis(value) })}
-          />
-          <div className="space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <Label className="whitespace-nowrap text-xs text-muted-foreground">Y Axis Order</Label>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="-my-0.5 h-5 shrink-0 gap-1 px-1.5 text-xs text-muted-foreground"
-                title={
-                  draftConfig.rowOrderDirection === "desc"
-                    ? "Descending order. Click to sort ascending."
-                    : "Ascending order. Click to sort descending."
-                }
-                aria-label={`Y axis order direction: ${
-                  draftConfig.rowOrderDirection === "desc" ? "descending" : "ascending"
-                }`}
-                onClick={() =>
-                  updateDraftConfig({
-                    rowOrderDirection: draftConfig.rowOrderDirection === "desc" ? "asc" : "desc",
-                  })
-                }
-              >
-                {draftConfig.rowOrderDirection === "desc" ? (
-                  <ArrowDownWideNarrow className="h-3 w-3" />
-                ) : (
-                  <ArrowUpNarrowWide className="h-3 w-3" />
-                )}
-                {draftConfig.rowOrderDirection === "desc" ? "Desc" : "Asc"}
-              </Button>
-            </div>
-            <select
-              value={draftConfig.rowOrder}
-              onChange={(event) =>
-                updateDraftConfig({
-                  rowOrder: event.target.value as RowOrderOption,
-                })
-              }
-              className="border-input bg-background h-9 w-full rounded-md border px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-            >
-              {ROW_ORDER_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="space-y-2 md:col-span-3 xl:col-span-full">
-            <div className="flex items-center justify-between gap-3">
-              <Label className="text-xs text-muted-foreground">Max Points</Label>
-              <span className="text-xs tabular-nums text-muted-foreground">
-                {draftConfig.maxPoints.toLocaleString()}
-              </span>
-            </div>
-            <Slider
-              min={1000}
-              max={50000}
-              step={1000}
-              value={[draftConfig.maxPoints]}
-              onValueChange={(values) =>
-                updateDraftConfig({ maxPoints: values[0] ?? draftConfig.maxPoints })
-              }
-            />
-          </div>
-          <div className="flex flex-wrap items-center justify-end gap-2 md:col-span-3 xl:col-span-full">
-            <span className="mr-auto text-xs text-muted-foreground">
-              {loadingOptions
-                ? "Loading available columns..."
-                : optionsError
-                  ? optionsError
-                  : hasPendingChanges
-                    ? "Changes are not applied yet."
-                    : "Configuration is applied."}
-            </span>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={!hasPendingChanges}
-              onClick={() => setDraftConfig(config)}
-            >
-              Reset
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              disabled={!hasPendingChanges}
-              onClick={() => onConfigChange(draftConfig)}
-            >
-              Confirm
-            </Button>
-          </div>
+            aria-label={`Y axis order direction: ${
+              draftConfig.rowOrderDirection === "desc" ? "descending" : "ascending"
+            }`}
+            onClick={() =>
+              updateDraftConfig({
+                rowOrderDirection: draftConfig.rowOrderDirection === "desc" ? "asc" : "desc",
+              })
+            }
+          >
+            {draftConfig.rowOrderDirection === "desc" ? (
+              <ArrowDownWideNarrow className="h-3 w-3" />
+            ) : (
+              <ArrowUpNarrowWide className="h-3 w-3" />
+            )}
+            {draftConfig.rowOrderDirection === "desc" ? "Desc" : "Asc"}
+          </Button>
         </div>
-      </CollapsibleContent>
-    </Collapsible>
+        <select
+          value={draftConfig.rowOrder}
+          onChange={(event) => updateDraftConfig({ rowOrder: event.target.value as RowOrderOption })}
+          className={SELECT_CLASS}
+          aria-label="Y axis order"
+        >
+          {ROW_ORDER_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <AxisSelect
+        label="Color by"
+        value={axisToControlValue(draftConfig.colorBy)}
+        options={selectOptions.color_by}
+        onChange={(value) => updateDraftConfig({ colorBy: controlValueToAxis(value) })}
+      />
+      <AxisSelect
+        label="Shape by"
+        value={axisToControlValue(draftConfig.shapeBy)}
+        options={selectOptions.shape_by}
+        onChange={(value) => updateDraftConfig({ shapeBy: controlValueToAxis(value) })}
+      />
+      <p className="text-[11px] text-muted-foreground">
+        {loadingOptions
+          ? "Loading available columns…"
+          : optionsError
+            ? optionsError
+            : hasPendingChanges
+              ? "Not applied yet."
+              : "Applied."}
+      </p>
+      <div className="flex justify-end gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-7 px-2.5 text-xs"
+          disabled={!hasPendingChanges}
+          onClick={() => setDraftConfig(config)}
+        >
+          Reset
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          className="h-7 px-2.5 text-xs"
+          disabled={!hasPendingChanges}
+          onClick={() => onConfigChange(draftConfig)}
+        >
+          Apply
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -265,12 +205,13 @@ function AxisSelect({
   onChange: (value: AxisControlValue) => void;
 }) {
   return (
-    <div className="space-y-2">
-      <Label className="text-xs text-muted-foreground">{label}</Label>
+    <div className="space-y-1">
+      <Label className="text-[11px] text-muted-foreground">{label}</Label>
       <select
         value={value}
         onChange={(event) => onChange(event.target.value as AxisControlValue)}
-        className="border-input bg-background h-9 w-full rounded-md border px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        className={SELECT_CLASS}
+        aria-label={label}
       >
         {options.map((option) => (
           <option key={option.value} value={option.value}>

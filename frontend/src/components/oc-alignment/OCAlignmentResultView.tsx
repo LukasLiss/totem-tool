@@ -57,6 +57,8 @@ export interface OCAlignmentResultViewProps {
   onShowSilentMovesChange?: (value: boolean) => void;
   compact?: boolean;
   graphHeight?: number | "fill";
+  /** The event log, for the object types' colors. */
+  fileId?: number | null;
 }
 
 export function OCAlignmentResultView({
@@ -65,6 +67,7 @@ export function OCAlignmentResultView({
   onShowSilentMovesChange,
   compact = false,
   graphHeight,
+  fileId,
 }: OCAlignmentResultViewProps) {
   const counts = result.move_counts;
   const found = result.status === "optimal" || result.status === "approximate";
@@ -200,6 +203,7 @@ export function OCAlignmentResultView({
               objectsByType={result.execution.objects_by_type}
               showSilentMoves={showSilentMoves}
               height={graphHeight}
+              fileId={fileId}
             />
           </div>
 

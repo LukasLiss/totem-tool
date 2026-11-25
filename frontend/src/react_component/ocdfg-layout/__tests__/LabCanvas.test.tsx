@@ -70,3 +70,67 @@ describe('LabCanvas hover highlighting', () => {
     expect(trunks.every((g) => opacity(g) < 0.2)).toBe(true);
   });
 });
+
+describe('LabCanvas arc strength by duration', () => {
+  // place→pay takes twice as long as pick→ship; the other arcs have no time.
+  const timed = {
+    ...graph,
+    arcs: graph.arcs.map((a) => ({
+      ...a,
+      avgLeadTime: a.id === 'place→pay@order' ? 3600 : a.id === 'pick→ship@item' ? 1800 : null,
+    })),
+  };
+  const draw = (options = DEFAULT_OPTIONS) => {
+    const view = render(<LabCanvas result={computeLayout(timed, options)} options={options} colors={colors} />);
+    return (id: string) => Number(view.container.querySelector(`[data-arc-id="${CSS.escape(id)}"]`)!.getAttribute('opacity'));
+  };
+
+  it('keeps the arc opacity while the switch is off', () => {
+    const opacity = draw();
+    expect(opacity('place→pay@order')).toBe(DEFAULT_OPTIONS.arcOpacity);
+    expect(opacity('pick→ship@item')).toBe(DEFAULT_OPTIONS.arcOpacity);
+  });
+
+  it('draws slower arcs stronger, like the handover graph (0.1 to 0.85)', () => {
+    const opacity = draw({ ...DEFAULT_OPTIONS, arcDurationShade: true });
+    expect(opacity('place→pay@order')).toBeCloseTo(0.85);
+    expect(opacity('pick→ship@item')).toBeCloseTo(0.475);
+    expect(opacity('pay→ship@order')).toBeCloseTo(0.1); // no time
+  });
+});
+
+describe('LabCanvas self loops', () => {
+  // order: place → pay → pay → ship, so pay has a self loop; it takes half as long as place→pay.
+  const base = fromTraces({ order: [[['place', 'pay', 'pay', 'ship'], 4]] });
+  const looped = {
+    ...base,
+    arcs: base.arcs.map((a) => ({
+      ...a,
+      avgLeadTime: a.source === 'pay' && a.target === 'pay' ? 1800 : a.id === 'place→pay@order' ? 3600 : null,
+    })),
+  };
+  const draw = (options = DEFAULT_OPTIONS) => {
+    const view = render(<LabCanvas result={computeLayout(looped, options)} options={options} colors={colors} />);
+    return { view, loop: () => view.container.querySelector('[data-self-loop="pay@order"]')! };
+  };
+
+  it.each(['cornerRing', 'sideLoop', 'badge'] as const)('shows the hover box for a %s self loop', (selfLoopStyle) => {
+    const { view, loop } = draw({ ...DEFAULT_OPTIONS, selfLoopStyle });
+    expect(loop()).not.toBeNull();
+
+    fireEvent.mouseEnter(loop());
+    expect(view.getByText('pay → pay')).toBeDefined();
+    // The box prints each row's label with a colon.
+    expect(view.getByText('Frequency:')).toBeDefined();
+    expect(view.getByText('Avg Time:')).toBeDefined();
+    expect(view.getByText('30 min')).toBeDefined();
+
+    fireEvent.mouseLeave(loop());
+    expect(view.queryByText('pay → pay')).toBeNull();
+  });
+
+  it('shades a self loop by its time like the other arcs', () => {
+    const { loop } = draw({ ...DEFAULT_OPTIONS, selfLoopStyle: 'cornerRing', arcDurationShade: true });
+    expect(Number(loop().getAttribute('opacity'))).toBeCloseTo(0.475);
+  });
+});

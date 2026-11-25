@@ -6,7 +6,7 @@
  */
 
 import { limitCategories, type CategorySlice } from "./chartData";
-import type { ChartColors } from "./chartColors";
+import { DEFAULT_HIGH_COLOR, DEFAULT_LOW_COLOR, type ChartColors } from "./chartColors";
 import type { PointSize } from "./chartLegendUtils";
 import { toNumber } from "./sqlWidgetUtils";
 
@@ -39,6 +39,83 @@ export interface ScatterSeries {
   other?: boolean;
 }
 
+/** The x / y columns: the chosen ones, else the first two numeric columns. */
+function scatterAxisKeys(rows: Record<string, unknown>[], columns: string[], xColumn: string, yColumn: string) {
+  const numericCols = columns.filter((c) => rows.some((r) => toNumber(r[c]) != null));
+  const xKey = xColumn || numericCols[0] || columns[0] || "";
+  const yKey = yColumn || numericCols.find((c) => c !== xKey) || columns[1] || "";
+  return { xKey, yKey };
+}
+
+/**
+ * Whether a column's values can be ordered for "By value" colors: every
+ * non-empty value is a number, and there is at least one. Otherwise
+ * `example` is a value that isn't a number (when there is one).
+ */
+export function columnOrderability(
+  rows: Record<string, unknown>[],
+  column: string
+): { orderable: boolean; example?: string } {
+  let numbers = 0;
+  for (const r of rows) {
+    const v = r[column];
+    if (v == null || v === "") continue;
+    if (toNumber(v) == null) return { orderable: false, example: String(v) };
+    numbers++;
+  }
+  return { orderable: numbers > 0 };
+}
+
+/** The notice shown when "By value" can't be used with `column`. */
+export function notOrderableNotice(column: string, example?: string): string {
+  const why = example != null
+    ? `has values that aren't numbers (e.g. “${example.length > 30 ? `${example.slice(0, 29)}…` : example}”)`
+    : "has no numeric values";
+  return `“${column}” ${why}, so the points are colored by category instead.`;
+}
+
+/** The low and high color of "By value" colors. */
+export function valueGradient(colors: ChartColors): [string, string] {
+  return [colors.low ?? DEFAULT_LOW_COLOR, colors.high ?? DEFAULT_HIGH_COLOR];
+}
+
+export interface ValuePoint {
+  x: number;
+  y: number;
+  /** The point's value in the color column; null when empty. */
+  c: number | null;
+}
+
+/**
+ * "By value" colors: every point with its own value from the color column
+ * (instead of grouping points into series), plus the smallest and largest
+ * value for the color ramp and the legend.
+ */
+export function buildValuePoints(
+  rows: Record<string, unknown>[],
+  columns: string[],
+  { xColumn, yColumn, seriesColumn }: { xColumn: string; yColumn: string; seriesColumn: string }
+) {
+  const { xKey, yKey } = scatterAxisKeys(rows, columns, xColumn, yColumn);
+  const points: ValuePoint[] = [];
+  let min = Infinity;
+  let max = -Infinity;
+  let withoutValue = 0;
+  for (const r of rows) {
+    const x = toNumber(r[xKey]);
+    const y = toNumber(r[yKey]);
+    if (x == null || y == null) continue;
+    const c = toNumber(r[seriesColumn]);
+    if (c == null) withoutValue++;
+    else {
+      min = Math.min(min, c);
+      max = Math.max(max, c);
+    }
+    points.push({ x, y, c });
+  }
+  return { points, min, max, withoutValue, xKey, yKey };
+}
+
 export function buildScatterSeries(
   rows: Record<string, unknown>[],
   columns: string[],
@@ -49,9 +126,7 @@ export function buildScatterSeries(
     maxSeries,
   }: { xColumn: string; yColumn: string; seriesColumn: string; maxSeries: number | null }
 ) {
-  const numericCols = columns.filter((c) => rows.some((r) => toNumber(r[c]) != null));
-  const xKey = xColumn || numericCols[0] || columns[0] || "";
-  const yKey = yColumn || numericCols.find((c) => c !== xKey) || columns[1] || "";
+  const { xKey, yKey } = scatterAxisKeys(rows, columns, xColumn, yColumn);
   const seriesKey = seriesColumn || "";
 
   const groups = new Map<string, { x: number; y: number }[]>();

@@ -23,6 +23,7 @@ import {
   ColorSettings,
   MaxCategoriesRow,
   SettingRow,
+  UnitRow,
   type ChartSettingsTab,
 } from "@/components/sql-widgets/chartSettings";
 import { useCategoryList, useDiscoverOnOpen } from "@/components/sql-widgets/chartSettingsUtils";
@@ -43,6 +44,8 @@ export interface PieChartSettings {
   colors: ChartColors;
   /** Largest N categories shown, the rest grouped as "Other"; null = all. */
   maxCategories: number | null;
+  /** Shown after the values (callouts, legend, tooltip); empty = none. */
+  valueUnit: string;
 }
 
 const CHART_TYPE_OPTIONS = [
@@ -171,6 +174,12 @@ function SettingsBody({ widgetId, initial, onApply, onCancel, fileId, projectId 
               disabled={!draft.showLegend}
             />
           </SettingRow>
+          <UnitRow
+            id={`${idPrefix}-value-unit`}
+            label="Value unit"
+            value={draft.valueUnit}
+            onChange={(v) => set("valueUnit", v)}
+          />
           <SettingRow label="Number of categories" htmlFor={`${idPrefix}-category-count`}>
             <Switch
               id={`${idPrefix}-category-count`}
