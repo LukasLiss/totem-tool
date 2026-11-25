@@ -37,6 +37,7 @@ import {
   streamChat,
   validateApiKey,
   resetConversation,
+  cancelTurn,
   AssistantContext,
   AssistantEvent,
   STORAGE_KEY_API_KEY,
@@ -891,14 +892,24 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
     };
   }, [isResizing, drawerWidth]);
 
+  // Mode of the reply being generated, so Stop cancels the right conversation.
+  const activeTurnMode = useRef<ChatMode | null>(null);
+
+  /** Abort the streaming fetch and tell the server to stop the agent loop. */
+  const abortTurn = () => {
+    abortController?.abort();
+    setAbortController(null);
+    const turnMode = activeTurnMode.current;
+    const conversationId = turnMode ? conversationIds.current[turnMode] : null;
+    if (conversationId) void cancelTurn(conversationId);
+    activeTurnMode.current = null;
+  };
+
   // Switch mode while preserving both conversation histories
   const handleModeChange = (newMode: ChatMode) => {
     if (newMode === mode) return;
 
-    if (isStreaming && abortController) {
-      abortController.abort();
-      setAbortController(null);
-    }
+    if (isStreaming) abortTurn();
 
     // Ensure any active streaming message in the previous mode is cleanly finalized
     setMessagesByMode((prev) => ({
@@ -1000,10 +1011,7 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
   };
 
   const handleClearConversation = () => {
-    if (isStreaming && abortController) {
-      abortController.abort();
-      setAbortController(null);
-    }
+    if (isStreaming) abortTurn();
     // Clear both conversation histories, on the server too
     (["teach", "act"] as ChatMode[]).forEach((m) => {
       const id = conversationIds.current[m];
@@ -1024,10 +1032,9 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
   };
 
   const handleStopStreaming = () => {
-    // Aborting the fetch closes the stream; the server stops the agent loop and
-    // records the interrupted tool calls so the conversation stays consistent.
-    abortController?.abort();
-    setAbortController(null);
+    // The server stops the agent loop at the next event or tool and records the
+    // interrupted tool calls, so the conversation stays consistent.
+    abortTurn();
     setIsStreaming(false);
     setMessages((prev) =>
       prev.map((msg) => (msg.isStreaming ? applyAssistantEvent({ ...msg, notices: [...(msg.notices || []), "Stopped."] }, { type: "done" }) : msg))
@@ -1050,6 +1057,7 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
 
     // Bind the whole turn to the mode it started in, even if the user switches tabs.
     const turnMode = mode;
+    activeTurnMode.current = turnMode;
     const stamp = Date.now();
     const assistantMessageId = `asst-${stamp}`;
     const updateAssistant = (fn: (msg: ChatMessage) => ChatMessage) =>

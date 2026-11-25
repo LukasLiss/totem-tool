@@ -203,6 +203,15 @@ export async function confirmAction(pendingActionId: string, approved: boolean):
   return data;
 }
 
+/**
+ * Ask the server to stop the reply being generated. Aborting the fetch alone
+ * is not enough: the server may not notice the closed connection and would
+ * keep calling the model until the turn finished.
+ */
+export async function cancelTurn(conversationId: string): Promise<void> {
+  await axios.post(`${ASSISTANT_URL}/cancel/`, { conversation_id: conversationId }).catch(() => undefined);
+}
+
 export async function resetConversation(conversationId: string): Promise<void> {
   await axios.post(`${ASSISTANT_URL}/reset/`, { conversation_id: conversationId }).catch(() => undefined);
 }

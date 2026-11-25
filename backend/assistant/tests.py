@@ -133,6 +133,12 @@ class HarnessTests(TestCase):
         assert_valid_transcript(self, msgs)
         self.assertEqual(events[-1]["usage"]["input_tokens"], 30)
 
+    def test_text_from_separate_steps_is_split_into_paragraphs(self):
+        p = ScriptedProvider([[text("Checking the log."), tool("list_event_logs", id="l")], [text("Found it.")]])
+        events, _ = self.run_turn(p)
+        streamed = "".join(e["text"] for e in events if e["type"] == "text")
+        self.assertEqual(streamed, "Checking the log.\n\nFound it.")
+
     def test_conversation_continues_across_turns(self):
         p = ScriptedProvider([[text("first")], [text("second")]])
         _, cid = self.run_turn(p, "one")
@@ -264,8 +270,62 @@ class HarnessTests(TestCase):
 
     def test_concurrent_turns_are_refused(self):
         conv_store.acquire_turn(self.user.id, "conv_locked_conversation")
-        events = list(run_turn(user=self.user, conversation_id="conv_locked_conversation", mode="act", text="x", ui_context=self.ui, provider=ScriptedProvider([])))
+        with mock.patch("assistant.harness.LOCK_WAIT_SECONDS", 0):
+            events = list(run_turn(user=self.user, conversation_id="conv_locked_conversation", mode="act", text="x", ui_context=self.ui, provider=ScriptedProvider([])))
         self.assertEqual(events[0]["code"], "busy")
+
+    def test_a_new_message_waits_for_a_stopped_turn_to_release_the_lock(self):
+        import threading
+
+        conv_store.acquire_turn(self.user.id, "conv_stopping_conversation")
+        threading.Timer(0.4, conv_store.release_turn, args=(self.user.id, "conv_stopping_conversation")).start()
+        self.assertTrue(conv_store.acquire_turn(self.user.id, "conv_stopping_conversation", wait_seconds=5))
+
+    def test_stop_ends_the_turn_mid_stream(self):
+        user_id = self.user.id
+
+        class StopsWhileWriting(ScriptedProvider):
+            def stream(self, system, messages, tools):
+                for ev in super().stream(system, messages, tools):
+                    yield ev
+                    if ev["type"] == "text":
+                        conv_store.request_cancel(user_id, self.cid)  # the user presses Stop
+
+        p = StopsWhileWriting([[text("A long answer"), tool("get_log_overview", id="never")], [text("next")]])
+        gen = run_turn(user=self.user, conversation_id=None, mode="act", text="go", ui_context=self.ui, provider=p)
+        first = next(gen)
+        p.cid = first["conversation_id"]
+        events = [first] + list(gen)
+        self.assertIn({"type": "notice", "text": "Stopped."}, events)
+        self.assertEqual(events[-1]["type"], "done")
+        self.assertFalse([e for e in events if e["type"] == "tool_start"])
+        assert_valid_transcript(self, self.stored(p.cid))
+        # The flag is cleared and the lock released: the next message runs normally.
+        events, _ = self.run_turn(p, "again", conversation_id=p.cid)
+        self.assertEqual("".join(e["text"] for e in events if e["type"] == "text"), "next")
+
+    def test_stop_between_tools_answers_every_call(self):
+        from mcp_server import server
+
+        p = ScriptedProvider([[tool("get_log_overview", id="first"), tool("list_event_logs", id="second")]])
+        original = server.TOOLS_BY_NAME["get_log_overview"]
+        state = {}
+
+        def press_stop(ctx, args):
+            conv_store.request_cancel(self.user.id, state["cid"])
+            return {"ok": True}
+
+        stopping = original.__class__(**{**original.__dict__, "handler": press_stop})
+        gen = run_turn(user=self.user, conversation_id=None, mode="act", text="go", ui_context=self.ui, provider=p)
+        first = next(gen)
+        state["cid"] = first["conversation_id"]
+        with mock.patch.dict(server.TOOLS_BY_NAME, {"get_log_overview": stopping}):
+            events = [first] + list(gen)
+        self.assertEqual([e["name"] for e in events if e["type"] == "tool_start"], ["get_log_overview"])
+        msgs = self.stored(state["cid"])
+        assert_valid_transcript(self, msgs)
+        self.assertIn("cancelled", msgs[-1]["content"][1]["content"])
+        self.assertEqual(len(p.calls), 1)  # the model was not called again
 
     def test_long_conversations_are_condensed_not_edited(self):
         p = ScriptedProvider([[text("ok")], [text("still here")]])
@@ -402,6 +462,14 @@ class EndpointTests(TestCase):
         r = self.client.post("/api/assistant/confirm/", {"pending_action_id": action_id, "approved": True}, format="json")
         self.assertEqual(r.status_code, 422)
         self.assertEqual(r.json()["status"], "failed")
+
+    def test_cancel_endpoint_flags_the_turn(self):
+        r = self.client.post("/api/assistant/cancel/", {"conversation_id": "conv_abcdef123456"}, format="json")
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(conv_store.cancel_requested(self.user.id, "conv_abcdef123456"))
+        other = User.objects.create_user("other", password="pw")
+        self.assertFalse(conv_store.cancel_requested(other.id, "conv_abcdef123456"))
+        self.assertEqual(self.client.post("/api/assistant/cancel/", {"conversation_id": "../x"}, format="json").status_code, 400)
 
     def test_reset_forgets_the_conversation(self):
         events = sse_events(self.chat(ScriptedProvider([[text("hi")]])))

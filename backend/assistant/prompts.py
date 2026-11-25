@@ -23,7 +23,7 @@ TOUR_TARGETS: Dict[str, str] = {
     "nav-project": "Sidebar: Project section",
     "project-switcher": "Top-left switcher for project and event log",
     "file-selector": "Event-log file selector",
-    "upload-button": "Upload a new event log",
+    "upload-button": "Upload button on the Upload page; on any other page this spotlights the project switcher, whose 'Add project' entry starts an upload",
     "dashboard-add-btn": "Dashboards menu: Add Dashboard",
     "dashboard-name-input": "New dashboard dialog: name field",
     "dashboard-save-btn": "New dashboard dialog: save button",
@@ -59,6 +59,7 @@ _BASE = """You are the assistant built into TOTeM, an object-centric process min
 
 # Answering
 - Lead with the answer. Use short paragraphs, bullet lists and markdown tables for numbers. No filler, no restating the question.
+- Anything you write before or between tool calls is already on the user's screen. Keep it to a short line at most, and never repeat it in the final answer.
 - The chat renders plain markdown only: no LaTeX or math syntax ($...$, \\rightarrow, \\times). Write arrows as → and dimensions as 12×2.
 - When an answer rests on an assumption (for example which object type defines a case), state it in one line.
 - Explain process-mining concepts precisely when asked; connect them to the user's log when that helps.

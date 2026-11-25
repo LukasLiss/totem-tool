@@ -49,6 +49,7 @@ logger = logging.getLogger(__name__)
 
 MAX_STEPS = 12
 MAX_TOOL_RESULT_CHARS = 24_000
+LOCK_WAIT_SECONDS = 15
 
 
 def _result_block(tool_use: Dict[str, Any], payload: Any, is_error: bool = False) -> Dict[str, Any]:
@@ -76,6 +77,10 @@ def _check_client_action(name: str, args: Dict[str, Any]) -> None:
     elif name == "open_view":
         if args["view"] == "dashboard" and args.get("dashboard_id") is None:
             raise ToolError("view 'dashboard' needs a dashboard_id.", code="INVALID_ARGUMENT", hint="Call list_dashboards.")
+
+
+class _Cancelled(Exception):
+    """The user pressed Stop; the turn ends at the next event or tool."""
 
 
 class Turn:
@@ -121,6 +126,10 @@ class Turn:
             self.conv.messages.append(
                 {"role": "user", "content": [_result_block(tu, {"error": reason}, is_error=True) for tu in pending]}
             )
+
+    def _check_cancel(self) -> None:
+        if conv_store.cancel_requested(self.user.id, self.conv.id):
+            raise _Cancelled()
 
     # -- tool execution -----------------------------------------------------
 
@@ -194,14 +203,28 @@ class Turn:
         self.conv.messages.append(user_message)
         tool_specs = [t.spec() for t in self.tools]
 
+        text_so_far = False  # any answer text streamed earlier in this turn
         try:
             for step in range(MAX_STEPS):
                 final = None
-                for ev in self.provider.stream(self.system, self.conv.messages, tool_specs):
-                    if ev["type"] == "message":
-                        final = ev
-                    else:
+                step_has_text = False
+                stream = self.provider.stream(self.system, self.conv.messages, tool_specs)
+                try:
+                    for ev in stream:
+                        self._check_cancel()
+                        if ev["type"] == "message":
+                            final = ev
+                            continue
+                        if ev["type"] == "text" and not step_has_text:
+                            step_has_text = True
+                            # Text from separate model steps arrives as one stream for the
+                            # UI: start each step on a new paragraph instead of gluing it on.
+                            if text_so_far:
+                                yield {"type": "text", "text": "\n\n"}
+                            text_so_far = True
                         yield ev
+                finally:
+                    stream.close()  # stop the model call now, not when garbage-collected
                 if final is None:
                     raise ProviderError("unavailable", "The model stream ended without a response.")
 
@@ -237,6 +260,7 @@ class Turn:
                 results: List[Dict[str, Any]] = []
                 try:
                     for tu in tool_uses:
+                        self._check_cancel()
                         for ev in self._run_tool(tu):
                             if ev.get("type") == "tool_result":
                                 results.append(ev)
@@ -256,6 +280,9 @@ class Turn:
         except ProviderError as exc:
             self._close_dangling_tool_uses("Not executed: the model call failed.")
             yield {"type": "error", "code": exc.kind, "message": str(exc), "retryable": exc.retryable}
+        except _Cancelled:
+            self._close_dangling_tool_uses("Not executed: the user stopped the reply.")
+            yield {"type": "notice", "text": "Stopped."}
 
         yield {"type": "done", "usage": self.usage, "conversation_id": self.conv.id}
 
@@ -263,12 +290,15 @@ class Turn:
 def run_turn(*, user, conversation_id: Optional[str], mode: str, text: str, ui_context: Dict[str, Any], provider: Provider) -> Iterator[Dict[str, Any]]:
     """Run one user turn with conversation locking and persistence."""
     conv = conv_store.load_or_create(user.id, conversation_id, mode)
-    if not conv_store.acquire_turn(user.id, conv.id):
+    # Wait briefly: a turn the user just stopped releases the lock within moments.
+    if not conv_store.acquire_turn(user.id, conv.id, wait_seconds=LOCK_WAIT_SECONDS):
         yield {"type": "error", "code": "busy", "message": "A reply is still being generated in this conversation.", "retryable": True}
         yield {"type": "done", "usage": {}, "conversation_id": conv.id}
         return
+    conv_store.clear_cancel(user.id, conv.id)  # a stale Stop must not end this new turn
     try:
         yield from Turn(user=user, conversation=conv, provider=provider, ui_context=ui_context).run(text)
     finally:
         conv_store.save(conv)
+        conv_store.clear_cancel(user.id, conv.id)
         conv_store.release_turn(user.id, conv.id)

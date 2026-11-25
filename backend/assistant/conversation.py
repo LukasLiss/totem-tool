@@ -23,6 +23,7 @@ from django.core.cache import cache
 
 CACHE_PREFIX = "assistant_conv:"
 LOCK_PREFIX = "assistant_conv_lock:"
+CANCEL_PREFIX = "assistant_conv_cancel:"
 TTL_SECONDS = 24 * 3600
 LOCK_SECONDS = 15 * 60
 MAX_TRANSCRIPT_CHARS = 400_000
@@ -88,13 +89,43 @@ def add_note(user_id: int, conversation_id: Optional[str], note: str) -> None:
     save(conv)
 
 
-def acquire_turn(user_id: int, conversation_id: str) -> bool:
-    """Only one turn may run per conversation at a time."""
-    return cache.add(f"{LOCK_PREFIX}{user_id}:{conversation_id}", 1, timeout=LOCK_SECONDS)
+def acquire_turn(user_id: int, conversation_id: str, wait_seconds: float = 0.0) -> bool:
+    """Only one turn may run per conversation at a time.
+
+    ``wait_seconds`` lets a new message wait for a turn that was just stopped:
+    the stopped turn notices its cancel flag at the next event or tool and
+    releases the lock within moments.
+    """
+    key = f"{LOCK_PREFIX}{user_id}:{conversation_id}"
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        if cache.add(key, 1, timeout=LOCK_SECONDS):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.25)
 
 
 def release_turn(user_id: int, conversation_id: str) -> None:
     cache.delete(f"{LOCK_PREFIX}{user_id}:{conversation_id}")
+
+
+def request_cancel(user_id: int, conversation_id: str) -> None:
+    """Ask the running turn of this conversation to stop.
+
+    Needed because a closed browser connection does not reliably stop the
+    server side: under ASGI (Django 4.2) the turn would keep calling the model
+    until it finished on its own.
+    """
+    cache.set(f"{CANCEL_PREFIX}{user_id}:{conversation_id}", 1, timeout=LOCK_SECONDS)
+
+
+def cancel_requested(user_id: int, conversation_id: str) -> bool:
+    return bool(cache.get(f"{CANCEL_PREFIX}{user_id}:{conversation_id}"))
+
+
+def clear_cancel(user_id: int, conversation_id: str) -> None:
+    cache.delete(f"{CANCEL_PREFIX}{user_id}:{conversation_id}")
 
 
 def transcript_size(messages: List[Dict[str, Any]]) -> int:

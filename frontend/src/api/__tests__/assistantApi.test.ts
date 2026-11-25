@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import axios from "axios";
-import { streamChat, confirmAction, AssistantEvent, STORAGE_KEY_API_KEY, STORAGE_KEY_PROVIDER } from "../assistantApi";
+import { streamChat, confirmAction, cancelTurn, AssistantEvent, STORAGE_KEY_API_KEY, STORAGE_KEY_PROVIDER } from "../assistantApi";
 
 vi.mock("axios");
 const refreshAccessToken = vi.fn();
@@ -136,5 +136,17 @@ describe("assistantApi.confirmAction", () => {
 
     post.mockResolvedValueOnce({ status: 422, data: { status: "failed", error: "Dashboard 9 not found" } });
     expect(await confirmAction("act_3", true)).toMatchObject({ status: "failed", error: "Dashboard 9 not found" });
+  });
+});
+
+describe("assistantApi.cancelTurn", () => {
+  it("asks the server to stop the conversation's running turn and never throws", async () => {
+    const post = vi.mocked(axios.post);
+    post.mockResolvedValueOnce({ status: 200, data: { status: "cancelling" } });
+    await cancelTurn("conv_abc12345");
+    expect(post).toHaveBeenLastCalledWith(expect.stringMatching(/\/api\/assistant\/cancel\/$/), { conversation_id: "conv_abc12345" });
+
+    post.mockRejectedValueOnce(new Error("offline"));
+    await expect(cancelTurn("conv_abc12345")).resolves.toBeUndefined();
   });
 });

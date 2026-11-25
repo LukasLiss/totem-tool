@@ -3,6 +3,7 @@ HTTP endpoints of the assistant.
 
 POST /api/assistant/chat/          run one turn of the agent loop, streamed as SSE
 POST /api/assistant/confirm/       approve or decline a proposed change
+POST /api/assistant/cancel/        stop the reply being generated (Stop button)
 POST /api/assistant/reset/         forget a conversation
 POST /api/assistant/validate-key/  check an LLM API key without running inference
 """
@@ -180,6 +181,17 @@ def confirm_action(request):
         f"The user approved '{record['description']}'; it was applied. Result: {json.dumps(result, default=str)[:1500]}",
     )
     return Response({"status": "executed", "pending_action_id": record["id"], "tool_name": record["tool_name"], "result": result})
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def cancel_turn(request):
+    """Stop the reply being generated in a conversation (the Stop button)."""
+    conversation_id = (request.data or {}).get("conversation_id") if isinstance(request.data, dict) else None
+    if not conv_store.valid_conversation_id(conversation_id):
+        return Response({"error": "Invalid conversation_id."}, status=status.HTTP_400_BAD_REQUEST)
+    conv_store.request_cancel(request.user.id, conversation_id)
+    return Response({"status": "cancelling"})
 
 
 @api_view(["POST"])
