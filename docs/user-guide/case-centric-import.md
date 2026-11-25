@@ -38,6 +38,14 @@ object, `concept:name` the activity, `time:timestamp` the timestamp and `org:res
 resource. Trace attributes appear as `case:<key>` columns and become attributes of the case
 object.
 
+The dialog lists the attributes of the events it shows. An XES attribute that first appears
+further down the file is not in the list, so TOTeM keeps it anyway: a `case:<key>` attribute on
+the case object, anything else on the event. It says which ones after the import. Columns you set
+to **Ignore** stay ignored.
+
+Object attributes that change over time (a status, say) are recorded in time order, even when the
+file is not sorted by time. The earliest value is the object's initial one.
+
 ## Timestamp formats
 
 Choose **Detect automatically** to let TOTeM pick, **Unix time** in seconds
@@ -88,6 +96,9 @@ when the file is not valid UTF-8, and UTF-16 for Excel's "Unicode text" export. 
 accents look wrong in the table (`Pr�fung`), pick another encoding next to the separator.
 
 Cells of any length are fine, so long notes or comments import as well.
+
+A CSV that is already an OCEL 2.0 CSV (an `activity` column and `ot:<type>` columns) needs no
+mapping and imports directly, with the same separator and encoding detection.
 
 Column names that differ only in upper and lower case (`Status` and `status`), or that match a
 built-in field (`Activity` kept as an attribute), cannot both be stored as they are. TOTeM stores

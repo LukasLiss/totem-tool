@@ -122,6 +122,8 @@ export interface FlatLogImportReport {
   timezone: string;
   /** Columns stored under another name because theirs was taken (case-insensitively). */
   renamed_attributes?: Record<string, string>;
+  /** XES keys missing from the previewed sample, kept as attributes under these names. */
+  unlisted_attributes?: Record<string, string>;
 }
 
 /** Another format that also reads every sample value, but differently. */

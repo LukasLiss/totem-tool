@@ -73,7 +73,8 @@ export function skippedRowsSummary(
   if (!report) return null;
   const skipped = report.skipped_bad_timestamp + report.skipped_no_object + report.skipped_no_activity;
   const renamed = Object.entries(report.renamed_attributes ?? {});
-  if (skipped === 0 && renamed.length === 0) return null;
+  const unlisted = Object.entries(report.unlisted_attributes ?? {});
+  if (skipped === 0 && renamed.length === 0 && unlisted.length === 0) return null;
   const lines: string[] = [];
   if (report.skipped_bad_timestamp > 0) {
     const example = report.bad_timestamp_example ? ` (e.g. “${report.bad_timestamp_example}”)` : "";
@@ -89,6 +90,11 @@ export function skippedRowsSummary(
   // Names the database cannot hold twice (it ignores case) were renamed.
   for (const [column, stored] of renamed) {
     lines.push(`Column “${column}” is stored as “${stored}” (the name was taken)`);
+  }
+  // Keys that first appear after the rows the dialog showed: kept, not lost.
+  if (unlisted.length > 0) {
+    const names = unlisted.map(([column, stored]) => (column === stored ? `“${column}”` : `“${column}” (as “${stored}”)`));
+    lines.push(`Kept ${plural(unlisted.length, "attribute")} not in the preview: ${names.join(", ")}`);
   }
   return {
     title: skipped > 0

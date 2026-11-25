@@ -132,6 +132,16 @@ describe("skippedRowsSummary", () => {
     expect(summary?.lines).toEqual(["Column “Activity” is stored as “Activity_attr” (the name was taken)"]);
   });
 
+  it("mentions XES attributes that were not in the preview", () => {
+    const summary = skippedRowsSummary({
+      ...base, unlisted_attributes: { amount: "amount", "case:Activity": "Activity_attr" },
+    });
+    expect(summary?.title).toBe("Imported 10 events");
+    expect(summary?.lines).toEqual([
+      "Kept 2 attributes not in the preview: “amount”, “case:Activity” (as “Activity_attr”)",
+    ]);
+  });
+
   it("names each reason, with a timestamp that did not match", () => {
     const summary = skippedRowsSummary({
       ...base, events: 7, skipped_bad_timestamp: 2, skipped_no_object: 1, bad_timestamp_example: "2024-03-05",

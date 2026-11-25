@@ -469,3 +469,187 @@ def test_xes_with_megabytes_of_log_metadata_before_the_first_trace(tmp_path):
         assert _rows(db, "SELECT COUNT(*) FROM events") == [(8,)]
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# Review fixes
+# ---------------------------------------------------------------------------
+
+def test_repeated_header_names_never_clash_with_real_ones():
+    from totem_lib.ocel.flat_log import _unique_names
+
+    assert _unique_names(["a", "a", "a (2)"]) == ["a", "a (3)", "a (2)"]
+    assert _unique_names(["x", "", "x", "x"]) == ["x", "column_2", "x (2)", "x (3)"]
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("2024-03-01T10:00:00.5+01:00", "2024-03-01T10:00:00.500000+01:00"),
+    ("2024-03-01T10:00:00.1234567+01:00", "2024-03-01T10:00:00.123456+01:00"),
+    ("2024-03-01T10:00:00.12Z", "2024-03-01T10:00:00.120000+00:00"),
+])
+def test_iso_fractions_of_any_length(value, expected):
+    # Python 3.10's fromisoformat takes only 3 or 6 digits; the result must
+    # not depend on the interpreter.
+    assert parse_timestamp(value, "auto") == expected
+    assert parse_timestamp(value, "iso") == expected
+    assert suggest_timestamp_format([value]) == FORMAT_AUTO
+
+
+def test_object_attribute_history_follows_time_not_file_order(tmp_path):
+    path = tmp_path / "log.csv"
+    path.write_text(
+        "case;activity;time;status\n"
+        "c1;Close;2024-03-05 10:00:00;closed\n"
+        "c1;Open;2024-03-01 10:00:00;open\n"
+        "c1;Review;2024-03-03 10:00:00;review\n"
+        "c1;Check;2024-03-02 10:00:00;open\n",
+        encoding="utf-8",
+    )
+    mapping = {
+        "columns": [
+            {"column": "case", "role": "object_id"},
+            {"column": "activity", "role": "activity"},
+            {"column": "time", "role": "timestamp", "format": "yyyy-MM-dd HH:mm:ss"},
+            {"column": "status", "role": "object_attribute"},
+        ],
+    }
+    db = import_ocel_db(str(path), mapping=mapping)
+    try:
+        history = _rows(db, """
+            SELECT timestamp_unix, status FROM object_attribute_history
+            WHERE obj_id = 'c1' ORDER BY timestamp_unix
+        """)
+        # Initial value "open" (the earliest event), then review on 03-03,
+        # closed on 03-05; the second "open" on 03-02 is no change.
+        assert [v for _, v in history] == ["open", "review", "closed"]
+        assert history[0][0] == 0
+        assert history[1][0] == 1709460000  # 2024-03-03T10:00Z
+        assert history[2][0] == 1709632800  # 2024-03-05T10:00Z
+    finally:
+        db.close()
+
+
+def test_a_change_back_seen_later_in_the_file_is_kept(tmp_path):
+    # Same value on 03-01 and 03-05 next to each other in the file; a row
+    # further down shows another value on 03-03 in between.
+    path = tmp_path / "log.csv"
+    path.write_text(
+        "case;activity;time;status\n"
+        "c1;A;2024-03-01 10:00:00;open\n"
+        "c1;B;2024-03-05 10:00:00;open\n"
+        "c1;C;2024-03-03 10:00:00;held\n",
+        encoding="utf-8",
+    )
+    mapping = {
+        "columns": [
+            {"column": "case", "role": "object_id"},
+            {"column": "activity", "role": "activity"},
+            {"column": "time", "role": "timestamp", "format": "yyyy-MM-dd HH:mm:ss"},
+            {"column": "status", "role": "object_attribute"},
+        ],
+    }
+    db = import_ocel_db(str(path), mapping=mapping)
+    try:
+        history = _rows(db, """
+            SELECT status FROM object_attribute_history WHERE obj_id = 'c1' ORDER BY timestamp_unix
+        """)
+        assert [v for (v,) in history] == ["open", "held", "open"]
+    finally:
+        db.close()
+
+
+def test_xes_keys_the_mapping_does_not_list_are_kept():
+    # The dialog lists only the keys of its sample; one that first shows up
+    # later is not in the mapping and must not be dropped unseen.
+    mapping = {
+        "columns": [
+            {"column": "case:concept:name", "role": "object_id", "object_type": "case"},
+            {"column": "concept:name", "role": "activity"},
+            {"column": "time:timestamp", "role": "timestamp", "format": "auto"},
+            {"column": "lifecycle:transition", "role": "ignore"},
+        ],
+    }
+    report = {}
+    db = import_ocel_db(str(XES), mapping=mapping, import_report=report)
+    try:
+        unlisted = report["unlisted_attributes"]
+        assert unlisted["org:resource"] == "org:resource"
+        assert unlisted["case:customer"] == "customer"
+        assert "lifecycle:transition" not in unlisted  # ignored on purpose
+        assert _rows(db, "SELECT customer FROM objects WHERE obj_id = 'order-2'") == [("Globex",)]
+        assert _rows(db, """
+            SELECT COUNT(*) FROM events WHERE "org:resource" = 'Bob'
+        """) == [(3,)]
+    finally:
+        db.close()
+
+
+def test_csv_has_no_unlisted_attributes(tmp_path):
+    path = tmp_path / "log.csv"
+    path.write_text(CSV_TEXT, encoding="utf-8")
+    mapping = {
+        "delimiter": ";",
+        "columns": [
+            {"column": "Case ID", "role": "object_id"},
+            {"column": "Activity", "role": "activity"},
+            {"column": "Start Time", "role": "timestamp", "format": "dd.MM.yyyy HH:mm"},
+        ],
+    }
+    report = {}
+    db = import_ocel_db(str(path), mapping=mapping, import_report=report)
+    try:
+        assert report["unlisted_attributes"] == {}
+        columns = {r[0] for r in _rows(db, "SELECT column_name FROM (DESCRIBE events)")}
+        assert "Cost" not in columns and "Resource" not in columns
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("name,text,encoding", [
+    ("semicolon.csv", "id;activity;timestamp;ot:order\ne1;Create;2024-01-01T00:00:00Z;o1\n", "utf-8"),
+    ("tabs.tsv", "id\tactivity\ttimestamp\tot:order\ne1\tCreate\t2024-01-01T00:00:00Z\to1\n", "utf-8"),
+    ("excel.txt", "id;activity;timestamp;ot:order\ne1;Prüfen;2024-01-01T00:00:00Z;o1\n", "cp1252"),
+])
+def test_ocel_csv_with_other_separators_and_encodings_imports(tmp_path, name, text, encoding):
+    # The preview calls these OCEL 2.0 CSVs, so the client uploads them
+    # without a mapping; the import must read them the same way.
+    data = text.encode(encoding)
+    assert preview_flat_log(data, name)["kind"] == "ocel_csv"
+    path = tmp_path / name
+    path.write_bytes(data)
+    db = import_ocel_db(str(path))
+    try:
+        activity = "Prüfen" if encoding == "cp1252" else "Create"
+        assert _rows(db, "SELECT event_id, activity FROM events") == [("e1", activity)]
+        assert _rows(db, "SELECT obj_id, obj_type FROM objects") == [("o1", "order")]
+    finally:
+        db.close()
+
+
+def test_type_prefixed_object_ids_never_merge_with_real_ones(tmp_path):
+    # Resource "42" comes first, so the case "42" becomes "case:42" — which
+    # must not merge with a case that is really called "case:42".
+    path = tmp_path / "log.csv"
+    path.write_text(
+        "case;activity;time;resource\n"
+        "7;A;2024-03-01 10:00:00;42\n"
+        "42;B;2024-03-01 11:00:00;Ann\n"
+        "case:42;C;2024-03-01 12:00:00;Ann\n",
+        encoding="utf-8",
+    )
+    mapping = {
+        "columns": [
+            {"column": "case", "role": "object_id", "object_type": "case"},
+            {"column": "activity", "role": "activity"},
+            {"column": "time", "role": "timestamp", "format": "yyyy-MM-dd HH:mm:ss"},
+            {"column": "resource", "role": "resource"},
+        ],
+    }
+    db = import_ocel_db(str(path), mapping=mapping)
+    try:
+        cases = {r[0] for r in _rows(db, "SELECT obj_id FROM objects WHERE obj_type = 'case'")}
+        assert len(cases) == 3
+        assert {"7", "case:42"} <= cases
+        assert _rows(db, "SELECT obj_type FROM objects WHERE obj_id = '42'") == [("resource",)]
+    finally:
+        db.close()

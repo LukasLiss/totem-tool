@@ -53,7 +53,13 @@ import duckdb
 import ijson
 import pyarrow as pa
 
-from .flat_log import FlatLogMapping, flat_log_format, stage_flat_log
+from .flat_log import (
+    FlatLogMapping,
+    detect_delimiter,
+    detect_encoding,
+    flat_log_format,
+    stage_flat_log,
+)
 from .ocel_duckdb import OcelDuckDB, create_ocel_indexes, create_ocel_schema
 from .validation import OCELValidationException, validate_ocel
 
@@ -170,6 +176,8 @@ def import_ocel_db(
         "json": _stage_json,
         "xml": _stage_xml,
         "csv": _stage_csv,
+        "tsv": _stage_csv,
+        "txt": _stage_csv,
         "xes": _stage_flat,
     }
     if mapping is not None or fmt == "xes":
@@ -1221,10 +1229,17 @@ def _stage_csv(file_path: str, stage: _Staging, report: _Reporter, _threshold) -
     size = os.path.getsize(file_path)
     seen_objs: dict[str, str] = {}  # obj_id → obj_type, in first-seen order
 
-    # utf-8-sig strips the UTF-8 BOM (U+FEFF) that some tools add to CSV files
-    with open(file_path, newline="", encoding="utf-8-sig") as f:
+    # The encoding and separator are detected the way the import dialog's
+    # preview detects them (flat_log), which is what told the client this is
+    # an OCEL 2.0 CSV: a semicolon-separated Excel export or a .tsv imports
+    # too. utf-8-sig strips the UTF-8 BOM (U+FEFF) that some tools add.
+    with open(file_path, "rb") as probe:
+        encoding = detect_encoding(probe.read(1024 * 1024))
+    with open(file_path, newline="", encoding=encoding, errors="replace") as f:
+        delimiter = detect_delimiter(f.readline())
+        f.seek(0)
         tick = _FileProgress(f, size, report, 0.0, 0.5, "Reading CSV")
-        reader = csv.DictReader(f)
+        reader = csv.DictReader(f, delimiter=delimiter)
         fieldnames = reader.fieldnames or []
         ot_cols = [c for c in fieldnames if c.startswith("ot:")]
         ea_cols = [c for c in fieldnames if c.startswith("ea:")]

@@ -207,10 +207,18 @@ def _iso(dt: datetime, tz: tzinfo = timezone.utc) -> str:
     return dt.isoformat()
 
 
+# Fractional seconds of any length ("…:44.5", .NET's seven digits).
+_ISO_FRACTION = re.compile(r"(\d{2}:\d{2}:\d{2})[.,](\d+)")
+
+
 def _parse_iso(value: str) -> Optional[datetime]:
     norm = value.strip()
     if norm.endswith(("Z", "z")):
         norm = norm[:-1] + "+00:00"
+    # Python 3.10's fromisoformat takes exactly 3 or 6 fraction digits; pad
+    # or cut to 6 (microseconds, all a datetime holds) so every version
+    # reads the same values.
+    norm = _ISO_FRACTION.sub(lambda m: f"{m.group(1)}.{(m.group(2) + '000000')[:6]}", norm, count=1)
     try:
         return datetime.fromisoformat(norm)
     except ValueError:
@@ -300,15 +308,7 @@ def suggest_timestamp_format(values: Iterable[str]) -> Optional[str]:
     samples = [str(v).strip() for v in values if v is not None and str(v).strip()]
     if not samples:
         return None
-    iso_ok = True
-    for s in samples:
-        norm = s[:-1] + "+00:00" if s.endswith(("Z", "z")) else s
-        try:
-            datetime.fromisoformat(norm)
-        except ValueError:
-            iso_ok = False
-            break
-    if iso_ok:
+    if all(_parse_iso(s) is not None for s in samples):
         return FORMAT_AUTO
     for preset in TIMESTAMP_PRESETS:
         if all(parse_timestamp(s, preset) for s in samples):
@@ -449,16 +449,22 @@ def _iter_xes(source, tolerate_truncation: bool = False) -> Iterator[dict]:
 
 
 def _unique_names(header: list[str]) -> list[str]:
-    seen: dict[str, int] = {}
+    """Header names made distinct: a repeated name gets `` (2)``, `` (3)``, ...
+
+    A generated name never takes one that is in the header itself, so
+    ``a, a, a (2)`` becomes ``a, a (3), a (2)`` and no two columns share a key.
+    """
+    names = [(raw or "").strip() or f"column_{i + 1}" for i, raw in enumerate(header)]
+    in_header = set(names)
+    taken: set[str] = set()
     out = []
-    for i, raw in enumerate(header):
-        name = (raw or "").strip() or f"column_{i + 1}"
-        if name in seen:
-            seen[name] += 1
-            name = f"{name} ({seen[name]})"
-        else:
-            seen[name] = 1
-        out.append(name)
+    for name in names:
+        candidate, k = name, 1
+        while candidate in taken or (candidate != name and candidate in in_header):
+            k += 1
+            candidate = f"{name} ({k})"
+        taken.add(candidate)
+        out.append(candidate)
     return out
 
 
@@ -911,16 +917,23 @@ def unique_attribute_names(names: list[str], reserved: Iterable[str] = ()) -> li
     """
     fixed = {r.lower() for r in reserved}
     taken = set(fixed)
-    out = []
-    for name in names:
-        candidate = f"{name}_attr" if name.lower() in fixed else name
-        k = 2
-        while candidate.lower() in taken:
-            candidate = f"{name}_{k}"
-            k += 1
-        taken.add(candidate.lower())
-        out.append(candidate)
-    return out
+    return [_claim_attribute_name(name, fixed, taken) for name in names]
+
+
+def _claim_attribute_name(name: str, fixed: set[str], taken: set[str]) -> str:
+    """One name for :func:`unique_attribute_names`; adds it to ``taken``."""
+    candidate = f"{name}_attr" if name.lower() in fixed else name
+    k = 2
+    while candidate.lower() in taken:
+        candidate = f"{name}_{k}"
+        k += 1
+    taken.add(candidate.lower())
+    return candidate
+
+
+def _sort_key(iso: str) -> float:
+    """Seconds since the epoch of an ISO string made by :func:`_iso`."""
+    return datetime.fromisoformat(iso).timestamp()
 
 
 def stage_flat_log(file_path: str, mapping: FlatLogMapping, buffers, tick=None, raw=None) -> dict:
@@ -932,7 +945,11 @@ def stage_flat_log(file_path: str, mapping: FlatLogMapping, buffers, tick=None, 
 
     Returns what happened, for the user: ``{"rows", "events",
     "skipped_no_activity", "skipped_no_object", "skipped_bad_timestamp",
-    "bad_timestamp_example", "timestamp_format", "timezone"}``. Raises
+    "bad_timestamp_example", "timestamp_format", "timezone",
+    "renamed_attributes", "unlisted_attributes"}`` (the last two map a
+    column to the name it is stored under: renamed because its own was
+    taken, or an XES key the mapping did not list, kept as an attribute).
+    Raises
     ``FlatLogMappingError`` when no row at all could be imported, with the
     reason that hit most.
     """
@@ -961,12 +978,34 @@ def stage_flat_log(file_path: str, mapping: FlatLogMapping, buffers, tick=None, 
     object_attr_cols = mapping.by_role(ROLE_OBJECT_ATTRIBUTE)
     wanted_event = [c.name or c.column for c in event_attr_cols]
     wanted_object = [object_attr_name(c) for c in object_attr_cols]
-    stored_event = unique_attribute_names(wanted_event, _RESERVED_EVENT_ATTRS)
-    stored_object = unique_attribute_names(wanted_object, _RESERVED_OBJECT_ATTRS)
+    fixed_event = {r.lower() for r in _RESERVED_EVENT_ATTRS}
+    fixed_object = {r.lower() for r in _RESERVED_OBJECT_ATTRS}
+    taken_event, taken_object = set(fixed_event), set(fixed_object)
+    stored_event = [_claim_attribute_name(w, fixed_event, taken_event) for w in wanted_event]
+    stored_object = [_claim_attribute_name(w, fixed_object, taken_object) for w in wanted_object]
 
     event_attrs = [(c.column, name) for c, name in zip(event_attr_cols, stored_event)]
     object_attrs = [(c.column, c.target or first_object_col, name)
                     for c, name in zip(object_attr_cols, stored_object)]
+
+    # The dialog only lists the keys of the events in its sample. An XES
+    # attribute that first appears further down the file was never offered,
+    # so it is kept rather than dropped unseen: a trace attribute (case:<key>)
+    # on the first object column's objects, anything else on the event.
+    # A CSV has every column in its header, so this is XES only.
+    keep_unlisted = flat_log_format(file_path) == "xes"
+    listed = {c.column for c in mapping.columns}
+    unlisted: dict[str, str] = {}  # column → stored name, for the report
+
+    def add_unlisted(col: str) -> None:
+        listed.add(col)
+        if col.startswith("case:") and len(col) > 5:
+            name = _claim_attribute_name(col[5:], fixed_object, taken_object)
+            object_attrs.append((col, first_object_col, name))
+        else:
+            name = _claim_attribute_name(col, fixed_event, taken_event)
+            event_attrs.append((col, name))
+        unlisted[col] = name
     # Reported back so the user can find a column stored under a new name.
     renamed = {
         c.column: stored
@@ -977,18 +1016,35 @@ def stage_flat_log(file_path: str, mapping: FlatLogMapping, buffers, tick=None, 
     }
 
     seen_objects: dict[tuple[str, str], None] = {}
-    # (object type, object id) → {attribute: last value written}
-    last_obj_attr: dict[tuple[str, str], dict[str, str]] = {}
+    # (object id, attribute) → runs of one value, in file order:
+    # [first time (sort key), first time (ISO), last time (sort key),
+    #  last time (ISO), value]. A file need not be sorted by time, so the
+    # history is written only after the last row, ordered by time. A run
+    # keeps both ends so that a change back to the value at a time between
+    # them, seen later in the file, still shows; a sorted file needs one run
+    # per real change.
+    obj_attr_runs: dict[tuple[str, str], list[list]] = {}
     counts = {"events": 0, "skipped_no_activity": 0, "skipped_no_object": 0,
               "skipped_bad_timestamp": 0}
     first_bad_ts: Optional[str] = None
-    # Object ids are namespaced by type only when two types share an id;
-    # OCEL ids are global, so "1" as a case and "1" as a resource would merge.
-    id_owner: dict[str, str] = {}
+    # OCEL object ids are global, so "1" as a case and "1" as a resource
+    # would merge. The first type to use an id keeps it as is; another type
+    # gets "<type>:<id>", or a further suffix should that be taken too (a
+    # real id may be spelled "resource:1"). Streaming, the file order decides
+    # which type comes first.
+    object_keys: dict[tuple[str, str], str] = {}
+    key_taken: set[str] = set()
 
     def object_key(obj_type: str, raw_id: str) -> str:
-        owner = id_owner.setdefault(raw_id, obj_type)
-        return raw_id if owner == obj_type else f"{obj_type}:{raw_id}"
+        key = object_keys.get((obj_type, raw_id))
+        if key is None:
+            key, k = raw_id, 1
+            while key in key_taken:
+                key = f"{obj_type}:{raw_id}" if k == 1 else f"{obj_type}:{raw_id} ({k})"
+                k += 1
+            object_keys[(obj_type, raw_id)] = key
+            key_taken.add(key)
+        return key
 
     rows = iter_flat_rows(file_path, mapping.delimiter, raw=raw, encoding=mapping.encoding)
     if ts_fmt == FORMAT_AUTO:
@@ -1027,6 +1083,10 @@ def stage_flat_log(file_path: str, mapping: FlatLogMapping, buffers, tick=None, 
         n += 1
         event_id = f"e{n:0{_EVENT_ID_DIGITS}d}"
         buffers.add_event(event_id, activity, ts_value)
+        if keep_unlisted:
+            for col in row:
+                if col not in listed:
+                    add_unlisted(col)
         for col, name in event_attrs:
             value = (row.get(col) or "").strip()
             if value:
@@ -1038,24 +1098,44 @@ def stage_flat_log(file_path: str, mapping: FlatLogMapping, buffers, tick=None, 
                 seen_objects[(obj_type, obj_id)] = None
                 buffers.add_object(obj_id, obj_type)
             buffers.add_event_object(event_id, obj_id, None)
+        ts_key = None
         for col, target, name in object_attrs:
             owner = obj_by_col.get(target)
             value = (row.get(col) or "").strip()
             if owner is None or not value:
                 continue
-            last = last_obj_attr.setdefault(owner, {})
-            if last.get(name) == value:
-                continue
-            # The first value is the object's initial one; later changes are
-            # recorded at the time of the event that shows them.
-            when = _EPOCH_ISO if name not in last else ts_value
-            last[name] = value
-            buffers.add_object_attr(owner[1], when, name, value)
+            if ts_key is None:
+                ts_key = _sort_key(ts_value)
+            runs = obj_attr_runs.setdefault((owner[1], name), [])
+            last = runs[-1] if runs else None
+            if last is not None and last[4] == value and ts_key >= last[2]:
+                last[2], last[3] = ts_key, ts_value  # the same value, later
+            else:
+                runs.append([ts_key, ts_value, ts_key, ts_value, value])
 
         if buffers.size() >= BATCH_SIZE:
             buffers.flush()
             if tick is not None:
                 tick()
+
+    # Object attribute histories, in time order (file order breaks ties):
+    # the earliest value is the object's initial one, and each change is
+    # recorded at the time of the first event that shows it.
+    for (obj_id, name), runs in obj_attr_runs.items():
+        points = []
+        for start_key, start_iso, end_key, end_iso, value in runs:
+            points.append((start_key, start_iso, value))
+            if end_key != start_key:
+                points.append((end_key, end_iso, value))
+        points.sort(key=lambda p: p[0])  # stable: file order on ties
+        current = None
+        for i, (_, iso, value) in enumerate(points):
+            if i and value == current:
+                continue
+            buffers.add_object_attr(obj_id, _EPOCH_ISO if i == 0 else iso, name, value)
+            current = value
+        if buffers.size() >= BATCH_SIZE:
+            buffers.flush()
 
     buffers.flush()
     counts["events"] = n
@@ -1064,6 +1144,7 @@ def stage_flat_log(file_path: str, mapping: FlatLogMapping, buffers, tick=None, 
     counts["timestamp_format"] = ts_fmt
     counts["timezone"] = ts_zone
     counts["renamed_attributes"] = renamed
+    counts["unlisted_attributes"] = unlisted
     if n == 0:
         if counts["skipped_bad_timestamp"] and first_bad_ts:
             raise FlatLogMappingError(
