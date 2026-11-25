@@ -449,7 +449,6 @@ export const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile
   const [, setError] = useState(null);
 
   useEffect(() => {
-    let isMounted = true;
     const handleProcessFile = async () => {
       if (!selectedFile?.id) {
         setProcessedResult(null);
@@ -466,9 +465,7 @@ export const NumberOfEventsComponent: React.FC<ComponentProps> = ({ selectedFile
         console.error("Failed to process file in NumberOfEventsComponent:", err);
         setError("Failed to load data");
       } finally {
-        if (isMounted) {
-          setIsLoading(false);
-        }
+        setIsLoading(false);
       }
     };
 

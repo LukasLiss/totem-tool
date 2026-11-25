@@ -175,6 +175,7 @@ const GridContent: React.FC = () => {
     return () => {
       window.removeEventListener("totem:refresh-dashboard", handleRefreshEvent);
     };
+    // Only a different dashboard should tear the grid down and rebuild it.
   }, [selectedDashboard]);
 
   const handleSave = async () => {
