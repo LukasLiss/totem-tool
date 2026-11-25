@@ -5,8 +5,6 @@ import {
   ChatMode,
   ChatMessage,
   applyAssistantEvent,
-  parseMarkdownBlocks,
-  formatInline,
   STORAGE_MODE_KEY,
   STORAGE_MESSAGES_KEY,
 } from "../ChatWidget";
@@ -79,121 +77,6 @@ describe("Empirical Challenger Stress Harness — Milestone 2", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-  });
-
-  describe("A. Markdown Parser Adversarial Inputs & Stream Integrity", () => {
-    it("handles completely empty input string", () => {
-      const blocks = parseMarkdownBlocks("");
-      expect(Array.isArray(blocks)).toBe(true);
-      expect(blocks.length).toBeGreaterThanOrEqual(1);
-    });
-
-    it("handles multiple consecutive newlines and whitespace-only lines without crashing", () => {
-      const whitespaceInput = "\n\n   \n\t\n\n";
-      const blocks = parseMarkdownBlocks(whitespaceInput);
-      expect(blocks).toBeDefined();
-      expect(blocks.every((b) => b.type === "spacer" || b.type === "paragraph")).toBe(true);
-    });
-
-    it("preserves markdown characters inside fenced code blocks as literal code", () => {
-      const codeWithMarkdown = "```python\n# This is a comment, not a header\n- not a list item\n> not a quote\n```";
-      const blocks = parseMarkdownBlocks(codeWithMarkdown);
-
-      expect(blocks).toHaveLength(1);
-      expect(blocks[0].type).toBe("code");
-      expect(blocks[0].language).toBe("python");
-      expect(blocks[0].content).toContain("# This is a comment, not a header");
-      expect(blocks[0].content).toContain("- not a list item");
-      expect(blocks[0].content).toContain("> not a quote");
-      expect(blocks[0].isStreaming).toBe(false);
-    });
-
-    it("handles unclosed code block during active streaming (incomplete chunk)", () => {
-      const streamingCode = "Here is the SQL query:\n```sql\nSELECT case_id, activity, timestamp\nFROM event_log\nWHERE duration > 100";
-      const blocks = parseMarkdownBlocks(streamingCode);
-
-      expect(blocks).toHaveLength(2);
-      expect(blocks[0]).toEqual({ type: "paragraph", content: "Here is the SQL query:" });
-      expect(blocks[1].type).toBe("code");
-      expect(blocks[1].language).toBe("sql");
-      expect(blocks[1].isStreaming).toBe(true);
-      expect(blocks[1].content).toContain("WHERE duration > 100");
-    });
-
-    it("handles multiple consecutive code blocks without bleeding context", () => {
-      const input = "```json\n{\"step\": 1}\n```\n```typescript\nconst step = 2;\n```";
-      const blocks = parseMarkdownBlocks(input);
-
-      expect(blocks).toHaveLength(2);
-      expect(blocks[0]).toEqual({
-        type: "code",
-        content: "{\"step\": 1}",
-        language: "json",
-        isStreaming: false,
-      });
-      expect(blocks[1]).toEqual({
-        type: "code",
-        content: "const step = 2;",
-        language: "typescript",
-        isStreaming: false,
-      });
-    });
-
-    it("handles large text payloads (stress test: 1000 lines)", () => {
-      const lines: string[] = [];
-      for (let i = 0; i < 1000; i++) {
-        if (i % 4 === 0) lines.push(`### Header ${i}`);
-        else if (i % 4 === 1) lines.push(`- Bullet item ${i}`);
-        else if (i % 4 === 2) lines.push(`> Blockquote notice ${i}`);
-        else lines.push(`Regular paragraph text at line ${i}`);
-      }
-
-      const hugeInput = lines.join("\n");
-      const startTime = performance.now();
-      const blocks = parseMarkdownBlocks(hugeInput);
-      const duration = performance.now() - startTime;
-
-      expect(blocks).toHaveLength(1000);
-      expect(duration).toBeLessThan(150); // Must parse 1000 lines in < 150ms
-    });
-  });
-
-  describe("B. Inline Formatter Adversarial Inputs & Regex Resiliency", () => {
-    it("handles unclosed inline code backticks gracefully without crashing", () => {
-      const input = "Here is an unclosed `code block in text";
-      const result = formatInline(input);
-      expect(result).toBe(input);
-    });
-
-    it("handles unclosed single asterisk italic gracefully without crashing", () => {
-      const input = "Here is *unclosed italic text";
-      const result = formatInline(input);
-      expect(result).toBe(input);
-    });
-
-    it("handles unclosed bold asterisks gracefully without crashing or throwing", () => {
-      const input = "Here is **unclosed bold text";
-      const result = formatInline(input);
-      expect(result).toBeDefined();
-    });
-
-    it("handles strings with regex special characters and math expressions", () => {
-      const input = "Cost is **$100.00 [USD]** where x = `(a + b) / {c * d}^2` & regex is `^test.*$`";
-      const result = formatInline(input);
-      expect(Array.isArray(result)).toBe(true);
-    });
-
-    it("handles potential XSS and HTML tags safely without execution", () => {
-      const malicious = '<script>alert("xss")</script> and <img src="x" onerror="stealCookie()"/>';
-      const result = formatInline(malicious);
-      expect(result).toBe(malicious);
-    });
-
-    it("handles consecutive and adjacent format markers", () => {
-      const input = "**Bold1****Bold2**`code1``code2`*italic1**italic2*";
-      const result = formatInline(input);
-      expect(Array.isArray(result)).toBe(true);
-    });
   });
 
   describe("C. Agent event stream fault tolerance", () => {

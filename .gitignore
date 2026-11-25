@@ -294,5 +294,6 @@ totem_lib/evaluation/results/runs/
 # Assistant evaluation: keep its README and tests (repo-wide rules ignore *.md and tests/);
 # run outputs stay local (copy a summary out explicitly to keep it)
 !evaluation/assistant_eval/README.md
+!frontend/e2e/README.md
 !evaluation/assistant_eval/tests/
 evaluation/assistant_eval/results/
