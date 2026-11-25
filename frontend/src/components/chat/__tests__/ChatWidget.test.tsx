@@ -145,7 +145,7 @@ describe("ChatWidget contracts, state machine transitions, and tour integrations
         { type: "tool_start", id: "t1", name: "get_log_overview", summary: "Reading log overview", kind: "read" },
         { type: "tool_start", id: "t2", name: "get_log_overview", summary: "Reading log overview", kind: "read" },
         { type: "tool_end", id: "t2", name: "get_log_overview", ok: false, error: "No event log", duration_ms: 3 },
-        { type: "tool_end", id: "t1", name: "get_log_overview", ok: true, duration_ms: 1200 },
+        { type: "tool_end", id: "t1", name: "get_log_overview", ok: true, preview: "events 6", duration_ms: 1200 },
       ]);
       expect(msg.toolExecutions?.map((t) => [t.id, t.status])).toEqual([
         ["t1", "completed"],
@@ -153,6 +153,7 @@ describe("ChatWidget contracts, state machine transitions, and tour integrations
       ]);
       expect(msg.toolExecutions?.[1].error).toBe("No event log");
       expect(msg.toolExecutions?.[0].durationMs).toBe(1200);
+      expect(msg.toolExecutions?.[0].preview).toBe("events 6");
     });
 
     it("collects proposed changes for approval", () => {

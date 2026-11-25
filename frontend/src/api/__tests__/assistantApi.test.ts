@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import axios from "axios";
-import { streamChat, confirmAction, cancelTurn, AssistantEvent, STORAGE_KEY_API_KEY, STORAGE_KEY_PROVIDER } from "../assistantApi";
+import { streamChat, confirmAction, cancelTurn, usesClaude, AssistantEvent, STORAGE_KEY_API_KEY, STORAGE_KEY_MODEL, STORAGE_KEY_PROVIDER } from "../assistantApi";
 
 vi.mock("axios");
 const refreshAccessToken = vi.fn();
@@ -68,6 +68,25 @@ describe("assistantApi.streamChat", () => {
     const body = JSON.parse(String(init?.body));
     expect(body).toEqual({ message: "hi", mode: "act", context: { active_file_id: 3 }, conversation_id: "conv_abc12345" });
     expect(JSON.stringify(body)).not.toContain("secret");
+  });
+
+  it("sends the chosen Claude model and resume flag, but no Claude model with other providers", async () => {
+    localStorage.setItem(STORAGE_KEY_API_KEY, "sk-ant-secret");
+    localStorage.setItem(STORAGE_KEY_PROVIDER, "anthropic");
+    localStorage.setItem(STORAGE_KEY_MODEL, "claude-sonnet-5-5");
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(sseResponse(['data: {"type":"done"}\n\n']));
+    await collect(streamChat({ ...turn, resume: true, conversationId: "conv_abc12345" }));
+    let body = JSON.parse(String(fetchSpy.mock.calls[0][1]?.body));
+    expect(body.model).toBe("claude-sonnet-5-5");
+    expect(body.resume).toBe(true);
+
+    localStorage.setItem(STORAGE_KEY_PROVIDER, "gemini");
+    localStorage.setItem(STORAGE_KEY_API_KEY, "AIza-key");
+    fetchSpy.mockResolvedValue(sseResponse(['data: {"type":"done"}\n\n']));
+    await collect(streamChat(turn));
+    body = JSON.parse(String(fetchSpy.mock.calls[1][1]?.body));
+    expect(body.model).toBeUndefined();
+    expect(usesClaude("", "sk-ant-x")).toBe(true);
   });
 
   it("parses frames split across reads, CRLF line endings and multi-byte characters", async () => {

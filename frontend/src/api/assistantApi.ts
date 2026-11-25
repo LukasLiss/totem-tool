@@ -5,6 +5,19 @@ const ASSISTANT_URL = getApiUrl("/api/assistant");
 
 export const STORAGE_KEY_API_KEY = "totem_llm_api_key";
 export const STORAGE_KEY_PROVIDER = "totem_llm_provider";
+export const STORAGE_KEY_MODEL = "totem_llm_model";
+
+/** Claude models offered in the chat header. Defaults to the server's choice (Opus 5.5). */
+export const CLAUDE_MODELS = [
+  { id: "claude-opus-5-5", label: "Opus 5.5", hint: "Most capable" },
+  { id: "claude-sonnet-5-5", label: "Sonnet 5.5", hint: "Faster, about half the cost" },
+  { id: "claude-haiku-5-5", label: "Haiku 5.5", hint: "Fastest and cheapest" },
+] as const;
+
+/** True when the saved key will be used with Claude (explicit provider or an sk-ant- key). */
+export function usesClaude(provider: string, apiKey: string): boolean {
+  return provider === "anthropic" || (!provider && apiKey.startsWith("sk-ant-"));
+}
 
 export type ChatMode = "teach" | "act";
 
@@ -35,7 +48,7 @@ export type AssistantEvent =
   | { type: "text"; text: string }
   | { type: "status"; status: "thinking" }
   | { type: "tool_start"; id: string; name: string; summary: string; kind: "read" | "propose" | "client" }
-  | { type: "tool_end"; id: string; name: string; ok: boolean; error?: string; duration_ms: number }
+  | { type: "tool_end"; id: string; name: string; ok: boolean; error?: string; preview?: string; duration_ms: number }
   | { type: "pending_action"; id: string; name: string; description: string; arguments: Record<string, unknown> }
   | { type: "client_action"; id: string; name: string; arguments: Record<string, unknown> }
   | { type: "notice"; text: string }
@@ -49,14 +62,15 @@ export interface ValidateKeyResponse {
   error?: string;
 }
 
-function storedCredentials(): { apiKey: string; provider: string } {
+function storedCredentials(): { apiKey: string; provider: string; model: string } {
   try {
-    return {
-      apiKey: localStorage.getItem(STORAGE_KEY_API_KEY) || "",
-      provider: localStorage.getItem(STORAGE_KEY_PROVIDER) || "",
-    };
+    const apiKey = localStorage.getItem(STORAGE_KEY_API_KEY) || "";
+    const provider = localStorage.getItem(STORAGE_KEY_PROVIDER) || "";
+    // A Claude model name only makes sense with a Claude key.
+    const model = usesClaude(provider, apiKey) ? localStorage.getItem(STORAGE_KEY_MODEL) || "" : "";
+    return { apiKey, provider, model };
   } catch {
-    return { apiKey: "", provider: "" };
+    return { apiKey: "", provider: "", model: "" };
   }
 }
 
@@ -120,13 +134,15 @@ export async function* parseEventStream(body: ReadableStream<Uint8Array>): Async
 export interface StreamChatOptions {
   message: string;
   mode: ChatMode;
+  /** Continue after the user approved or declined proposals (no new message). */
+  resume?: boolean;
   context?: AssistantContext;
   conversationId?: string | null;
   signal?: AbortSignal;
 }
 
 async function postChat(opts: StreamChatOptions, token: string | null): Promise<Response> {
-  const { apiKey, provider } = storedCredentials();
+  const { apiKey, provider, model } = storedCredentials();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "text/event-stream",
@@ -144,6 +160,8 @@ async function postChat(opts: StreamChatOptions, token: string | null): Promise<
       mode: opts.mode,
       context: opts.context ?? {},
       conversation_id: opts.conversationId || undefined,
+      resume: opts.resume || undefined,
+      model: model || undefined,
     }),
   });
 }

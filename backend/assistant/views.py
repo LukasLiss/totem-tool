@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, AsyncIterator, Dict, Iterator
 
 from asgiref.sync import sync_to_async
@@ -35,6 +36,7 @@ from .providers import ProviderError, get_provider, validate_provider_key
 logger = logging.getLogger(__name__)
 
 MAX_MESSAGE_CHARS = 20_000
+MODEL_RE = re.compile(r"^[A-Za-z0-9._:/-]{1,80}$")
 RESUME_PROMPT = (
     "(No new message: I responded to your proposals; the outcomes are above. "
     "Continue the task if steps remain, otherwise confirm in one short line.)"
@@ -109,7 +111,9 @@ class ChatView(APIView):
         # The key travels in a header so it never lands in request-body logs or stored context.
         api_key = request.META.get("HTTP_X_LLM_KEY") or ""
         provider_name = request.META.get("HTTP_X_LLM_PROVIDER") or body.get("provider") or ""
-        model = body.get("model") if isinstance(body.get("model"), str) else None
+        model = body.get("model") if isinstance(body.get("model"), str) and body.get("model") else None
+        if model is not None and not MODEL_RE.match(model):
+            return Response({"error": "Invalid model name."}, status=status.HTTP_400_BAD_REQUEST)
         try:
             provider = get_provider(provider_name, api_key, model=model)
         except ProviderError as exc:

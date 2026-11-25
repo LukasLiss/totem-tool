@@ -110,6 +110,28 @@ def _result_block(tool_use: Dict[str, Any], payload: Any, is_error: bool = False
     }
 
 
+_ID_KEYS = {"file_id", "project_id", "dashboard_id", "component_id", "asset_id", "id", "tau", "threshold"}
+
+
+def _preview(result: Any) -> Optional[str]:
+    """A one-line, data-light summary of a tool result for the UI chip (counts, not contents)."""
+    if not isinstance(result, dict) or "error" in result:
+        return None
+    parts: List[str] = []
+    for key, value in result.items():
+        if key in _ID_KEYS or key.endswith("_truncated") or isinstance(value, bool):
+            continue
+        label = key.replace("_", " ")
+        if isinstance(value, (int, float)):
+            parts.append(f"{label} {value:,}" if isinstance(value, int) else f"{label} {value:,.2f}")
+        elif isinstance(value, list):
+            parts.append(f"{label}: {len(value)}")
+        if len(parts) == 4:
+            break
+    text = ", ".join(parts)
+    return text[:140] or None
+
+
 def _check_client_action(name: str, args: Dict[str, Any]) -> None:
     if name == "start_tour":
         unknown = [s["tour_id"] for s in args["steps"] if s["tour_id"] not in TOUR_TARGETS]
@@ -203,10 +225,12 @@ class Turn:
         summary = tool.summary(args)
         yield {"type": "tool_start", "id": tu["id"], "name": name, "summary": summary, "kind": tool.kind.value}
         started = time.monotonic()
+        preview: Optional[str] = None
         try:
             validate_arguments(tool, args)
             if tool.kind is ToolKind.READ:
                 result = call_tool(name, args, self.tool_ctx)
+                preview = _preview(result)
                 block = _result_block(tu, result)
             elif tool.kind is ToolKind.PROPOSE:
                 action_id = action_registry.register_action(
@@ -242,6 +266,8 @@ class Turn:
 
         end = {"type": "tool_end", "id": tu["id"], "name": name, "ok": not block["is_error"], "duration_ms": int((time.monotonic() - started) * 1000)}
         self.trace["tools"].append({"name": name, "ok": end["ok"], "ms": end["duration_ms"]})
+        if preview and not block["is_error"]:
+            end["preview"] = preview
         if block["is_error"]:
             try:
                 end["error"] = json.loads(block["content"]).get("error")

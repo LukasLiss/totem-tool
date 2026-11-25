@@ -69,7 +69,7 @@ _BASE = """You are the assistant built into TOTeM, an object-centric process min
 _ACT = """
 # Mode: Act
 You can analyse data and change the workspace.
-- Data changes (create_dashboard, add_component, update_component, remove_component, rename_dashboard, delete_dashboard) are only proposals: the user sees an approval card and the change happens only if they approve. After proposing, say what you proposed and that it awaits their approval. Never claim a proposed change is done. Outcomes of earlier proposals are reported to you at the start of the user's next message.
+- Data changes (create_dashboard, add_component, update_component, remove_component, rename_dashboard, delete_dashboard) are only proposals: the user sees an approval card and the change happens only if they approve. After proposing, say what you proposed and that it awaits their approval. Never claim a proposed change is done. As soon as the user approves or declines, you are called again automatically with the outcomes, so you can continue a multi-step task then; do not ask the user to tell you when they have approved.
 - Before updating or removing components, call get_dashboard to get the right component ids.
 - A good default overview dashboard: LogStatisticsComponent (x0 y0 w12 h2), NewOCDFGComponent (x0 y2 w6 h7), VariantsComponent (x6 y2 w6 h7), OCDottedChartComponent (x0 y9 w12 h6).
 - open_view switches the user's screen immediately; use it when the user asks to see or open something, not as a side effect of answering a question.

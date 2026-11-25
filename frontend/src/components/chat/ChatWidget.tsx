@@ -39,6 +39,9 @@ import {
   AssistantEvent,
   STORAGE_KEY_API_KEY,
   STORAGE_KEY_PROVIDER,
+  STORAGE_KEY_MODEL,
+  CLAUDE_MODELS,
+  usesClaude,
   TourStep,
 } from "@/api/assistantApi";
 import { ApiKeyModal } from "./ApiKeyModal";
@@ -96,7 +99,7 @@ export function applyAssistantEvent(msg: ChatMessage, event: AssistantEvent): Ch
         ...msg,
         toolExecutions: (msg.toolExecutions || []).map((t) =>
           t.id === event.id
-            ? { ...t, status: event.ok ? "completed" : "failed", error: event.error, durationMs: event.duration_ms }
+            ? { ...t, status: event.ok ? "completed" : "failed", error: event.error, preview: event.preview, durationMs: event.duration_ms }
             : t
         ),
       };
@@ -328,6 +331,12 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
   const [inputValue, setInputValue] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [abortController, setAbortController] = useState<AbortController | null>(null);
+
+  // Claude model chosen in the header (only shown when the saved key is a Claude key).
+  const [claudeModel, setClaudeModel] = useState<string>(() => readStorage(STORAGE_KEY_MODEL) || CLAUDE_MODELS[0].id);
+  const [claudeSelected, setClaudeSelected] = useState<boolean>(() =>
+    usesClaude(readStorage(STORAGE_KEY_PROVIDER) || "", readStorage(STORAGE_KEY_API_KEY) || "")
+  );
 
   // Server-side conversation per mode: the backend keeps the full transcript
   // (tool calls and results), the browser only keeps the id and what it renders.
@@ -570,16 +579,16 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
     );
   };
 
-  const handleSendMessage = async (promptToSend?: string) => {
-    const text = (promptToSend ?? inputValue).trim();
-    if (!text || isStreaming) return;
+  const handleSendMessage = async (promptToSend?: string, opts: { resume?: boolean } = {}) => {
+    const text = opts.resume ? "" : (promptToSend ?? inputValue).trim();
+    if ((!text && !opts.resume) || isStreaming) return;
 
     if (!readStorage(STORAGE_KEY_API_KEY) && readStorage(STORAGE_KEY_PROVIDER) !== "demo") {
       setIsApiKeyModalOpen(true);
       return;
     }
 
-    if (!promptToSend) {
+    if (!promptToSend && !opts.resume) {
       setInputValue("");
       if (textareaRef.current) textareaRef.current.style.height = "auto";
     }
@@ -599,7 +608,8 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
       ...prev,
       [turnMode]: [
         ...(prev[turnMode] || []),
-        { id: `usr-${stamp}`, role: "user", content: text, timestamp: stamp, mode: turnMode },
+        // A resumed turn has no user message: the approval decision is the trigger.
+        ...(opts.resume ? [] : [{ id: `usr-${stamp}`, role: "user" as const, content: text, timestamp: stamp, mode: turnMode }]),
         {
           id: assistantMessageId,
           role: "assistant",
@@ -621,6 +631,7 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
     try {
       const events = streamChat({
         message: text,
+        resume: opts.resume,
         mode: turnMode,
         context: context ?? {},
         conversationId: conversationIds.current[turnMode],
@@ -663,6 +674,13 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
   };
 
   const handleActionResolved = (actionId: string, outcome: ActionOutcome, detail?: string) => {
+    // Once the last open proposal of the latest reply is decided, let the assistant carry on
+    // with its task (e.g. add components to the dashboard that was just created).
+    const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+    const remaining = (lastAssistant?.pendingActions || []).filter((a) => a.id !== actionId);
+    const continueTask =
+      !!lastAssistant?.pendingActions?.some((a) => a.id === actionId) && remaining.length === 0 && !isStreaming;
+    if (continueTask) setTimeout(() => void handleSendMessage(undefined, { resume: true }), 0);
     setMessages((prev) =>
       prev.map((msg) => {
         const action = msg.pendingActions?.find((a) => a.id === actionId);
@@ -751,6 +769,25 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
                       ? "Teach Mode: Interactive Guided Tours"
                       : "Act Mode: Process Mining Automation"}
                   </SheetDescription>
+                  {claudeSelected && (
+                    <select
+                      aria-label="Claude model"
+                      data-testid="model-picker"
+                      value={claudeModel}
+                      onChange={(e) => {
+                        setClaudeModel(e.target.value);
+                        writeStorage(STORAGE_KEY_MODEL, e.target.value);
+                      }}
+                      disabled={isStreaming}
+                      className="mt-1 h-6 rounded border bg-background px-1 text-[11px] text-muted-foreground"
+                    >
+                      {CLAUDE_MODELS.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.label} · {m.hint}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                 </div>
               </div>
 
@@ -1044,7 +1081,10 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
         open={isApiKeyModalOpen}
         onOpenChange={setIsApiKeyModalOpen}
         initialError={apiKeyError}
-        onSuccess={() => setApiKeyError(undefined)}
+        onSuccess={(provider, key) => {
+          setApiKeyError(undefined);
+          setClaudeSelected(usesClaude(provider, key));
+        }}
       />
     </>
   );

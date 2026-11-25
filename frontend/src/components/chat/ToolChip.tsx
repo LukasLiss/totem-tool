@@ -10,6 +10,8 @@ export interface ToolExecution {
   summary: string;
   status: "executing" | "completed" | "failed";
   error?: string;
+  /** Short summary of what the tool returned (counts, not data), from `tool_end`. */
+  preview?: string;
   durationMs?: number;
 }
 
@@ -19,7 +21,7 @@ const STATUS_LABEL: Record<ToolExecution["status"], string> = {
   failed: "Failed",
 };
 
-/** A compact tool-call chip; click it to see the tool name, duration and any error. */
+/** A compact tool-call chip; click it to see the tool name, what it returned, duration and any error. */
 export function ToolChip({ tool, defaultExpanded = false }: { tool: ToolExecution; defaultExpanded?: boolean }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const detailsId = useId();
@@ -66,6 +68,12 @@ export function ToolChip({ tool, defaultExpanded = false }: { tool: ToolExecutio
           <dd className="font-mono break-all text-foreground">{tool.name}</dd>
           <dt className="text-muted-foreground/80">Status</dt>
           <dd className="text-foreground">{STATUS_LABEL[tool.status]}</dd>
+          {tool.preview && (
+            <>
+              <dt className="text-muted-foreground/80">Result</dt>
+              <dd className="break-words text-foreground">{tool.preview}</dd>
+            </>
+          )}
           {tool.durationMs !== undefined && (
             <>
               <dt className="text-muted-foreground/80">Duration</dt>

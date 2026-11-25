@@ -36,6 +36,11 @@ describe("ToolChip", () => {
     expect(screen.queryByTestId("tool-chip-details")).toBeNull();
   });
 
+  it("shows what the tool returned when a preview is present", () => {
+    render(<ToolChip tool={{ id: "t2", name: "get_log_overview", summary: "Reading log overview", status: "completed", preview: "events 35,372, objects 13,882" }} defaultExpanded />);
+    expect(screen.getByTestId("tool-chip-details").textContent).toContain("Resultevents 35,372, objects 13,882");
+  });
+
   it("omits duration and error rows when they are not known yet", () => {
     render(<ToolChip tool={{ id: "t2", name: "find_variants", summary: "", status: "executing" }} defaultExpanded />);
     // Falls back to the tool name when there is no summary.

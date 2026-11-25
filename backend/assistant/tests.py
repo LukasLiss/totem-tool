@@ -111,6 +111,9 @@ class HarnessTests(TestCase):
         self.assertEqual(types[0], "conversation")
         self.assertEqual(types[-1], "done")
         self.assertEqual([e["name"] for e in events if e["type"] == "tool_end" and e["ok"]], ["get_log_overview", "get_directly_follows"])
+        overview_end = [e for e in events if e["type"] == "tool_end"][0]
+        self.assertIn("events 6", overview_end["preview"])
+        self.assertNotIn("file id", overview_end["preview"])
         self.assertEqual(len(p.calls), 3)
 
         # The model saw the actual data in the next step.
@@ -446,9 +449,16 @@ class EndpointTests(TestCase):
         self.assertEqual(APIClient().post("/api/assistant/validate-key/", {"api_key": "x"}, format="json").status_code, 401)
 
     def test_input_validation(self):
-        for body in [{"message": ""}, {"message": 5}, {"message": "x" * 20001}, {"message": "hi", "conversation_id": "../etc"}]:
+        for body in [{"message": ""}, {"message": 5}, {"message": "x" * 20001}, {"message": "hi", "conversation_id": "../etc"},
+                     {"message": "hi", "model": "claude opus; drop"}]:
             r = self.client.post("/api/assistant/chat/", body, format="json")
             self.assertEqual(r.status_code, 400, body)
+
+    def test_selected_model_reaches_the_provider(self):
+        with mock.patch("assistant.views.get_provider", return_value=ScriptedProvider([[text("ok")]])) as gp:
+            self.client.post("/api/assistant/chat/", {"message": "hi", "model": "claude-sonnet-5-5"}, format="json",
+                             HTTP_ACCEPT="text/event-stream", HTTP_X_LLM_KEY="sk-ant-x", HTTP_X_LLM_PROVIDER="anthropic")
+        self.assertEqual(gp.call_args.kwargs["model"], "claude-sonnet-5-5")
 
     def test_missing_key_is_a_clear_401(self):
         with self.settings(ANTHROPIC_API_KEY="", GEMINI_API_KEY="", OPENAI_API_KEY=""):
