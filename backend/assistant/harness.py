@@ -100,7 +100,7 @@ class Turn:
         self.tools = get_tools(conversation.mode)
         self.tool_names = {t.name for t in self.tools}
         self.system = build_system_prompt(conversation.mode)
-        self.usage = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0}
+        self.usage = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
 
     # -- transcript helpers -------------------------------------------------
 
