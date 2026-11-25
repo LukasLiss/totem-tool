@@ -921,8 +921,11 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
     }
   };
 
-  // Persist message history per mode (sanitizing isStreaming)
+  // Persist message history per mode. Skipped while an answer streams: saving
+  // the whole history on every token is wasted work in long conversations,
+  // and the server keeps the transcript anyway. Saves once the stream ends.
   useEffect(() => {
+    if (isStreaming) return;
     try {
       if (typeof localStorage !== "undefined") {
         const sanitize = (list: ChatMessage[]) =>
@@ -945,7 +948,7 @@ export function ChatWidget({ context, defaultOpen = false }: ChatWidgetProps) {
     } catch {
       // Ignore storage error
     }
-  }, [messagesByMode, mode]);
+  }, [messagesByMode, mode, isStreaming]);
 
   // Auto-scroll to bottom on new messages or streaming tokens
   useEffect(() => {
