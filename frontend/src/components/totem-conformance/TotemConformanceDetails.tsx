@@ -9,13 +9,6 @@ import type {
   TypePairConformance,
 } from "@/api/totemConformanceApi";
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 
@@ -33,7 +26,12 @@ import {
   getDimensionDefinition,
   getFitnessColor,
 } from "./conformancePresentation";
-import { createHistogramRows } from "./histogramPresentation";
+import {
+  createHistogramTable,
+  formatHistogramShare,
+  type HistogramTable,
+  type HistogramTableRow,
+} from "./histogramPresentation";
 
 export type TotemConformanceSelection =
   | { kind: "objectType"; objectType: string }
@@ -359,46 +357,81 @@ function HistogramDetails({
   source: string;
   target: string;
 }) {
-  const aggregate = getPairHistogram(
-    lookup,
-    activeDimension,
-    source,
-    target
-  );
-  const breakdown = histogramBreakdown(
-    lookup,
-    activeDimension,
-    source,
-    target
-  );
+  const [valueMode, setValueMode] = useState<HistogramValueMode>("percent");
+  const breakdown = histogramBreakdown(lookup, activeDimension, source, target);
+  const aggregate = getPairHistogram(lookup, activeDimension, source, target);
+  const detailLabel =
+    activeDimension === "event_cardinality" ? "Activity" : "Relation type";
+  // Without a breakdown the pair-level histogram is the only row there is.
+  const records =
+    breakdown.length > 0
+      ? breakdown
+      : aggregate
+        ? [{ label: "All", counts: aggregate.counts }]
+        : [];
 
   return (
-    <div className="grid gap-4">
-      <div className="grid gap-2">
-        <h4 className="text-xs font-semibold">
-          {getDimensionDefinition(activeDimension).label} distribution
+    <div className="grid gap-2">
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <h4 className="truncate text-xs font-semibold">
+          {getDimensionDefinition(activeDimension).label} by{" "}
+          {detailLabel.toLowerCase()}
         </h4>
-        {aggregate ? (
-          <HistogramBars
-            counts={aggregate.counts}
-            dimension={activeDimension}
-          />
-        ) : (
-          <p className="text-xs text-muted-foreground">
-            No aggregate histogram available.
-          </p>
-        )}
+        <ValueModeToggle value={valueMode} onChange={setValueMode} />
       </div>
-
-      {breakdown.length > 0 && (
-        <HistogramBreakdown
-          records={breakdown}
-          dimension={activeDimension}
-          detailLabel={
-            activeDimension === "event_cardinality" ? "Activity" : "Relation type"
-          }
+      {records.length > 0 ? (
+        <HistogramTableView
+          table={createHistogramTable(records, activeDimension)}
+          detailLabel={detailLabel}
+          valueMode={valueMode}
+          showSum={breakdown.length > 0}
         />
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          No distribution available.
+        </p>
       )}
+    </div>
+  );
+}
+
+type HistogramValueMode = "percent" | "absolute";
+
+function ValueModeToggle({
+  value,
+  onChange,
+}: {
+  value: HistogramValueMode;
+  onChange: (value: HistogramValueMode) => void;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="Table values"
+      className="flex shrink-0 overflow-hidden rounded-md border text-[11px]"
+    >
+      {(
+        [
+          { id: "percent", label: "%", title: "Show percentages" },
+          { id: "absolute", label: "#", title: "Show absolute counts" },
+        ] as const
+      ).map((option, index) => (
+        <button
+          key={option.id}
+          type="button"
+          title={option.title}
+          aria-label={option.title}
+          aria-pressed={value === option.id}
+          className={cn(
+            "h-6 w-7 font-medium text-muted-foreground hover:bg-accent/60",
+            index > 0 && "border-l",
+            value === option.id && "bg-accent text-foreground"
+          )}
+          onClick={() => onChange(option.id)}
+        >
+          {option.label}
+        </button>
+      ))}
     </div>
   );
 }
@@ -430,63 +463,73 @@ function histogramBreakdown(
   );
 }
 
-function HistogramBreakdown({
-  records,
-  dimension,
+function HistogramTableView({
+  table,
   detailLabel,
+  valueMode,
+  showSum,
 }: {
-  records: HistogramDetailRecord[];
-  dimension: ConformanceDimension;
+  table: HistogramTable;
   detailLabel: string;
+  valueMode: HistogramValueMode;
+  showSum: boolean;
 }) {
-  const [selectedIndex, setSelectedIndex] = useState("0");
-  const selected = records[Number(selectedIndex)] ?? records[0];
-  return (
-    <div className="grid gap-2">
-      <Select value={selectedIndex} onValueChange={setSelectedIndex}>
-        <SelectTrigger size="sm" aria-label={detailLabel}>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {records.map((record, index) => (
-            <SelectItem key={`${record.label}:${index}`} value={String(index)}>
-              {record.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <HistogramBars counts={selected.counts} dimension={dimension} />
-    </div>
-  );
-}
-
-function HistogramBars({
-  counts,
-  dimension,
-}: {
-  counts: Record<string, number>;
-  dimension: ConformanceDimension;
-}) {
-  const rows = createHistogramRows(counts, dimension);
-  return (
-    <div className="grid gap-1.5" aria-label="Histogram">
-      {rows.map((row) => (
-        <div
-          key={row.key}
-          className="grid grid-cols-[minmax(72px,auto)_1fr_36px] items-center gap-2 text-[11px]"
+  const cell = (row: HistogramTableRow, key: string) =>
+    valueMode === "percent"
+      ? formatHistogramShare(row.counts[key], row.total)
+      : String(row.counts[key]);
+  const renderRow = (row: HistogramTableRow, index: number, isSum = false) => (
+    <tr
+      key={isSum ? "sum" : `${row.label}:${index}`}
+      className={cn("border-t", isSum && "border-t-2 bg-muted/30 font-semibold")}
+    >
+      <th
+        scope="row"
+        className="max-w-0 truncate px-2 py-1.5 text-left font-medium"
+        title={row.label}
+      >
+        {row.label}
+      </th>
+      <td className="px-2 py-1.5 text-right font-semibold tabular-nums">
+        {row.total}
+      </td>
+      {table.columns.map((column) => (
+        <td
+          key={column.key}
+          className="px-2 py-1.5 text-right tabular-nums text-muted-foreground"
+          title={`${column.title}: ${row.counts[column.key]} of ${row.total}`}
         >
-          <span className="truncate text-muted-foreground" title={row.label}>
-            {row.label}
-          </span>
-          <span className="h-2 overflow-hidden rounded-sm bg-muted">
-            <span
-              className="block h-full bg-slate-500"
-              style={{ width: `${row.ratio * 100}%` }}
-            />
-          </span>
-          <span className="text-right tabular-nums">{row.count}</span>
-        </div>
+          {cell(row, column.key)}
+        </td>
       ))}
+    </tr>
+  );
+
+  return (
+    <div className="overflow-x-auto rounded-md border">
+      <table className="w-full text-xs" aria-label="Distribution table">
+        <thead className="bg-muted/50 text-muted-foreground">
+          <tr>
+            <th className="w-full px-2 py-2 text-left font-medium">
+              {detailLabel}
+            </th>
+            <th className="px-2 py-2 text-right font-medium">Total</th>
+            {table.columns.map((column) => (
+              <th
+                key={column.key}
+                className="whitespace-nowrap px-2 py-2 text-right font-medium"
+                title={column.title}
+              >
+                {column.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {table.rows.map((row, index) => renderRow(row, index))}
+          {showSum && renderRow(table.sum, -1, true)}
+        </tbody>
+      </table>
     </div>
   );
 }

@@ -1,4 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
 import {
   applyNodeChanges,
   Background,
@@ -82,7 +92,7 @@ function TotemConformanceContent(props: TotemConformanceVisualizationProps) {
         activeDimension={activeDimension}
         onDimensionChange={setActiveDimension}
       />
-      <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(300px,340px)] xl:items-stretch">
+      <ResizableSplit>
         <ReactFlowProvider>
           <TotemConformanceCanvas
             {...props}
@@ -98,8 +108,106 @@ function TotemConformanceContent(props: TotemConformanceVisualizationProps) {
           activeDimension={activeDimension}
           onClearSelection={() => setSelection(null)}
         />
-      </div>
+      </ResizableSplit>
     </section>
+  );
+}
+
+const DETAILS_WIDTH_KEY = "totem-conformance:details-width";
+const DEFAULT_DETAILS_WIDTH = 480;
+const MIN_DETAILS_WIDTH = 300;
+const MIN_CANVAS_WIDTH = 360;
+
+function readStoredDetailsWidth(): number {
+  try {
+    const stored = Number(window.localStorage.getItem(DETAILS_WIDTH_KEY));
+    return Number.isFinite(stored) && stored >= MIN_DETAILS_WIDTH
+      ? stored
+      : DEFAULT_DETAILS_WIDTH;
+  } catch {
+    return DEFAULT_DETAILS_WIDTH;
+  }
+}
+
+/**
+ * Model canvas and details side by side on wide screens, split by a handle
+ * the user can drag (or move with the arrow keys). The chosen width is kept
+ * per browser. Narrow screens stack both and hide the handle.
+ */
+function ResizableSplit({ children }: { children: [ReactNode, ReactNode] }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [detailsWidth, setDetailsWidth] = useState(readStoredDetailsWidth);
+
+  const clampWidth = useCallback((width: number) => {
+    const available = containerRef.current?.getBoundingClientRect().width ?? 0;
+    const max = Math.max(MIN_DETAILS_WIDTH, available - MIN_CANVAS_WIDTH);
+    return Math.round(Math.min(Math.max(width, MIN_DETAILS_WIDTH), max));
+  }, []);
+
+  const commitWidth = useCallback(
+    (width: number) => {
+      const next = clampWidth(width);
+      setDetailsWidth(next);
+      try {
+        window.localStorage.setItem(DETAILS_WIDTH_KEY, String(next));
+      } catch {
+        // Storage may be unavailable; the width then lasts for this view only.
+      }
+    },
+    [clampWidth]
+  );
+
+  const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const handle = event.currentTarget;
+    handle.setPointerCapture(event.pointerId);
+    const onMove = (move: PointerEvent) => {
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (rect) commitWidth(rect.right - move.clientX);
+    };
+    const onUp = () => {
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointercancel", onUp);
+    };
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointercancel", onUp);
+  };
+
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? 80 : 20;
+    if (event.key === "ArrowLeft") commitWidth(detailsWidth + step);
+    else if (event.key === "ArrowRight") commitWidth(detailsWidth - step);
+    else if (event.key === "Home") commitWidth(DEFAULT_DETAILS_WIDTH);
+    else return;
+    event.preventDefault();
+  };
+
+  return (
+    <div
+      ref={containerRef}
+      className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_auto_var(--details-width)] xl:items-stretch xl:gap-0"
+      style={{ "--details-width": `${detailsWidth}px` } as CSSProperties}
+    >
+      {children[0]}
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize details panel"
+        aria-valuenow={detailsWidth}
+        aria-valuemin={MIN_DETAILS_WIDTH}
+        tabIndex={0}
+        title="Drag to resize, double-click to reset"
+        className="group hidden w-4 cursor-col-resize touch-none items-center justify-center focus-visible:outline-none xl:flex"
+        onPointerDown={handlePointerDown}
+        onKeyDown={handleKeyDown}
+        onDoubleClick={() => commitWidth(DEFAULT_DETAILS_WIDTH)}
+      >
+        <span className="h-10 w-1 rounded-full bg-border transition-colors group-hover:bg-muted-foreground/60 group-focus-visible:bg-ring" />
+      </div>
+      {children[1]}
+    </div>
   );
 }
 

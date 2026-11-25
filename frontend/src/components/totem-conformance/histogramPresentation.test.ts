@@ -1,41 +1,55 @@
 import { describe, expect, it } from "vitest";
 
-import { createHistogramRows } from "./histogramPresentation";
+import {
+  createHistogramTable,
+  formatHistogramShare,
+} from "./histogramPresentation";
 
 describe("TOTeM histogram presentation", () => {
-  it("orders temporal relations and derives ratios from the declared total", () => {
-    const rows = createHistogramRows(
-      { total: 10, P: 2, D: 5, custom: 1 },
+  it("lays temporal records out as rows with a summed row", () => {
+    const table = createHistogramTable(
+      [
+        { label: "a", counts: { total: 10, P: 10, D: 5, custom: 1 } },
+        { label: "b", counts: { total: 4, Ii: 4, P: 4 } },
+      ],
       "temporal"
     );
 
-    expect(rows.map(({ key }) => key)).toEqual([
+    expect(table.columns.map(({ label }) => label)).toEqual([
       "D",
-      "Di",
+      "D-i",
       "I",
-      "Ii",
+      "I-i",
       "P",
       "custom",
     ]);
-    expect(rows.find(({ key }) => key === "D")).toMatchObject({
-      count: 5,
-      ratio: 0.5,
+    expect(table.rows[0]).toMatchObject({ total: 10, counts: { D: 5, Di: 0 } });
+    expect(table.sum).toMatchObject({
+      label: "Sum",
+      total: 14,
+      counts: { D: 5, Ii: 4, P: 14, custom: 1 },
     });
   });
 
-  it("falls back to the sum of counts when total is unavailable", () => {
-    const rows = createHistogramRows({ "0": 1, "1": 3 }, "event_cardinality");
-
-    expect(rows.find(({ key }) => key === "1")?.ratio).toBe(0.75);
-  });
-
-  it("clamps invalid counts to zero", () => {
-    const rows = createHistogramRows(
-      { total: 2, D: -1, I: Number.NaN },
-      "temporal"
+  it("falls back to summed counts without a declared total", () => {
+    const table = createHistogramTable(
+      [{ label: "Pick", counts: { "1": 3, "0": -2, "1..*": Number.NaN } }],
+      "event_cardinality"
     );
 
-    expect(rows.find(({ key }) => key === "D")?.count).toBe(0);
-    expect(rows.find(({ key }) => key === "I")?.count).toBe(0);
+    expect(table.columns.map(({ key }) => key)).toEqual([
+      "0",
+      "1",
+      "0...1",
+      "1..*",
+      "0...*",
+    ]);
+    expect(table.rows[0].total).toBe(3);
+    expect(table.rows[0].counts["0"]).toBe(0);
+  });
+
+  it("formats shares as whole percentages", () => {
+    expect(formatHistogramShare(13, 30)).toBe("43%");
+    expect(formatHistogramShare(0, 0)).toBe("-");
   });
 });
