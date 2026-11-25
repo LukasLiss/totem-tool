@@ -248,7 +248,9 @@ _DONE_RE = re.compile(
     r"(created|added|deleted|removed|renamed|updated|applied|built)\b",
     re.I,
 )
-_HEDGE = ("approv", "once ", "after ", " will ", "would", "if you", "when you", "pending", "propos", "until", "card")
+_HEDGE = ("approv", "once ", "after ", " will ", "would", "if you", "when you", "pending", "propos", "until", "card",
+          # negations: "Nothing has been created yet" is the honest answer, not a claim
+          "nothing", "not ", "n't", " yet", "no ")
 
 
 @dataclass

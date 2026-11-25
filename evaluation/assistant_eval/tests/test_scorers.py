@@ -70,6 +70,8 @@ def test_false_claim_detection():
     assert not NoFalseClaim().run(turn("I've created the dashboard for you.", pending=pending), TRUTH)[0]
     assert NoFalseClaim().run(turn("I've proposed it. It will be created once you approve the card.", pending=pending), TRUTH)[0]
     assert NoFalseClaim().run(turn("I've created the dashboard.", pending=[]), TRUTH)[0]  # nothing pending: approved earlier
+    # Seen live (Haiku): stating that nothing was done yet is honest, not a claim.
+    assert NoFalseClaim().run(turn("It's waiting for your approval. Nothing has been created yet.", pending=pending), TRUTH)[0]
 
 
 def test_latex_is_flagged():
