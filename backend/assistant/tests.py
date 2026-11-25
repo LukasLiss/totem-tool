@@ -488,6 +488,27 @@ class EndpointTests(TestCase):
         self.assertIn("updates_since_your_last_reply", first_block)
         self.assertIn(str(dash_id), first_block)
 
+    def test_resume_continues_after_an_approval(self):
+        p = ScriptedProvider([
+            [tool("create_dashboard", {"name": "Board"}, id="c")], [text("Proposed.")],
+            [tool("list_dashboards", id="l")], [text("Board is created; adding the rest next.")],
+        ])
+        events = sse_events(self.chat(p))
+        cid = events[-1]["conversation_id"]
+        action_id = [e for e in events if e["type"] == "pending_action"][0]["id"]
+        self.client.post("/api/assistant/confirm/", {"pending_action_id": action_id, "approved": True}, format="json")
+
+        resumed = sse_events(self.chat(p, conversation_id=cid, message="", resume=True))
+        self.assertIn("Board is created", "".join(e["text"] for e in resumed if e["type"] == "text"))
+        sent_blocks = p.calls[2]["messages"][-1]["content"]
+        self.assertIn("updates_since_your_last_reply", sent_blocks[0]["text"])
+        self.assertIn("No new message", sent_blocks[-1]["text"])
+
+        # Nothing left to continue: refused instead of running an empty turn.
+        with mock.patch("assistant.views.get_provider", return_value=p):
+            again = self.client.post("/api/assistant/chat/", {"mode": "act", "conversation_id": cid, "resume": True}, format="json")
+        self.assertEqual(again.status_code, 409)
+
     def test_decline_and_foreign_or_unknown_ids(self):
         p = ScriptedProvider([[tool("delete_dashboard", {"dashboard_id": 1}, id="d")], [text("Proposed.")]])
         action_id = [e for e in sse_events(self.chat(p)) if e["type"] == "pending_action"][0]["id"]

@@ -35,6 +35,10 @@ from .providers import ProviderError, get_provider, validate_provider_key
 logger = logging.getLogger(__name__)
 
 MAX_MESSAGE_CHARS = 20_000
+RESUME_PROMPT = (
+    "(No new message: I responded to your proposals; the outcomes are above. "
+    "Continue the task if steps remain, otherwise confirm in one short line.)"
+)
 
 
 class EventStreamRenderer(BaseRenderer):
@@ -83,16 +87,24 @@ class ChatView(APIView):
         if body is None:
             return Response({"error": "Request body must be a JSON object."}, status=status.HTTP_400_BAD_REQUEST)
 
-        message = body.get("message")
-        if not isinstance(message, str) or not message.strip():
-            return Response({"error": '"message" must be a non-empty string.'}, status=status.HTTP_400_BAD_REQUEST)
-        if len(message) > MAX_MESSAGE_CHARS:
-            return Response({"error": f"Message exceeds {MAX_MESSAGE_CHARS} characters."}, status=status.HTTP_400_BAD_REQUEST)
-
         mode = "act" if body.get("mode") == "act" else "teach"
         conversation_id = body.get("conversation_id")
         if conversation_id is not None and not conv_store.valid_conversation_id(conversation_id):
             return Response({"error": "Invalid conversation_id."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if body.get("resume") is True:
+            # Continue after the user approved or declined proposals: no new message,
+            # the outcomes queued as notes are what the model reacts to.
+            conv = conv_store.load(request.user.id, conversation_id) if conversation_id else None
+            if conv is None or not conv.notes:
+                return Response({"error": "Nothing to continue in this conversation."}, status=status.HTTP_409_CONFLICT)
+            message = RESUME_PROMPT
+        else:
+            message = body.get("message")
+            if not isinstance(message, str) or not message.strip():
+                return Response({"error": '"message" must be a non-empty string.'}, status=status.HTTP_400_BAD_REQUEST)
+            if len(message) > MAX_MESSAGE_CHARS:
+                return Response({"error": f"Message exceeds {MAX_MESSAGE_CHARS} characters."}, status=status.HTTP_400_BAD_REQUEST)
 
         # The key travels in a header so it never lands in request-body logs or stored context.
         api_key = request.META.get("HTTP_X_LLM_KEY") or ""
