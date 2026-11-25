@@ -22,28 +22,26 @@ describe("TOTeM visualization flow transformation", () => {
     expect(elements.edges[0].selected).toBe(true);
   });
 
-  it("colors each dimension using the weaker directional fitness", () => {
+  it("colors every element separately for both directions", () => {
     const model = createTotemVisualizationModel(createCanonicalTotemContent());
     const lookup = createTotemConformanceLookup(createConformanceResponse());
+    const edge = createTotemFlowElements(model, { conformance: lookup }).edges[0];
+    const forward = edge.source === "Order" ? "target" : "source";
+    const reverse = forward === "target" ? "source" : "target";
 
-    expect(
-      createTotemFlowElements(model, {
-        conformance: lookup,
-        dimension: "temporal",
-      }).edges[0].data?.strokeColor
-    ).toBe("#DC2626");
-    expect(
-      createTotemFlowElements(model, {
-        conformance: lookup,
-        dimension: "log_cardinality",
-      }).edges[0].data?.strokeColor
-    ).toBe("#D97706");
-    expect(
-      createTotemFlowElements(model, {
-        conformance: lookup,
-        dimension: "event_cardinality",
-      }).edges[0].data?.strokeColor
-    ).toBe("#16A34A");
+    // Order → Item: temporal 0.91, log 0.84, event 0.84.
+    expect(edge.data?.elementColors?.[forward]).toEqual({
+      temporal: "#16A34A",
+      log: "#D97706",
+      event: "#D97706",
+    });
+    // Item → Order: temporal 0.62, log 0.78, event 0.86.
+    expect(edge.data?.elementColors?.[reverse]).toEqual({
+      temporal: "#DC2626",
+      log: "#D97706",
+      event: "#D97706",
+    });
+    expect(edge.data?.strokeColor).toBeUndefined();
   });
 
   it("uses the unavailable color when no pair metrics were returned", () => {
@@ -51,12 +49,18 @@ describe("TOTeM visualization flow transformation", () => {
     const lookup = createTotemConformanceLookup(
       createConformanceResponse({ type_pair_metrics: [] })
     );
+    const unavailable = { temporal: "#94A3B8", log: "#94A3B8", event: "#94A3B8" };
 
     expect(
-      createTotemFlowElements(model, {
-        conformance: lookup,
-        dimension: "temporal",
-      }).edges[0].data?.strokeColor
-    ).toBe("#94A3B8");
+      createTotemFlowElements(model, { conformance: lookup }).edges[0].data
+        ?.elementColors
+    ).toEqual({ source: unavailable, target: unavailable });
+  });
+
+  it("leaves elements uncoloured without conformance data", () => {
+    const model = createTotemVisualizationModel(createCanonicalTotemContent());
+    expect(
+      createTotemFlowElements(model).edges[0].data?.elementColors
+    ).toBeUndefined();
   });
 });

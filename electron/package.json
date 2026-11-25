@@ -1,23 +1,25 @@
 {
   "name": "totem-tool",
-  "version": "1.0.0",
+  "version": "0.9.3",
   "description": "TOTeM Tool desktop application: object-centric process mining with a bundled local backend",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "build": "electron-builder",
-    "build-win": "electron-builder --win",
-    "build-mac": "electron-builder --mac --$(node -p process.arch)",
+    "build-win": "electron-builder --win --publish never",
+    "build-mac": "electron-builder --mac --$(node -p process.arch) --publish never",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "build": {
     "appId": "com.totem.tool",
     "productName": "TOTeM-Tool",
+    "afterSign": "build/notarize.js",
     "directories": {
       "output": "dist"
     },
     "files": [
       "main.js",
+      "update-check.js",
       "build/icon.png",
       "resources/frontend-build"
     ],
@@ -33,7 +35,6 @@
       ],
       "icon": "build/icon.ico",
       "signtoolOptions": {
-        "certificateSubjectName": "${env.WIN_CERT_SUBJECT_NAME}",
         "rfc3161TimeStampServer": "http://timestamp.digicert.com"
       }
     },
@@ -48,7 +49,7 @@
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
-      "notarize": true,
+      "notarize": false,
       "signIgnore": [
         "\\.sqlite3?$",
         "\\.zip$",
@@ -81,6 +82,7 @@
   },
   "license": "MIT",
   "devDependencies": {
+    "@electron/notarize": "2.5.0",
     "electron": "^37.2.3",
     "electron-builder": "^26.0.12",
     "electron-packager": "^17.1.2"

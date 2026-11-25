@@ -13,7 +13,7 @@ languages of their children:
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 
 class Operator:
@@ -71,3 +71,17 @@ def tau() -> ProcessTree:
 
 def leaf(activity: str) -> ProcessTree:
     return ProcessTree(label=activity)
+
+
+def process_tree_to_dict(tree: ProcessTree) -> Dict[str, Any]:
+    """JSON-serializable form of a process tree.
+
+    ``{"operator": "sequence" | "xor" | "parallel" | "loop" | None,
+    "label": <activity> | None, "children": [...]}``; a leaf with
+    ``label: None`` is the silent activity tau.
+    """
+    return {
+        "operator": tree.operator,
+        "label": tree.label,
+        "children": [process_tree_to_dict(child) for child in tree.children],
+    }

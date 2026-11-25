@@ -4,8 +4,10 @@ import { create } from "zustand";
 export type ProcessAreaSnapshot = {
   id: string;
   level: number;
-  /** Object types joined for display, e.g. "order & item". */
+  /** Object types joined for display, e.g. "order & item"; the name for named areas. */
   label: string;
+  /** User-given name (areas of a stored or hand-edited composition). */
+  name?: string;
   objectTypes: string[];
   /**
    * Activities the backend assigned to this area: every activity of the
@@ -17,7 +19,10 @@ export type ProcessAreaSnapshot = {
 /** The process areas most recently computed for one event log. */
 export type ProcessAreasSnapshot = {
   fileId: number;
+  /** Discovery algorithm, or "manual" for a hand-edited / stored composition. */
   algorithm: string;
+  /** Set when the areas come from a named composition rather than a discovery. */
+  composition?: { name: string; assetId?: number | null };
   /** True when the areas were computed on the globally filtered log. */
   filtered: boolean;
   areas: ProcessAreaSnapshot[];

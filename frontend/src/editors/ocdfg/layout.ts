@@ -1,9 +1,7 @@
-import ELK from 'elkjs/lib/elk.bundled.js';
+import { elkLayout } from '@/utils/elk';
 
 import { nodeSize } from './model';
 import type { ArcFlowEdge, OcdfgFlowNode } from './types';
-
-const elk = new ELK();
 
 /** ELK layered left→right layout; returns nodes with new positions. */
 export async function layoutOcdfg(
@@ -38,7 +36,7 @@ export async function layoutOcdfg(
       })),
   };
 
-  const result = await elk.layout(graph);
+  const result = await elkLayout(graph);
   const positions = new Map(
     (result.children ?? []).map((child) => [child.id, { x: child.x ?? 0, y: child.y ?? 0 }]),
   );

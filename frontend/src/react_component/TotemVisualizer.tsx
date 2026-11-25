@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { API_BASE_URL } from '@/config/api';
-import { useFilterVersion } from '@/store/filterStore';
+import { useFilterVersion, getEffectiveFilterConfig } from '@/store/filterStore';
+import ComputationStatus from '@/components/ComputationStatus';
+import { isCancelledError } from '@/store/computationStore';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -16,10 +18,18 @@ import { RefreshCcw } from 'lucide-react';
 
 import { mapTypesToColors, textColorForBackground } from '../utils/objectColors';
 import OCDFGDetailVisualizer from './OCDFGDetailVisualizer';
-import type { OcdfgGraph } from './NewOCDFGVisualizer';
+import type { OcdfgGraph, TraceVariantsMap } from './NewOCDFGVisualizer';
 import { HoverTooltip, type TooltipRow } from './MetricTooltip';
 import { useProcessAreaStore } from '../store/processAreaStore';
 import { ProcessAreaFilterAction } from './process-area/ProcessAreaFilterAction';
+import { RelationLegend } from './process-area/RelationLegend';
+import { ControlPill, type PillSpot } from '@/components/canvas/ControlPill';
+
+/** Free places for the control pill: the relation legend holds the bottom-left corner. */
+// No top-right corner (too little room there, and it reads oddly); the sides come with TOTeM's redesign.
+const TOTEM_PILL_SPOTS: readonly PillSpot[] = ['bottom-right'];
+import { RelationStatsCard } from './process-area/RelationStatsCard';
+import { indexRelationStats, type RelationStats } from './process-area/relationStats';
 
 type MlpaLayerArea = {
   objectTypes: string[];
@@ -40,12 +50,16 @@ type TotemApiResponse = {
   type_relations?: Array<string[]>;
   all_event_types?: string[];
   object_type_to_event_types?: Record<string, string[]>;
+  /** Per directed pair: relation histograms and the strict (tau = 1) TOTeM. */
+  relation_stats?: RelationStats[];
 };
 
 type ProcessAreaDefinition = {
   id: string;
   level: number;
   label: string;
+  /** User-given name; only areas of a named composition have one. */
+  name?: string;
   objectTypes: string[];
   /** Activities the backend assigned to this area (not claimed by a lower one). */
   activities: string[];
@@ -64,6 +78,9 @@ import {
   type ProcessAreaAlgorithm,
   type ProcessAreaParams,
 } from './processAreaParams';
+import { useGridLayout } from './process-area/useGridLayout';
+import { detailActivityRestriction } from './process-area/detailActivities';
+import { useTouchMouseBridge } from '@/hooks/use-touch-mouse-bridge';
 
 /** Every committed slider change is a backend round-trip; don't fire per pixel. */
 const PROCESS_AREA_PARAM_DEBOUNCE_MS = 350;
@@ -83,6 +100,16 @@ export type TotemVisualizerControls = {
   onParamsReset: () => void;
 };
 
+/** What a discovery returned, for callers that build compositions from it. */
+export type ProcessAreaDiscoveryInfo = {
+  algorithm: ProcessAreaAlgorithm;
+  filtered: boolean;
+  layers: MlpaLayer[];
+  objectTypeToActivities: Record<string, string[]>;
+  allObjectTypes: string[];
+  allActivities: string[];
+};
+
 type TotemVisualizerProps = {
   eventLogId?: number | string | null;
   height?: string | number;
@@ -94,6 +121,7 @@ type TotemVisualizerProps = {
   embedded?: boolean;
   onControlsReady?: (controls: TotemVisualizerControls) => void;
   filterEnabled?: boolean;
+  localFilterParams?: Record<string, string>;
   /** Persisted starting values; changes to these re-seed the local state. */
   initialAlgorithm?: ProcessAreaAlgorithm;
   initialParams?: Partial<ProcessAreaParams>;
@@ -102,6 +130,16 @@ type TotemVisualizerProps = {
     algorithm: ProcessAreaAlgorithm;
     params: ProcessAreaParams;
   }) => void;
+  /**
+   * A hand-edited or stored composition to draw instead of the discovered
+   * areas (highest level first). The discovery still runs: it supplies the
+   * relations between the object types. While set, the discovered areas are
+   * not published to the shared process-area store; the caller publishes
+   * the composition instead.
+   */
+  compositionLayers?: ProcessLayer[] | null;
+  /** Fired with every discovery result. */
+  onDiscoveryLoaded?: (info: ProcessAreaDiscoveryInfo) => void;
 };
 
 type RelationType = 'P' | 'D' | 'I' | 'A';
@@ -143,12 +181,14 @@ type Point2D = { x: number; y: number };
 
 type NodeSide = 'top' | 'bottom' | 'left' | 'right';
 
-// Softer, sweeping corners for S/Z-shaped postprocessed edges only
-const FLOWING_S_CURVE = {
-  cornerScale: 1.15,
-  maxCornerRadius: 290,
-  minCornerRadius: 18,
-};
+// Radius of every rounded corner of a routed arc.
+const CORNER_RADIUS = 16;
+// Line width of every relation arc (before the zoom-dependent edge scale).
+const ARC_STROKE_WIDTH = 2.6;
+// Largest side length of the square cap of a during arc.
+const DEPENDENT_CAP_MAX_SIZE = 18;
+// Thickness of the two bars at each end of a parallel arc.
+const PARALLEL_BAR_STROKE_WIDTH = 4.5;
 
 // Discrete attachment slots for each side
 type HorizontalSlot = 'left' | 'center' | 'right'; // For top/bottom sides (3 positions)
@@ -187,26 +227,6 @@ type AttachmentTracker = {
   // Combined map: ALL edges (both incoming and outgoing) per node-side
   // Used for port assignment so incoming/outgoing edges don't share same port
   allAttachments: Map<string, EdgeDescriptor[]>;
-};
-
-type LevelNodeDescriptor = {
-  id: string;
-  areaId: string;
-  orderHint: number;
-  levelKey: number;
-  levelIndex: number;
-};
-
-type LayoutInfo = {
-  nodeColumns: Record<string, number>;
-  areaPlacements: Record<
-    string,
-    {
-      startColumn: number;
-      span: number;
-    }
-  >;
-  totalColumns: number;
 };
 
 type DetailSide = 'left' | 'right';
@@ -302,6 +322,9 @@ const PROCESS_AREA_BACKGROUND = 'rgba(59, 130, 246, 0.16)';
 const PROCESS_AREA_BORDER = 'rgba(37, 99, 235, 0.35)';
 const PROCESS_AREA_INSET_SHADOW = 'inset 0 0 0 1px rgba(37, 99, 235, 0.12)';
 const DETAIL_EDGE_STROKE = 'rgba(37, 99, 235, 0.35)';
+// Drawn before the first grid layout is done (stable identities for memos).
+const NO_LAYERS: ProcessLayer[] = [];
+const NO_EDGES: EdgeDescriptor[] = [];
 const BASE_DETAIL_COLLISION_PADDING = 12;
 const BASE_DETAIL_MIN_DISTANCE = 36; // larger minimum clearance
 const LEGEND_HIDE_INSET = 12; // pixels the intruder must cross into the legend before hiding
@@ -1476,10 +1499,7 @@ function findBestRoute(
  * Builds a smooth curved path from waypoints.
  * Converts orthogonal waypoints into smooth Bezier curves.
  */
-function buildCurvedPathFromWaypoints(
-  waypoints: Point2D[],
-  options?: { cornerScale?: number; maxCornerRadius?: number; minCornerRadius?: number },
-): string {
+function buildCurvedPathFromWaypoints(waypoints: Point2D[]): string {
   if (waypoints.length < 2) {
     return '';
   }
@@ -1487,10 +1507,6 @@ function buildCurvedPathFromWaypoints(
   if (waypoints.length === 2) {
     return `M ${waypoints[0].x} ${waypoints[0].y} L ${waypoints[1].x} ${waypoints[1].y}`;
   }
-
-  const dynamicCornerScale = options?.cornerScale ?? 0.4;
-  const dynamicMaxRadius = options?.maxCornerRadius ?? 40;
-  const dynamicMinRadius = options?.minCornerRadius ?? 0;
 
   // For 3+ points, create smooth curves through the corners
   const parts: string[] = [`M ${waypoints[0].x} ${waypoints[0].y}`];
@@ -1513,19 +1529,9 @@ function buildCurvedPathFromWaypoints(
     const limitAfter = i + 1 === waypoints.length - 1 ? lenAfter : lenAfter * 0.5;
     const maxAllowedRadius = Math.min(limitBefore, limitAfter);
 
-    let cornerRadius = Math.min(
-      lenBefore * dynamicCornerScale,
-      lenAfter * dynamicCornerScale,
-      dynamicMaxRadius
-    );
-    // Apply dynamicMinRadius but make sure it never exceeds the geometric limit
-    if (cornerRadius < dynamicMinRadius) {
-      cornerRadius = Math.min(dynamicMinRadius, maxAllowedRadius);
-    }
-    // Cap to ensure it fits the segment geometries and prevents overshooting/overlaps
-    if (cornerRadius > maxAllowedRadius) {
-      cornerRadius = maxAllowedRadius;
-    }
+    // Every corner gets the same radius; only a segment too short to hold
+    // it forces a tighter one.
+    const cornerRadius = Math.min(CORNER_RADIUS, maxAllowedRadius);
 
     // Calculate points along segments where curve should start/end
     const beforeDir = {
@@ -1668,7 +1674,10 @@ function buildParallelBars({
   const targetPerpY = targetNormal ? targetNormal.x : defaultPerpY;
 
   const maxOffset = Math.max(0, effectiveLength - 0.75);
-  const outerOffset = 0;
+  // The bars are stroked centred on their position; offsetting the outer bar
+  // by half its thickness keeps all of it outside the node, so it does not
+  // look thicker than the inner bar.
+  const outerOffset = Math.min((PARALLEL_BAR_STROKE_WIDTH * edgeScale) / 2, maxOffset);
   const minGap = Math.max(
     3 * edgeScale,
     Math.min(5 * edgeScale, effectiveLength * 0.15),
@@ -2017,8 +2026,6 @@ function buildDependentCap({
   tipY,
   normalX,
   normalY,
-  effectiveLength,
-  edgeScale,
 }: {
   baseX: number;
   baseY: number;
@@ -2026,23 +2033,18 @@ function buildDependentCap({
   tipY: number;
   normalX: number;
   normalY: number;
-  effectiveLength: number;
-  edgeScale: number;
 }): string | undefined {
   const capLength = Math.hypot(tipX - baseX, tipY - baseY);
   if (!Number.isFinite(capLength) || capLength < 1) {
     return undefined;
   }
+  // The cap is a square: as wide across the arc as it is long along it.
   const normLength = Math.hypot(normalX, normalY) || 1;
   const unitNormalX = normalX / normLength;
   const unitNormalY = normalY / normLength;
   const unitTangentX = -unitNormalY;
   const unitTangentY = unitNormalX;
-  const capWidth = Math.min(
-    Math.max(10 * edgeScale, effectiveLength * 0.28),
-    20 * edgeScale,
-  );
-  const halfWidth = capWidth / 2;
+  const halfWidth = capLength / 2;
 
   const p1x = baseX + unitTangentX * halfWidth;
   const p1y = baseY + unitTangentY * halfWidth;
@@ -2065,7 +2067,6 @@ function recalculateEdgeDecorations(
   waypoints: Point2D[],
   relation: string,
   edgeScale: number,
-  curveOptions?: { cornerScale?: number; maxCornerRadius?: number; minCornerRadius?: number },
 ): void {
   if (waypoints.length < 2) return;
 
@@ -2156,7 +2157,7 @@ function recalculateEdgeDecorations(
     // Recalculate dependent cap
     const rawCap = Math.min(
       Math.max(12 * edgeScale, finalSegmentLength * 0.35),
-      24 * edgeScale,
+      DEPENDENT_CAP_MAX_SIZE * edgeScale,
     );
     const maxAvailable = Math.max(finalSegmentLength - 8 * edgeScale, 0);
     const capLength = Math.min(rawCap, maxAvailable);
@@ -2170,8 +2171,6 @@ function recalculateEdgeDecorations(
         tipY: collisionY,
         normalX: targetNormal.x,
         normalY: targetNormal.y,
-        effectiveLength: finalSegmentLength,
-        edgeScale,
       });
       segment.capPath = cap;
       renderEnd = { x: baseX, y: baseY };
@@ -2245,7 +2244,7 @@ function recalculateEdgeDecorations(
   segment.renderEnd = renderEnd;
 
   if (pathNeedsUpdate) {
-    segment.path = buildCurvedPathFromWaypoints(updatedWaypoints, curveOptions);
+    segment.path = buildCurvedPathFromWaypoints(updatedWaypoints);
     // Do NOT overwrite debugWaypoints with the trimmed updatedWaypoints.
     // Preserving the original node-boundary endpoints allows the overlap pass
     // to clamp correctly, preventing decorations from drifting/dangling in space
@@ -2910,7 +2909,7 @@ function computeEdgeSegments(
       // Use final segment length for sizing, but position along actual final segment direction
       const rawCap = Math.min(
         Math.max(12 * edgeScale, finalSegmentLength * 0.35),
-        24 * edgeScale,
+        DEPENDENT_CAP_MAX_SIZE * edgeScale,
       );
       const maxAvailable = Math.max(finalSegmentLength - 8 * edgeScale, 0);
       const capLength = Math.min(rawCap, maxAvailable);
@@ -3141,8 +3140,6 @@ function computeEdgeSegments(
         tipY: dependentTip.y,
         normalX: targetNormal?.x ?? dirFinalX,
         normalY: targetNormal?.y ?? dirFinalY,
-        effectiveLength: finalSegmentLength,
-        edgeScale,
       });
       if (cap) {
         segment.capPath = cap;
@@ -3354,12 +3351,12 @@ function computeEdgeSegments(
 
         const bestZ = zCandidates[0];
         if (bestZ) {
-          segment.path = buildCurvedPathFromWaypoints(bestZ.waypoints, FLOWING_S_CURVE);
+          segment.path = buildCurvedPathFromWaypoints(bestZ.waypoints);
           segment.debugWaypoints = bestZ.waypoints;
           segment.crossesNode = bestZ.crossings > 0;
           segment.crossingPoints = undefined;
-          // Recalculate decorations for the new path (preserve flowing radius)
-          recalculateEdgeDecorations(segment, bestZ.waypoints, edge.relation, edgeScale, FLOWING_S_CURVE);
+          // Recalculate decorations for the new path
+          recalculateEdgeDecorations(segment, bestZ.waypoints, edge.relation, edgeScale);
         }
       }
     }
@@ -3675,18 +3672,225 @@ function computeEdgeSegments(
     });
   });
 
-  // Finally, regenerate path strings and recalculate decorations for modified segments only
+  // Keep the arc ends that share a node side apart, so their caps, arrow
+  // heads and bars never touch.
+  spreadSharedEndpoints(segments, edges, positions, edgeScale, modifiedSegmentIds);
+
+  // Finally, regenerate path strings and decorations from the final
+  // waypoints. Every orthogonal route is rebuilt, not just the modified ones,
+  // so all arcs get the same corner radius and decoration geometry no matter
+  // which routing stage produced them.
   segments.forEach((seg) => {
-    if (seg.relation === 'A' || !seg.debugWaypoints || !modifiedSegmentIds.has(seg.id)) return;
+    if (seg.relation === 'A' || !seg.debugWaypoints) return;
+    if (!modifiedSegmentIds.has(seg.id) && !isOrthogonalRoute(seg.debugWaypoints)) return;
 
-    const isFlowingZCurve = seg.debugWaypoints.length >= 4;
-    const curveOpts = isFlowingZCurve ? FLOWING_S_CURVE : undefined;
-
-    seg.path = buildCurvedPathFromWaypoints(seg.debugWaypoints, curveOpts);
-    recalculateEdgeDecorations(seg, seg.debugWaypoints, seg.relation, edgeScale, curveOpts);
+    seg.path = buildCurvedPathFromWaypoints(seg.debugWaypoints);
+    recalculateEdgeDecorations(seg, seg.debugWaypoints, seg.relation, edgeScale);
   });
 
   return segments;
+}
+
+function isOrthogonalRoute(waypoints: Point2D[]): boolean {
+  if (waypoints.length < 2) return false;
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    const dx = Math.abs(waypoints[i + 1].x - waypoints[i].x);
+    const dy = Math.abs(waypoints[i + 1].y - waypoints[i].y);
+    if (dx > 1 && dy > 1) return false;
+  }
+  return true;
+}
+
+/**
+ * Half the width, across the arc, of what is drawn where an arc meets a node:
+ * the box cap (D), arrow head (I) or bars (P) at the target, the bars of a
+ * parallel arc at the source, or just the line itself.
+ */
+function endpointHalfWidth(relation: RelationType, atTarget: boolean, edgeScale: number): number {
+  if (relation === 'P') return 12 * edgeScale;
+  if (atTarget && relation === 'I') return 13 * edgeScale;
+  if (atTarget && relation === 'D') return (DEPENDENT_CAP_MAX_SIZE / 2) * edgeScale;
+  return 2 * edgeScale;
+}
+
+/** Which side of `node` the boundary point `point` lies on. */
+function sideOfBoundaryPoint(node: NodePosition, point: Point2D): NodeSide {
+  const distances: Array<[NodeSide, number]> = [
+    ['top', Math.abs(point.y - (node.centerY - node.height / 2))],
+    ['bottom', Math.abs(point.y - (node.centerY + node.height / 2))],
+    ['left', Math.abs(point.x - (node.centerX - node.width / 2))],
+    ['right', Math.abs(point.x - (node.centerX + node.width / 2))],
+  ];
+  distances.sort((a, b) => a[1] - b[1]);
+  return distances[0][0];
+}
+
+/**
+ * Spreads the arc ends that attach to the same side of the same node so that
+ * neighbouring ends are at least the width of their decorations (plus a gap)
+ * apart. Ends are moved along the side; the first segment of the route moves
+ * with them so it still leaves the node perpendicularly. Mutates the
+ * segments' `debugWaypoints` and records every moved segment in `modified`.
+ */
+function spreadSharedEndpoints(
+  segments: EdgeSegment[],
+  edges: EdgeDescriptor[],
+  positions: Record<string, NodePosition>,
+  edgeScale: number,
+  modified: Set<string>,
+): void {
+  const gap = 14 * edgeScale;
+  const edgeById = new Map(edges.map((edge) => [edge.id, edge]));
+
+  type EndRef = {
+    seg: EdgeSegment;
+    index: number; // 0 or the last waypoint index
+    nodeId: string;
+    otherNodeId: string;
+    side: NodeSide;
+    halfWidth: number;
+  };
+
+  const along = (side: NodeSide, p: Point2D) =>
+    side === 'top' || side === 'bottom' ? p.x : p.y;
+  const setAlong = (side: NodeSide, p: Point2D, value: number) => {
+    if (side === 'top' || side === 'bottom') p.x = value;
+    else p.y = value;
+  };
+  const sideRange = (node: NodePosition, side: NodeSide): [number, number] => {
+    const margin = 10 * edgeScale;
+    if (side === 'top' || side === 'bottom') {
+      return [node.centerX - node.width / 2 + margin, node.centerX + node.width / 2 - margin];
+    }
+    return [node.centerY - node.height / 2 + margin, node.centerY + node.height / 2 - margin];
+  };
+  // Pins the perpendicular coordinate of a boundary point onto its side.
+  const snapToSide = (node: NodePosition, side: NodeSide, p: Point2D) => {
+    if (side === 'top') p.y = node.centerY - node.height / 2;
+    else if (side === 'bottom') p.y = node.centerY + node.height / 2;
+    else if (side === 'left') p.x = node.centerX - node.width / 2;
+    else p.x = node.centerX + node.width / 2;
+  };
+
+  const collect = (): Map<string, EndRef[]> => {
+    const groups = new Map<string, EndRef[]>();
+    segments.forEach((seg) => {
+      if (seg.relation === 'A') return;
+      const wps = seg.debugWaypoints;
+      if (!wps || wps.length < 2 || !isOrthogonalRoute(wps)) return;
+      const edge = edgeById.get(seg.id);
+      if (!edge) return;
+      const ends: Array<[number, string, string, boolean]> = [
+        [0, edge.from, edge.to, false],
+        [wps.length - 1, edge.to, edge.from, true],
+      ];
+      ends.forEach(([index, nodeId, otherNodeId, atTarget]) => {
+        const node = positions[nodeId];
+        if (!node) return;
+        const side = sideOfBoundaryPoint(node, wps[index]);
+        const key = `${nodeId}::${side}`;
+        const ref: EndRef = {
+          seg,
+          index,
+          nodeId,
+          otherNodeId,
+          side,
+          halfWidth: endpointHalfWidth(seg.relation, atTarget, edgeScale),
+        };
+        const list = groups.get(key);
+        if (list) list.push(ref);
+        else groups.set(key, [ref]);
+      });
+    });
+    return groups;
+  };
+
+  // A straight two-point arc moves at both ends, which can push into another
+  // group; a second round settles those.
+  for (let round = 0; round < 2; round++) {
+    let changed = false;
+    collect().forEach((refs) => {
+      if (refs.length < 2) return;
+      const node = positions[refs[0].nodeId];
+      const side = refs[0].side;
+      const [rangeMin, rangeMax] = sideRange(node, side);
+
+      // Order along the side; ties (ends sharing a slot) are broken by where
+      // the arc is heading, so the spread does not make the arcs cross.
+      const farAlong = (ref: EndRef) => {
+        const wps = ref.seg.debugWaypoints!;
+        const far = ref.index === 0 ? wps[wps.length - 1] : wps[0];
+        return along(side, far);
+      };
+      const sorted = refs
+        .map((ref) => ({ ref, pos: along(side, ref.seg.debugWaypoints![ref.index]) }))
+        .sort((a, b) => (Math.abs(a.pos - b.pos) > 0.5 ? a.pos - b.pos : farAlong(a.ref) - farAlong(b.ref)));
+
+      const required = sorted.slice(1).map(
+        (item, i) => sorted[i].ref.halfWidth + item.ref.halfWidth + gap,
+      );
+      const crowded = required.some(
+        (minDistance, i) => sorted[i + 1].pos - sorted[i].pos < minDistance - 0.5,
+      );
+      if (!crowded) return;
+
+      // Push neighbours apart, then centre the block on where the ends were.
+      const targets = sorted.map((item) => item.pos);
+      for (let i = 1; i < targets.length; i++) {
+        targets[i] = Math.max(targets[i], targets[i - 1] + required[i - 1]);
+      }
+      const originalMean = sorted.reduce((sum, item) => sum + item.pos, 0) / sorted.length;
+      const newMean = targets.reduce((sum, value) => sum + value, 0) / targets.length;
+      let shift = originalMean - newMean;
+      const span = targets[targets.length - 1] - targets[0];
+      const available = rangeMax - rangeMin;
+      if (span > available && span > 0) {
+        // Not enough room for the full spacing: distribute over the side.
+        const factor = available / span;
+        const first = targets[0];
+        for (let i = 0; i < targets.length; i++) {
+          targets[i] = rangeMin + (targets[i] - first) * factor;
+        }
+        shift = 0;
+      } else {
+        shift = Math.max(rangeMin - targets[0], Math.min(rangeMax - targets[targets.length - 1], shift));
+      }
+
+      sorted.forEach((item, i) => {
+        const delta = targets[i] + shift - item.pos;
+        if (Math.abs(delta) < 0.5) return;
+        const wps = item.ref.seg.debugWaypoints!;
+        const endIndex = item.ref.index;
+        const neighbourIndex = endIndex === 0 ? 1 : wps.length - 2;
+        const end = wps[endIndex];
+        const neighbour = wps[neighbourIndex];
+        // The first segment leaves the node perpendicularly when it does not
+        // move along the side; keep it that way by moving it as a whole.
+        const leavesPerpendicular = Math.abs(along(side, neighbour) - along(side, end)) < 2;
+
+        snapToSide(node, side, end);
+        setAlong(side, end, along(side, end) + delta);
+        if (leavesPerpendicular) {
+          if (wps.length === 2) {
+            // A straight arc: move the far end too so it stays straight, as
+            // far as the far node's side allows.
+            const otherNode = positions[item.ref.otherNodeId];
+            if (otherNode) {
+              const otherSide = sideOfBoundaryPoint(otherNode, neighbour);
+              const [otherMin, otherMax] = sideRange(otherNode, otherSide);
+              const moved = Math.max(otherMin, Math.min(otherMax, along(side, neighbour) + delta));
+              setAlong(side, neighbour, moved);
+            }
+          } else {
+            setAlong(side, neighbour, along(side, neighbour) + delta);
+          }
+        }
+        modified.add(item.ref.seg.id);
+        changed = true;
+      });
+    });
+    if (!changed) break;
+  }
 }
 
 function describeSimplePathGeometry({
@@ -3764,620 +3968,6 @@ function describeSimplePathGeometry({
 
   return { path, segments };
 }
-
-function buildNeighbourMap(edges: EdgeDescriptor[]): Map<string, Set<string>> {
-  const neighbourMap = new Map<string, Set<string>>();
-  edges.forEach((edge) => {
-    if (!neighbourMap.has(edge.from)) neighbourMap.set(edge.from, new Set());
-    if (!neighbourMap.has(edge.to)) neighbourMap.set(edge.to, new Set());
-    neighbourMap.get(edge.from)!.add(edge.to);
-    neighbourMap.get(edge.to)!.add(edge.from);
-  });
-  return neighbourMap;
-}
-
-function countIntermediateObstacles(
-  edge: EdgeDescriptor,
-  columns: Record<string, number>,
-  nodeLevelIndex: Map<string, number>,
-  nodesByLevelIndex: Map<number, string[]>,
-): number {
-  const sourceLevel = nodeLevelIndex.get(edge.from);
-  const targetLevel = nodeLevelIndex.get(edge.to);
-  if (
-    sourceLevel === undefined ||
-    targetLevel === undefined ||
-    sourceLevel === targetLevel
-  ) {
-    return 0;
-  }
-
-  const startLevel = Math.min(sourceLevel, targetLevel);
-  const endLevel = Math.max(sourceLevel, targetLevel);
-  const startColumn = sourceLevel <= targetLevel ? columns[edge.from] : columns[edge.to];
-  const endColumn = sourceLevel <= targetLevel ? columns[edge.to] : columns[edge.from];
-
-  if (startColumn === undefined || endColumn === undefined) {
-    return 0;
-  }
-
-  const levelSpan = endLevel - startLevel;
-  if (levelSpan <= 0) {
-    return 0;
-  }
-
-  let intersections = 0;
-  for (let levelIndex = startLevel + 1; levelIndex < endLevel; levelIndex += 1) {
-    const nodesAtLevel = nodesByLevelIndex.get(levelIndex) ?? [];
-    if (nodesAtLevel.length === 0) continue;
-    const ratio = (levelIndex - startLevel) / levelSpan;
-    const interpolatedColumn = startColumn + (endColumn - startColumn) * ratio;
-    nodesAtLevel.forEach((nodeId) => {
-      if (nodeId === edge.from || nodeId === edge.to) return;
-      const nodeColumn = columns[nodeId];
-      if (nodeColumn === undefined) return;
-      if (Math.abs(nodeColumn - interpolatedColumn) < 0.45) {
-        intersections += 1;
-      }
-    });
-  }
-
-  return intersections;
-}
-
-type AdjustmentDirection = 'top-down' | 'bottom-up';
-
-function adjustPositionsForLevel(
-  descriptors: LevelNodeDescriptor[],
-  positions: Map<string, number>,
-  neighbourMap: Map<string, Set<string>>,
-  nodeLevelIndex: Map<string, number>,
-  direction: AdjustmentDirection,
-) {
-  if (descriptors.length === 0) return;
-
-  const spacing = 1;
-  const candidates = descriptors.map((descriptor, index) => {
-    const neighbours = neighbourMap.get(descriptor.id);
-    const neighbourPositions = neighbours
-      ? Array.from(neighbours)
-          .map((neighbour) => positions.get(neighbour))
-          .filter((value): value is number => value !== undefined && Number.isFinite(value))
-      : [];
-    let weightedSum = 0;
-    let totalWeight = 0;
-    neighbours?.forEach((neighbour) => {
-      const neighbourPosition = positions.get(neighbour);
-      if (neighbourPosition === undefined) return;
-      const neighbourLevelIndex = nodeLevelIndex.get(neighbour);
-      if (neighbourLevelIndex === undefined) return;
-      const levelDelta = neighbourLevelIndex - descriptor.levelIndex;
-      if (direction === 'top-down' && levelDelta >= 0) return;
-      if (direction === 'bottom-up' && levelDelta <= 0) return;
-      const distance = Math.abs(levelDelta) || 1;
-      let weight = 1 / distance;
-      if (direction === 'top-down') {
-        weight *= 1.6;
-      }
-      weightedSum += neighbourPosition * weight;
-      totalWeight += weight;
-    });
-
-    const desired =
-      totalWeight > 0
-        ? weightedSum / totalWeight
-        : neighbourPositions.length > 0
-          ? neighbourPositions.reduce((acc, value) => acc + value, 0) / neighbourPositions.length
-          : positions.get(descriptor.id) ?? index;
-
-    return { descriptor, desired, index };
-  });
-
-  candidates.sort((a, b) => {
-    if (a.desired === b.desired) {
-      return a.descriptor.orderHint - b.descriptor.orderHint;
-    }
-    return a.desired - b.desired;
-  });
-
-  let current = Number.NEGATIVE_INFINITY;
-  candidates.forEach((entry) => {
-    const desired = Number.isFinite(entry.desired) ? entry.desired : entry.index;
-    current = Math.max(current + spacing, desired);
-    positions.set(entry.descriptor.id, current);
-  });
-}
-
-function prepareGridLayout(layers: ProcessLayer[], edges: EdgeDescriptor[]): LayoutInfo {
-  const levelNodeMap = new Map<number, LevelNodeDescriptor[]>();
-  const neighbourMap = buildNeighbourMap(edges);
-  const nodeLevelIndex = new Map<string, number>();
-  const nodesByLevelIndex = new Map<number, string[]>();
-  const levelOrder = layers.map((layer) => layer.level);
-
-  let orderHintCounter = 0;
-
-  layers.forEach((layer, layerIndex) => {
-    const levelNodes: LevelNodeDescriptor[] = levelNodeMap.get(layer.level) ?? [];
-    if (!nodesByLevelIndex.has(layerIndex)) {
-      nodesByLevelIndex.set(layerIndex, []);
-    }
-    layer.areas.forEach((area) => {
-      area.objectTypes.forEach((objectType) => {
-        levelNodes.push({
-          id: objectType,
-          areaId: area.id,
-          orderHint: orderHintCounter,
-          levelKey: layer.level,
-          levelIndex: layerIndex,
-        });
-        nodeLevelIndex.set(objectType, layerIndex);
-        nodesByLevelIndex.get(layerIndex)!.push(objectType);
-        orderHintCounter += 1;
-      });
-    });
-    levelNodeMap.set(layer.level, levelNodes);
-  });
-
-  const positions = new Map<string, number>();
-  levelNodeMap.forEach((nodes) => {
-    nodes.forEach((descriptor, index) => {
-      positions.set(descriptor.id, index);
-    });
-  });
-
-  const iterations = levelOrder.length > 1 ? 5 : 1;
-
-  for (let iteration = 0; iteration < iterations; iteration += 1) {
-    for (let i = 1; i < levelOrder.length; i += 1) {
-      const levelKey = levelOrder[i];
-      const descriptors = levelNodeMap.get(levelKey) ?? [];
-      adjustPositionsForLevel(descriptors, positions, neighbourMap, nodeLevelIndex, 'top-down');
-    }
-
-    for (let i = levelOrder.length - 2; i >= 0; i -= 1) {
-      const levelKey = levelOrder[i];
-      const descriptors = levelNodeMap.get(levelKey) ?? [];
-      adjustPositionsForLevel(descriptors, positions, neighbourMap, nodeLevelIndex, 'bottom-up');
-    }
-  }
-
-  levelOrder.forEach((levelKey) => {
-    const descriptors = levelNodeMap.get(levelKey) ?? [];
-    const ordered = descriptors
-      .slice()
-      .sort((a, b) => {
-        const posA = positions.get(a.id) ?? 0;
-        const posB = positions.get(b.id) ?? 0;
-        if (posA === posB) {
-          return a.orderHint - b.orderHint;
-        }
-        return posA - posB;
-      });
-
-    let last = Number.NEGATIVE_INFINITY;
-    ordered.forEach((descriptor) => {
-      const raw = positions.get(descriptor.id) ?? 0;
-      let column = Math.round(raw);
-      if (!Number.isFinite(column)) column = 0;
-      if (column <= last) column = last + 1;
-      positions.set(descriptor.id, column);
-      last = column;
-    });
-  });
-
-  const allValues = Array.from(positions.values());
-  const minColumn = allValues.length > 0 ? Math.min(...allValues) : 0;
-  if (Number.isFinite(minColumn) && minColumn !== 0) {
-    positions.forEach((value, key) => {
-      positions.set(key, value - minColumn);
-    });
-  }
-
-  const nodeColumns: Record<string, number> = {};
-  positions.forEach((value, key) => {
-    nodeColumns[key] = value;
-  });
-
-  // Build a map of nodeId -> areaId for routing complexity evaluation
-  const nodeAreaMap = new Map<string, string>();
-  layers.forEach((layer) => {
-    layer.areas.forEach((area) => {
-      area.objectTypes.forEach((objectType) => {
-        nodeAreaMap.set(objectType, area.id);
-      });
-    });
-  });
-
-  // Build a map of levelIndex -> areas at that level (for area crossing detection)
-  const areasByLevel = new Map<number, Array<{ id: string; nodeIds: string[] }>>();
-  layers.forEach((layer, layerIndex) => {
-    const areasAtLevel: Array<{ id: string; nodeIds: string[] }> = [];
-    layer.areas.forEach((area) => {
-      if (area.objectTypes.length > 0) {
-        areasAtLevel.push({ id: area.id, nodeIds: area.objectTypes });
-      }
-    });
-    areasByLevel.set(layerIndex, areasAtLevel);
-  });
-
-  const evaluateCrossings = (columns: Record<string, number>) => {
-    let total = 0;
-    edges.forEach((edge) => {
-      // Count intermediate node obstacles - high penalty (3.0 per node crossed)
-      total += countIntermediateObstacles(edge, columns, nodeLevelIndex, nodesByLevelIndex) * 0.0;
-
-      const sourceLevel = nodeLevelIndex.get(edge.from);
-      const targetLevel = nodeLevelIndex.get(edge.to);
-      const sourceCol = columns[edge.from];
-      const targetCol = columns[edge.to];
-      const sourceArea = nodeAreaMap.get(edge.from);
-      const targetArea = nodeAreaMap.get(edge.to);
-
-      if (
-        sourceLevel !== undefined &&
-        targetLevel !== undefined &&
-        sourceCol !== undefined &&
-        targetCol !== undefined &&
-        sourceLevel !== targetLevel
-      ) {
-        const minCol = Math.min(sourceCol, targetCol);
-        const maxCol = Math.max(sourceCol, targetCol);
-        const minLevel = Math.min(sourceLevel, targetLevel);
-        const maxLevel = Math.max(sourceLevel, targetLevel);
-
-        // Check for AREA crossings at intermediate levels
-        // This penalizes layouts where edges would have to route around process areas
-        for (let level = minLevel + 1; level < maxLevel; level++) {
-          const areasAtLevel = areasByLevel.get(level) ?? [];
-          for (const area of areasAtLevel) {
-            // Skip if this is the source or target's area
-            if (area.id === sourceArea || area.id === targetArea) continue;
-
-            // Compute the area's column span based on its nodes' current columns
-            const areaCols = area.nodeIds
-              .map((nodeId) => columns[nodeId])
-              .filter((c): c is number => c !== undefined);
-            if (areaCols.length === 0) continue;
-
-            const areaMinCol = Math.min(...areaCols);
-            const areaMaxCol = Math.max(...areaCols);
-
-            // Check if the edge's column range overlaps with this area's column range
-            // If so, the edge would have to cross through this area
-            if (maxCol >= areaMinCol && minCol <= areaMaxCol) {
-              // Calculate overlap extent - penalty scales with how much of area is crossed
-              const overlapStart = Math.max(minCol, areaMinCol);
-              const overlapEnd = Math.min(maxCol, areaMaxCol);
-              const overlapExtent = overlapEnd - overlapStart + 1;
-
-              // Base penalty of 1.0, plus 0.5 per column of overlap
-              // Crossing more of an area = higher penalty
-              total += 1.0 + overlapExtent * 0.5;
-            }
-          }
-        }
-
-        // Additional penalty for cross-area edges with blocking nodes
-        if (sourceArea !== targetArea) {
-          const colDiff = Math.abs(sourceCol - targetCol);
-          let hasBlockingNode = false;
-          for (let level = minLevel + 1; level < maxLevel; level++) {
-            const nodesAtLevel = nodesByLevelIndex.get(level) ?? [];
-            for (const nodeId of nodesAtLevel) {
-              if (nodeId === edge.from || nodeId === edge.to) continue;
-              const nodeCol = columns[nodeId];
-              if (nodeCol !== undefined && nodeCol >= minCol && nodeCol <= maxCol) {
-                hasBlockingNode = true;
-                break;
-              }
-            }
-            if (hasBlockingNode) break;
-          }
-
-          if (hasBlockingNode && colDiff > 0) {
-            total += colDiff * 0.4;
-          }
-        }
-        // Penalize horizontal edge length to prefer shorter, more vertical paths
-        if (sourceCol !== undefined && targetCol !== undefined) {
-          total += Math.abs(sourceCol - targetCol) * 0.05;
-        }
-      }
-    });
-
-    // Penalize empty columns (gaps) inside process areas to keep nodes compact
-    areasByLevel.forEach((areas) => {
-      areas.forEach((area) => {
-        const areaCols = area.nodeIds
-          .map((nodeId) => columns[nodeId])
-          .filter((c): c is number => c !== undefined);
-        if (areaCols.length > 0) {
-          const minCol = Math.min(...areaCols);
-          const maxCol = Math.max(...areaCols);
-          const span = maxCol - minCol + 1;
-          const gaps = span - areaCols.length;
-          if (gaps > 0) {
-            total += gaps * 0.5;
-          }
-        }
-      });
-    });
-
-    return total;
-  };
-
-  if (edges.length > 0) {
-    // Helper function to run optimization from a given starting configuration
-    const runOptimization = (
-      startColumns: Record<string, number>,
-    ): { columns: Record<string, number>; score: number } => {
-      const testColumns = { ...startColumns };
-
-      const levelOccupancy = new Map<number, Set<number>>();
-      nodeLevelIndex.forEach((levelIndex, nodeId) => {
-        const column = testColumns[nodeId];
-        if (column === undefined) return;
-        if (!levelOccupancy.has(levelIndex)) {
-          levelOccupancy.set(levelIndex, new Set());
-        }
-        levelOccupancy.get(levelIndex)!.add(column);
-      });
-
-      let globalScore = evaluateCrossings(testColumns);
-      const deltas = [0, -1, 1, -2, 2, -3, 3, -4, 4];
-
-      for (let iteration = 0; iteration < 4; iteration += 1) {
-        let improved = false;
-        for (let levelIndex = 0; levelIndex < levelOrder.length; levelIndex += 1) {
-          const nodesAtLevel = nodesByLevelIndex.get(levelIndex) ?? [];
-          let occupancy = levelOccupancy.get(levelIndex);
-          if (!occupancy) {
-            occupancy = new Set<number>();
-            levelOccupancy.set(levelIndex, occupancy);
-          }
-          nodesAtLevel.forEach((nodeId) => {
-            const currentColumn = testColumns[nodeId];
-            if (currentColumn === undefined) return;
-            let bestColumn = currentColumn;
-            let bestScore = globalScore;
-            occupancy.delete(currentColumn);
-
-            deltas.forEach((delta) => {
-              const candidate = currentColumn + delta;
-              if (candidate < 0) return;
-              if (occupancy.has(candidate)) return;
-              testColumns[nodeId] = candidate;
-              occupancy.add(candidate);
-              const candidateScore = evaluateCrossings(testColumns);
-              occupancy.delete(candidate);
-              testColumns[nodeId] = currentColumn;
-              if (candidateScore + 1e-6 < bestScore) {
-                bestScore = candidateScore;
-                bestColumn = candidate;
-              }
-            });
-
-            occupancy.add(currentColumn);
-
-            if (bestColumn !== currentColumn) {
-              occupancy.delete(currentColumn);
-              occupancy.add(bestColumn);
-              testColumns[nodeId] = bestColumn;
-              globalScore = bestScore;
-              improved = true;
-            } else {
-              testColumns[nodeId] = currentColumn;
-            }
-          });
-        }
-        if (!improved) break;
-      }
-
-      // Additional optimization: try swapping adjacent nodes within the same level
-      for (let swapIteration = 0; swapIteration < 3; swapIteration += 1) {
-        let swapImproved = false;
-        for (let levelIndex = 0; levelIndex < levelOrder.length; levelIndex += 1) {
-          const nodesAtLevel = nodesByLevelIndex.get(levelIndex) ?? [];
-          if (nodesAtLevel.length < 2) continue;
-
-          const sortedNodes = [...nodesAtLevel].sort(
-            (a, b) => (testColumns[a] ?? 0) - (testColumns[b] ?? 0),
-          );
-
-          for (let i = 0; i < sortedNodes.length - 1; i += 1) {
-            const nodeA = sortedNodes[i];
-            const nodeB = sortedNodes[i + 1];
-            const colA = testColumns[nodeA];
-            const colB = testColumns[nodeB];
-
-            if (colA === undefined || colB === undefined) continue;
-
-            testColumns[nodeA] = colB;
-            testColumns[nodeB] = colA;
-
-            const swappedScore = evaluateCrossings(testColumns);
-
-            if (swappedScore + 1e-6 < globalScore) {
-              globalScore = swappedScore;
-              swapImproved = true;
-              sortedNodes[i] = nodeB;
-              sortedNodes[i + 1] = nodeA;
-            } else {
-              testColumns[nodeA] = colA;
-              testColumns[nodeB] = colB;
-            }
-          }
-        }
-        if (!swapImproved) break;
-      }
-
-      return { columns: testColumns, score: globalScore };
-    };
-
-    // Multi-start optimization: try different starting configurations
-    const startingConfigs: Record<string, number>[] = [{ ...nodeColumns }];
-
-    // Find max column to determine shift range
-    const allColumns = Object.values(nodeColumns).filter(
-      (v): v is number => v !== undefined,
-    );
-    const maxCol = allColumns.length > 0 ? Math.max(...allColumns) : 0;
-
-    // Generate alternative starting configurations by shifting entire levels horizontally
-    for (let levelIndex = 0; levelIndex < levelOrder.length; levelIndex += 1) {
-      const nodesAtLevel = nodesByLevelIndex.get(levelIndex) ?? [];
-      if (nodesAtLevel.length === 0) continue;
-
-      // Try shifting all nodes at this level by various amounts
-      for (let shift = -maxCol - 2; shift <= maxCol + 4; shift += 1) {
-        if (shift === 0) continue;
-        const config = { ...nodeColumns };
-        let valid = true;
-
-        nodesAtLevel.forEach((nodeId) => {
-          const newCol = (config[nodeId] ?? 0) + shift;
-          if (newCol < 0) valid = false;
-          else config[nodeId] = newCol;
-        });
-
-        if (valid) startingConfigs.push(config);
-      }
-    }
-
-    // Run optimization from each starting configuration and keep the best
-    let bestResult = runOptimization(startingConfigs[0]);
-
-    for (let i = 1; i < startingConfigs.length; i += 1) {
-      const result = runOptimization(startingConfigs[i]);
-      if (result.score < bestResult.score) {
-        bestResult = result;
-      }
-    }
-
-    // Apply the best result
-    Object.assign(nodeColumns, bestResult.columns);
-
-    nodesByLevelIndex.forEach((nodeIds) => {
-      nodeIds.forEach((nodeId) => {
-        const column = nodeColumns[nodeId];
-        if (column !== undefined) {
-          positions.set(nodeId, column);
-        }
-      });
-    });
-  }
-
-  positions.forEach((_, key) => {
-    const column = nodeColumns[key];
-    if (column !== undefined) {
-      positions.set(key, column);
-    }
-  });
-
-  // Areas of one layer are siblings in a single CSS grid, each spanning
-  // `[min column .. max column]` of the object types it holds. Nothing above
-  // keeps a layer's areas apart — the crossing search orders individual nodes —
-  // so two areas can interleave, their spans overlap, and grid auto-placement
-  // drops the second one onto an implicit second row. It then reads as an
-  // object type that belongs to no layer at all: on container-logistics,
-  // `Truck` lands between `CustomerOrder` and `TransportDocument` and its area
-  // is pushed into the gap below level 2.
-  //
-  // Re-seat each layer's types so every area occupies a contiguous block. The
-  // columns already in use at the layer are kept and only redistributed, so the
-  // layer's horizontal footprint — and its alignment against the layers above
-  // and below — does not move, and neither does the crossing search's ordering
-  // of the areas themselves.
-  levelNodeMap.forEach((descriptors) => {
-    if (descriptors.length === 0) return;
-
-    const byArea = new Map<string, LevelNodeDescriptor[]>();
-    descriptors.forEach((descriptor) => {
-      const group = byArea.get(descriptor.areaId);
-      if (group) group.push(descriptor);
-      else byArea.set(descriptor.areaId, [descriptor]);
-    });
-    if (byArea.size < 2) return;
-
-    const columnOf = (descriptor: LevelNodeDescriptor) =>
-      nodeColumns[descriptor.id] ?? 0;
-    const slots = descriptors.map(columnOf).sort((a, b) => a - b);
-    // Areas keep the left-to-right order their nodes' mean column earned.
-    const areas = Array.from(byArea.values()).sort((a, b) => {
-      const meanA = a.reduce((sum, d) => sum + columnOf(d), 0) / a.length;
-      const meanB = b.reduce((sum, d) => sum + columnOf(d), 0) / b.length;
-      if (meanA === meanB) return a[0].orderHint - b[0].orderHint;
-      return meanA - meanB;
-    });
-
-    const reseated = new Map<string, number>();
-    let slot = 0;
-    areas.forEach((group) => {
-      group
-        .slice()
-        .sort((a, b) => {
-          const diff = columnOf(a) - columnOf(b);
-          return diff !== 0 ? diff : a.orderHint - b.orderHint;
-        })
-        .forEach((descriptor) => {
-          reseated.set(descriptor.id, slots[slot]);
-          slot += 1;
-        });
-    });
-
-    reseated.forEach((column, nodeId) => {
-      nodeColumns[nodeId] = column;
-      positions.set(nodeId, column);
-    });
-  });
-
-  const areaPlacements: Record<string, { startColumn: number; span: number }> = {};
-  const levelAreaCursor = new Map<number, number>();
-
-  layers.forEach((layer) => {
-    let cursor = levelAreaCursor.get(layer.level) ?? 0;
-    layer.areas.forEach((area) => {
-      if (area.objectTypes.length === 0) {
-        areaPlacements[area.id] = { startColumn: cursor, span: 1 };
-        cursor += 1;
-      } else {
-        const columns = area.objectTypes
-          .map((objectType) => nodeColumns[objectType])
-          .filter((value): value is number => value !== undefined);
-        if (columns.length === 0) {
-          areaPlacements[area.id] = { startColumn: cursor, span: 1 };
-          cursor += 1;
-        } else {
-          const minCol = Math.min(...columns);
-          const maxCol = Math.max(...columns);
-          areaPlacements[area.id] = { startColumn: minCol, span: Math.max(1, maxCol - minCol + 1) };
-          cursor = Math.max(cursor, maxCol + 1);
-        }
-      }
-    });
-    levelAreaCursor.set(layer.level, cursor);
-  });
-
-  const totalColumns =
-    Object.keys(nodeColumns).length > 0
-      ? Math.max(
-          ...Object.values(nodeColumns).concat(
-            Object.values(areaPlacements).map((placement) => placement.startColumn + placement.span - 1),
-          ),
-        ) + 1
-      : Math.max(
-          0,
-          ...Object.values(areaPlacements).map((placement) => placement.startColumn + placement.span),
-        );
-
-  return {
-    nodeColumns,
-    areaPlacements,
-    totalColumns,
-  };
-}
-
 
 function detailRectFromCenter(
   center: Point2D,
@@ -4698,70 +4288,13 @@ function buildLayersFromBackend(data: TotemApiResponse): ProcessLayer[] {
   }));
 }
 
-function getFilteredDetailData(
-  cachedDetail: OcdfgGraph | undefined,
-  detailedOcdfgView: boolean,
-  layers: ProcessLayer[],
-  area: ProcessAreaDefinition,
-): OcdfgGraph | null {
-  if (!cachedDetail) return null;
-  if (detailedOcdfgView) return cachedDetail;
-
-  const objectTypeToLevel = new Map<string, number>();
-  layers.forEach((layer) => {
-    layer.areas.forEach((a) => {
-      a.objectTypes.forEach((ot) => {
-        objectTypeToLevel.set(ot, layer.level);
-      });
-    });
-  });
-
-  const minLevel = layers.length > 0 ? Math.min(...layers.map((l) => l.level)) : 0;
-  if (area.level <= minLevel) {
-    return cachedDetail;
-  }
-
-  const filteredNodes = cachedDetail.nodes.filter((node) => {
-    const nodeTypes = node.types ?? [];
-    const hasLowerLevelType = nodeTypes.some((ot) => {
-      const otLevel = objectTypeToLevel.get(ot);
-      return otLevel !== undefined && otLevel < area.level;
-    });
-    return !hasLowerLevelType;
-  });
-
-  const filteredNodeIds = new Set(filteredNodes.map((n) => n.id));
-  const filteredLinks = cachedDetail.links.filter((link) => {
-    return filteredNodeIds.has(link.source) && filteredNodeIds.has(link.target);
-  });
-
-  const originalDegree = new Map<string, number>();
-  cachedDetail.links.forEach((l) => {
-    originalDegree.set(l.source, (originalDegree.get(l.source) || 0) + 1);
-    originalDegree.set(l.target, (originalDegree.get(l.target) || 0) + 1);
-  });
-
-  const filteredDegree = new Map<string, number>();
-  filteredLinks.forEach((l) => {
-    filteredDegree.set(l.source, (filteredDegree.get(l.source) || 0) + 1);
-    filteredDegree.set(l.target, (filteredDegree.get(l.target) || 0) + 1);
-  });
-
-  const finalFilteredNodes = filteredNodes.filter((n) => {
-    const orig = originalDegree.get(n.id) || 0;
-    const curr = filteredDegree.get(n.id) || 0;
-    // Remove the node if it had edges originally, but lost all of them due to filtering
-    if (orig > 0 && curr === 0) {
-      return false;
-    }
-    return true;
-  });
-
-  return {
-    ...cachedDetail,
-    nodes: finalFilteredNodes,
-    links: filteredLinks,
-  };
+/** Identifies what a cached drill-down graph was computed for. */
+function detailSignature(area: ProcessAreaDefinition, detailedView: boolean): string {
+  return JSON.stringify([
+    detailedView,
+    [...area.objectTypes].sort(),
+    detailedView ? [] : [...area.activities].sort(),
+  ]);
 }
 
 function TotemVisualizer({
@@ -4774,12 +4307,22 @@ function TotemVisualizer({
   embedded = false,
   onControlsReady,
   filterEnabled = true,
+  localFilterParams,
   initialAlgorithm,
   initialParams,
   onSettingsChange,
+  compositionLayers,
+  onDiscoveryLoaded,
 }: TotemVisualizerProps) {
   const filterVersion = useFilterVersion();
   const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
+  const localFilterParamsRef = useRef(localFilterParams);
+  localFilterParamsRef.current = localFilterParams;
+  // Read inside `fetchTotem` without making a composition change refetch.
+  const compositionActiveRef = useRef(Boolean(compositionLayers));
+  compositionActiveRef.current = Boolean(compositionLayers);
+  const onDiscoveryLoadedRef = useRef(onDiscoveryLoaded);
+  onDiscoveryLoadedRef.current = onDiscoveryLoaded;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rawTotem, setRawTotem] = useState<TotemApiResponse | null>(null);
@@ -4814,9 +4357,17 @@ function TotemVisualizer({
   const [tooltipState, setTooltipState] = useState<
     { x: number; y: number; title?: string; rows: TooltipRow[] } | null
   >(null);
+  /** The hovered (or, once clicked, pinned) relation arc. */
+  const [arcCard, setArcCard] = useState<
+    { x: number; y: number; from: string; to: string; relation: RelationType; pinned: boolean } | null
+  >(null);
+  const closeArcCard = useCallback(() => setArcCard(null), []);
+  /** Where the pointer went down on an arc, to tell a click from a pan. */
+  const arcPressRef = useRef<{ x: number; y: number } | null>(null);
   const effectiveReloadSignal = reloadSignal ?? internalReloadSignal;
   /** Sequence number of the most recently started hierarchy request. */
   const latestTotemRequestRef = useRef(0);
+  const totemAbortRef = useRef<AbortController | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const nodeRefs = useRef<Record<string, HTMLElement | null>>({});
@@ -4859,6 +4410,8 @@ function TotemVisualizer({
     setAllOcdfgNodes(null);
   }, [filterEnabled, effectiveFilterVersion]);
   const [detailedOcdfgView, setDetailedOcdfgView] = useState(false);
+  /** Per area: `detailSignature` of the graph last requested for it. */
+  const detailSignatureRef = useRef<Record<string, string>>({});
   const [legendOffsets, setLegendOffsets] = useState<Record<number, number>>({});
   const [processAreaScale, setProcessAreaScale] = useState(DEFAULT_PROCESS_AREA_SCALE);
   const [smoothedProcessAreaScale, setSmoothedProcessAreaScale] = useState(DEFAULT_PROCESS_AREA_SCALE);
@@ -4879,6 +4432,8 @@ function TotemVisualizer({
   const [panY, setPanY] = useState(0);
   const [viewZoom, setViewZoom] = useState(1);
   const [panLocked, setPanLocked] = useState(true);
+  // Finger drags and pinches drive the mouse pan / wheel zoom below.
+  useTouchMouseBridge(scrollContainerRef, !panLocked);
   const panLockedRef = useRef(panLocked);
   useEffect(() => {
     panLockedRef.current = panLocked;
@@ -5341,20 +4896,21 @@ function TotemVisualizer({
     edgeStrokeScale,
   } = processAreaMetrics;
 
-  const layers = useMemo(() => (rawTotem ? buildLayersFromBackend(rawTotem) : []), [rawTotem]);
-  const levelCount = layers.length;
-  const extraTopPadding = useMemo(() => {
-    const deficit = Math.max(0, 4 - levelCount);
-    return Math.min(180, deficit * 60); // push down when few levels; capped
-  }, [levelCount]);
-  const contentPaddingTop = 32 + resolvedTopInset + extraTopPadding;
-  const typeColorMap = useMemo(
-    () => mapTypesToColors(rawTotem?.tempgraph?.nodes ?? []),
-    [rawTotem?.tempgraph?.nodes],
+  // The newest response is laid out in a worker (`useGridLayout`). What is
+  // drawn — `shownTotem`, `layers`, `allEdges`, `layoutInfo` — belongs to the
+  // last response whose layout is done, so the previous hierarchy stays on
+  // screen until the new one is laid out.
+  const latestLayers = useMemo(
+    () => compositionLayers ?? (rawTotem ? buildLayersFromBackend(rawTotem) : []),
+    [rawTotem, compositionLayers],
   );
   const baseEdges = useMemo(
     () => extractEdges(rawTotem?.tempgraph),
     [rawTotem?.tempgraph],
+  );
+  const relationStats = useMemo(
+    () => indexRelationStats(rawTotem?.relation_stats),
+    [rawTotem],
   );
   const dynamicAreaEdges = useMemo(() => {
     const descriptors: EdgeDescriptor[] = [];
@@ -5370,9 +4926,28 @@ function TotemVisualizer({
     });
     return descriptors;
   }, [expandedAreas]);
-  const allEdges = useMemo(
+  const latestAllEdges = useMemo(
     () => [...baseEdges, ...dynamicAreaEdges],
     [baseEdges, dynamicAreaEdges],
+  );
+  const layoutInput = useMemo(
+    () => ({ totem: rawTotem, layers: latestLayers, edges: latestAllEdges }),
+    [rawTotem, latestLayers, latestAllEdges],
+  );
+  const gridLayout = useGridLayout(layoutInput);
+  const shownTotem = gridLayout.shown?.totem ?? null;
+  const layers = gridLayout.shown?.layers ?? NO_LAYERS;
+  const allEdges = gridLayout.shown?.edges ?? NO_EDGES;
+  const layoutInfo = gridLayout.layout;
+  const levelCount = layers.length;
+  const extraTopPadding = useMemo(() => {
+    const deficit = Math.max(0, 4 - levelCount);
+    return Math.min(180, deficit * 60); // push down when few levels; capped
+  }, [levelCount]);
+  const contentPaddingTop = 32 + resolvedTopInset + extraTopPadding;
+  const typeColorMap = useMemo(
+    () => mapTypesToColors(shownTotem?.tempgraph?.nodes ?? []),
+    [shownTotem?.tempgraph?.nodes],
   );
   const areaAnchorMembers = useMemo(() => {
     const map: Record<string, string[]> = {};
@@ -5383,7 +4958,6 @@ function TotemVisualizer({
     });
     return map;
   }, [layers]);
-  const layoutInfo = useMemo(() => prepareGridLayout(layers, allEdges), [layers, allEdges]);
   const totalColumns = Math.max(layoutInfo.totalColumns, 1);
   const levelGridTemplate = `repeat(${totalColumns}, ${columnWidth}px)`;
   const levelMinimumWidth = totalColumns * columnWidth;
@@ -5446,25 +5020,8 @@ function TotemVisualizer({
     levelMinimumWidthRef.current = levelMinimumWidth;
   }, [levelMinimumWidth]);
 
-  const filteredDetailCache = useMemo(() => {
-    const result: Record<string, OcdfgGraph> = {};
-    layers.forEach((layer) => {
-      layer.areas.forEach((area) => {
-        if (expandedAreas[area.id] && detailCache[area.id]) {
-          const filtered = getFilteredDetailData(
-            detailCache[area.id],
-            detailedOcdfgView,
-            layers,
-            area
-          );
-          if (filtered) {
-            result[area.id] = filtered;
-          }
-        }
-      });
-    });
-    return result;
-  }, [detailCache, detailedOcdfgView, layers, expandedAreas]);
+  // The cache holds the graph for the active view (see `fetchDetailOcdfg`).
+  const filteredDetailCache = detailCache;
   const detailEdgeSegments = useMemo(
     () => edgeSegments.filter((segment) => segment.relation === 'A'),
     [edgeSegments],
@@ -5494,6 +5051,11 @@ function TotemVisualizer({
     // the canvas ends up showing the parameters the user has already left.
     const requestId = ++latestTotemRequestRef.current;
     const isCurrent = () => requestId === latestTotemRequestRef.current;
+    // A superseded request is aborted so the backend stops computing it
+    // instead of holding the per-file lock until it finishes.
+    totemAbortRef.current?.abort();
+    const controller = new AbortController();
+    totemAbortRef.current = controller;
 
     setLoading(true);
     setError(null);
@@ -5501,6 +5063,8 @@ function TotemVisualizer({
     // Blanking it here would collapse every expanded process area and reset the
     // zoom on every slider commit.
     try {
+      const filterConfig = getEffectiveFilterConfig(localFilterParamsRef.current, filterEnabled);
+      if (filterConfig._noResults) { setRawTotem(null); if (isCurrent()) setLoading(false); return; }
       const url =
         algorithm === 'advanced'
           ? `${backendBaseUrl}/api/files/${eventLogId}/discover_process_areas/?` +
@@ -5510,17 +5074,29 @@ function TotemVisualizer({
               w_divergence: String(appliedParams.wDivergence),
               alpha: String(appliedParams.alpha),
               beta: String(appliedParams.beta),
+              ...(filterConfig.params ?? {}),
             }).toString()
           : `${backendBaseUrl}/api/files/${eventLogId}/discover_mlpa/`;
       const { data: payload } = await axios.get<TotemApiResponse>(url, {
-        _skipGlobalFilter: !filterEnabled,
+        _skipGlobalFilter: filterConfig._skipGlobalFilter,
+        signal: controller.signal,
       });
       if (!isCurrent()) return;
       setRawTotem(payload);
+      onDiscoveryLoadedRef.current?.({
+        algorithm,
+        filtered: filterEnabled,
+        layers: payload.layers ?? [],
+        objectTypeToActivities: payload.object_type_to_event_types ?? {},
+        allObjectTypes:
+          payload.tempgraph?.nodes ?? Object.keys(payload.object_type_to_event_types ?? {}),
+        allActivities: payload.all_event_types ?? [],
+      });
       // Share the result so other components (the Variants Explorer's
       // resource-aware mode) can pick one of these areas without recomputing.
+      // A shown composition is published by its owner instead.
       const numericFileId = Number(eventLogId);
-      if (Number.isFinite(numericFileId) && numericFileId > 0) {
+      if (Number.isFinite(numericFileId) && numericFileId > 0 && !compositionActiveRef.current) {
         useProcessAreaStore.getState().publish({
           fileId: numericFileId,
           algorithm,
@@ -5531,8 +5107,9 @@ function TotemVisualizer({
       }
     } catch (err) {
       if (!isCurrent()) return;
-      const message =
-        axios.isAxiosError(err) && err.response?.data?.error
+      const message = isCancelledError(err)
+        ? 'Computation cancelled.'
+        : axios.isAxiosError(err) && err.response?.data?.error
           ? String(err.response.data.error)
           : err instanceof Error
             ? err.message
@@ -5542,7 +5119,8 @@ function TotemVisualizer({
     } finally {
       if (isCurrent()) setLoading(false);
     }
-  }, [backendBaseUrl, eventLogId, algorithm, appliedParams, filterEnabled, effectiveFilterVersion]);
+  }, [backendBaseUrl, eventLogId, algorithm, appliedParams, filterEnabled, effectiveFilterVersion, localFilterParams]);
+  useEffect(() => () => totemAbortRef.current?.abort(), []);
 
   const fetchDetailOcdfg = useCallback(
     async (area: ProcessAreaDefinition) => {
@@ -5564,10 +5142,35 @@ function TotemVisualizer({
       setDetailError((prev) => ({ ...prev, [areaId]: undefined }));
 
       try {
-        const objectTypes = encodeURIComponent(area.objectTypes.join(','));
-        const { data: payload } = await axios.get<{ dfg?: OcdfgGraph; all_nodes?: OcdfgNodeSummary[]; error?: string } & Partial<OcdfgGraph>>(
-          `${backendBaseUrl}/api/new-ocdfg/?file_id=${eventLogId}&object_types=${objectTypes}`,
-          { _skipGlobalFilter: !filterEnabled },
+        const detailFilterConfig = getEffectiveFilterConfig(localFilterParamsRef.current, filterEnabled);
+        if (detailFilterConfig._noResults) {
+          setDetailCache((p) => ({ ...p, [areaId]: { nodes: [], links: [] } }));
+          setDetailLoading((p) => ({ ...p, [areaId]: false }));
+          return;
+        }
+        detailSignatureRef.current[areaId] = detailSignature(area, detailedOcdfgView);
+        const detailParams = new URLSearchParams({ file_id: String(eventLogId), object_types: area.objectTypes.join(',') });
+        if (detailFilterConfig.params) {
+          Object.entries(detailFilterConfig.params).forEach(([k, v]) => detailParams.set(k, v));
+        }
+        const activities = detailActivityRestriction(
+          area,
+          detailedOcdfgView,
+          detailFilterConfig.params?.activities,
+        );
+        if (activities !== null) {
+          if (activities.length === 0) {
+            // Nothing of its own to show (every activity is claimed by a
+            // lower area, or filtered out). An empty request parameter would
+            // mean "no restriction", so answer locally.
+            setDetailCache((p) => ({ ...p, [areaId]: { nodes: [], links: [] } }));
+            return;
+          }
+          detailParams.set('activities', activities.join(','));
+        }
+        const { data: payload } = await axios.get<{ dfg?: OcdfgGraph; all_nodes?: OcdfgNodeSummary[]; filter_error?: string; error?: string; trace_variants?: TraceVariantsMap } & Partial<OcdfgGraph>>(
+          `${backendBaseUrl}/api/new-ocdfg/?${detailParams.toString()}`,
+          { _skipGlobalFilter: detailFilterConfig._skipGlobalFilter },
         );
         if (payload?.error) {
           throw new Error(payload.error);
@@ -5622,7 +5225,7 @@ function TotemVisualizer({
         });
       }
     },
-    [backendBaseUrl, eventLogId, filterEnabled, effectiveFilterVersion],
+    [backendBaseUrl, eventLogId, filterEnabled, effectiveFilterVersion, localFilterParams, detailedOcdfgView],
   );
 
   const toggleAreaDetail = useCallback(
@@ -5635,15 +5238,34 @@ function TotemVisualizer({
           delete rest[area.id];
           return rest;
         }
-        // Kick off detail fetch on first open
-        if (!detailCache[area.id] && !detailLoading[area.id]) {
+        // Kick off detail fetch on first open, or when the area changed
+        // (a different composition) since its graph was fetched.
+        const stale =
+          detailSignatureRef.current[area.id] !== detailSignature(area, detailedOcdfgView);
+        if ((!detailCache[area.id] || stale) && !detailLoading[area.id]) {
           fetchDetailOcdfg(area);
         }
         return { ...prev, [area.id]: true };
       });
     },
-    [detailCache, detailLoading, fetchDetailOcdfg],
+    [detailCache, detailLoading, fetchDetailOcdfg, detailedOcdfgView],
   );
+
+  // An open drill-down follows its area: adjusting the object types or
+  // activities of an area (Process Area editor) refetches its graph.
+  useEffect(() => {
+    layers.forEach((layer) =>
+      layer.areas.forEach((area) => {
+        if (!expandedAreas[area.id] || detailLoading[area.id]) return;
+        const fetched = detailSignatureRef.current[area.id];
+        if (fetched !== undefined && fetched !== detailSignature(area, detailedOcdfgView)) {
+          fetchDetailOcdfg(area);
+        }
+      }),
+    );
+    // Only when the areas themselves change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layers]);
 
   useEffect(() => {
     fetchTotem();
@@ -5660,8 +5282,8 @@ function TotemVisualizer({
   // OCDFG details cached against them stay valid; throwing them away on each
   // parameter change would make the panel unusable to tune with.
   const totemNodeSignature = useMemo(
-    () => JSON.stringify([...(rawTotem?.tempgraph?.nodes ?? [])].sort()),
-    [rawTotem?.tempgraph],
+    () => JSON.stringify([...(shownTotem?.tempgraph?.nodes ?? [])].sort()),
+    [shownTotem?.tempgraph],
   );
 
   useEffect(() => {
@@ -5946,7 +5568,7 @@ function TotemVisualizer({
     legendOffsets,
     layers,
     processAreaMetrics,
-    rawTotem,
+    shownTotem,
   ]);
 
   const visualizerContent = (
@@ -5974,24 +5596,17 @@ function TotemVisualizer({
           userSelect: 'none',
         }}
       >
-        {/* Floating HUD Controls */}
-        <div
-          data-totem-control
-          style={{
-            position: 'absolute',
-            bottom: 16,
-            right: 16,
-            zIndex: 50,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            background: '#ffffff',
-            border: '1px solid #e2e8f0',
-            borderRadius: 9999, // capsule shape
-            padding: '4px 8px',
-            boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -2px rgba(0,0,0,0.1)',
-            pointerEvents: 'auto',
-          }}
+        {/* Bottom-left legend of the relation arcs */}
+        {eventLogId && <RelationLegend />}
+
+        {/* Floating HUD Controls: the shared control pill. The relation legend
+            holds the bottom-left corner; the zoom label keeps it horizontal. */}
+        <ControlPill
+          spots={TOTEM_PILL_SPOTS}
+          storageKey="totem"
+          insetTop={resolvedTopInset}
+          zIndex={50}
+          rootProps={{ 'data-totem-control': '' }}
         >
           {/* Zoom % label */}
           <span style={{ fontSize: 12, fontWeight: 600, color: '#475569', minWidth: 42, textAlign: 'center', fontVariantNumeric: 'tabular-nums', marginRight: 4 }}>
@@ -6134,7 +5749,7 @@ function TotemVisualizer({
               </svg>
             )}
           </button>
-        </div>
+        </ControlPill>
 
         {/* Transform viewport wrapper: visually positions & scales the diagram without affecting layout measurements */}
         <div
@@ -6177,39 +5792,50 @@ function TotemVisualizer({
                 }}
               >
                 {primaryEdgeSegments.map((edge) => {
+                  // All relations share one line width; only the end
+                  // decorations tell them apart.
                   const strokeWidth =
-                    (edge.relation === 'D'
-                      ? 3.2
-                      : edge.relation === 'P'
-                        ? 1.5
-                        : edge.relation === 'A'
-                          ? 2.2
-                          : 2.6) * edgeStrokeScale;
+                    (edge.relation === 'A' ? 2.2 : ARC_STROKE_WIDTH) * edgeStrokeScale;
                   const strokeColor = edge.color ?? '#0F172A';
-                  const barStrokeWidth = edge.relation === 'P' ? 4.5 * edgeStrokeScale : strokeWidth;
+                  const barStrokeWidth =
+                    edge.relation === 'P' ? PARALLEL_BAR_STROKE_WIDTH * edgeStrokeScale : strokeWidth;
                   return (
                     <g
                       key={`${edge.id}-primary`}
-                      style={{ pointerEvents: 'auto' }}
+                      style={{ pointerEvents: 'auto', cursor: 'pointer' }}
                       onMouseEnter={(e) => {
-                        setTooltipState({
+                        if (!edge.from || !edge.to) return;
+                        const { from, to, relation } = edge;
+                        setArcCard((prev) =>
+                          prev?.pinned
+                            ? prev
+                            : { x: e.clientX, y: e.clientY, from, to, relation, pinned: false },
+                        );
+                      }}
+                      onMouseLeave={() => setArcCard((prev) => (prev?.pinned ? prev : null))}
+                      onMouseMove={(e) => {
+                        setArcCard((prev) =>
+                          prev && !prev.pinned ? { ...prev, x: e.clientX, y: e.clientY } : prev,
+                        );
+                      }}
+                      onMouseDown={(e) => {
+                        arcPressRef.current = { x: e.clientX, y: e.clientY };
+                      }}
+                      onClick={(e) => {
+                        if (!edge.from || !edge.to) return;
+                        const press = arcPressRef.current;
+                        arcPressRef.current = null;
+                        // A drag that started on the arc pans; it is no click.
+                        if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 4) return;
+                        e.stopPropagation();
+                        setArcCard({
                           x: e.clientX,
                           y: e.clientY,
-                          title:
-                            edge.from && edge.to
-                              ? `${edge.from} \u2192 ${edge.to}`
-                              : undefined,
-                          rows: [
-                            {
-                              label: 'Relation',
-                              value: RELATION_LABELS[edge.relation] ?? edge.relation,
-                            },
-                          ],
+                          from: edge.from,
+                          to: edge.to,
+                          relation: edge.relation,
+                          pinned: true,
                         });
-                      }}
-                      onMouseLeave={() => setTooltipState(null)}
-                      onMouseMove={(e) => {
-                        setTooltipState(prev => prev ? { ...prev, x: e.clientX, y: e.clientY } : null);
                       }}
                     >
                       <path
@@ -6241,13 +5867,7 @@ function TotemVisualizer({
                 })}
                 {violatingEdgeSegments.map((edge, vIndex) => {
                   const strokeWidth =
-                    (edge.relation === 'D'
-                      ? 3.2
-                      : edge.relation === 'P'
-                        ? 3
-                        : edge.relation === 'A'
-                          ? 2.2
-                          : 2.6) * edgeStrokeScale;
+                    (edge.relation === 'A' ? 2.2 : ARC_STROKE_WIDTH) * edgeStrokeScale;
                   const highlightWidth = strokeWidth + 1.6;
                   const highlightColor = '#ec4899';
                   const markerStroke = '#be185d';
@@ -6550,11 +6170,35 @@ function TotemVisualizer({
                                   zIndex: 2,
                                 }}
                               />
+                              {area.name ? (
+                                <span
+                                  data-testid="process-area-name"
+                                  title={area.name}
+                                  style={{
+                                    position: 'absolute',
+                                    bottom: '100%',
+                                    left: processAreaRadius / 2,
+                                    maxWidth: `calc(100% - ${processAreaRadius}px)`,
+                                    marginBottom: 2,
+                                    fontSize: 11,
+                                    fontWeight: 600,
+                                    lineHeight: 1.3,
+                                    color: '#1E3A8A',
+                                    whiteSpace: 'nowrap',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    pointerEvents: 'none',
+                                    zIndex: 3,
+                                  }}
+                                >
+                                  {area.name}
+                                </span>
+                              ) : null}
                               <ProcessAreaFilterAction
                                 fileId={eventLogId}
                                 area={area}
                                 detailedView={detailedOcdfgView}
-                                objectTypeToActivities={rawTotem?.object_type_to_event_types ?? {}}
+                                objectTypeToActivities={shownTotem?.object_type_to_event_types ?? {}}
                               />
                               {sortedObjectTypes.length > 0 ? (
                                 sortedObjectTypes.map((objectType) => {
@@ -6566,7 +6210,7 @@ function TotemVisualizer({
                                   const rawColumnIndex = (nodeColumns[objectType] ?? startColumn) - startColumn;
                                   const columnIndex = Math.max(0, Math.min(spanColumns - 1, rawColumnIndex));
                                   const activities =
-                                    rawTotem?.object_type_to_event_types?.[objectType] ?? [];
+                                    shownTotem?.object_type_to_event_types?.[objectType] ?? [];
                                   return (
                                     <span
                                       key={objectType}
@@ -6706,6 +6350,24 @@ function TotemVisualizer({
                                           Retry
                                         </Button>
                                       </div>
+                                    ) : detailData && detailData.nodes.length === 0 ? (
+                                      <div
+                                        data-testid="process-area-detail-empty"
+                                        title={
+                                          detailedOcdfgView
+                                            ? 'The filter leaves no activity of these object types.'
+                                            : 'Every activity of these object types belongs to a lower process area. The detailed view (eye button) shows all of them.'
+                                        }
+                                        style={{
+                                          fontSize: 12,
+                                          color: '#475569',
+                                          padding: '6px 8px',
+                                          textAlign: 'center',
+                                          lineHeight: 1.3,
+                                        }}
+                                      >
+                                        {detailedOcdfgView ? 'No activities' : 'No activities of its own'}
+                                      </div>
                                     ) : detailData ? (
                                       <OCDFGDetailVisualizer
                                         height={ocdfgHeight}
@@ -6807,15 +6469,37 @@ function TotemVisualizer({
         </div>
       </div>
 
-      {loading && (
-        <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-white/60 backdrop-blur-sm">
-          <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-5 py-3 shadow-lg">
-            <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-            <span className="text-sm font-medium text-slate-700">Discovering Totem model…</span>
-          </div>
+      {/* Also while a new response's hierarchy is laid out. A layout for
+          expanded or collapsed areas only (same layers) runs unnoticed. */}
+      {(loading || (gridLayout.pending && layers !== latestLayers)) && (
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-white/60 backdrop-blur-sm">
+          <ComputationStatus
+            fileId={eventLogId}
+            urlIncludes={['/discover_process_areas/', '/discover_mlpa/']}
+            fallback={(
+              <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-5 py-3 shadow-lg">
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                <span className="text-sm font-medium text-slate-700">
+                  {loading ? 'Discovering Totem model…' : 'Laying out process areas…'}
+                </span>
+              </div>
+            )}
+          />
         </div>
       )}
       {tooltipState && <HoverTooltip {...tooltipState} />}
+      {arcCard && (
+        <RelationStatsCard
+          x={arcCard.x}
+          y={arcCard.y}
+          from={arcCard.from}
+          to={arcCard.to}
+          relationLabel={RELATION_LABELS[arcCard.relation] ?? arcCard.relation}
+          stats={relationStats}
+          pinned={arcCard.pinned}
+          onClose={closeArcCard}
+        />
+      )}
     </div>
   );
 

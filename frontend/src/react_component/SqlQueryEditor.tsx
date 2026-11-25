@@ -13,6 +13,8 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useFilterVersion } from "@/store/filterStore";
+import { WidgetHeader } from "@/components/ui/WidgetTitle";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,6 +38,7 @@ import {
 import {
   BookmarkPlus,
   ChevronDown,
+  ChevronRight,
   Database,
   FolderOpen,
   Link2,
@@ -45,6 +48,7 @@ import {
   TableProperties,
   Unlink,
 } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
   executeQuery as runSqlQuery,
@@ -55,6 +59,7 @@ import {
   listQueryAssets,
   queryAssetDescription,
   queryAssetSql,
+  updateQueryAsset,
   type ProjectAsset,
 } from "@/api/assetsApi";
 import { SqlHighlightedTextarea } from "./sql/SqlHighlightedTextarea";
@@ -102,7 +107,17 @@ export interface SqlQueryEditorProps {
   onLinkChange?: (link: LinkedQuery | null) => void;
   /** hide the query-name input (e.g. when a dialog already names the query) */
   hideName?: boolean;
+  /** called after each successful test run with the query text and its first page */
+  onResult?: (result: { query: string; columns: string[]; rows: Record<string, unknown>[] }) => void;
   className?: string;
+  /** when false, queries run without the global filter (shows the unfiltered log) */
+  filterEnabled?: boolean;
+  /** called when the user clicks the filter toggle in view mode */
+  onToggleFilter?: () => void;
+  /** per-widget local filter params */
+  localFilterParams?: Record<string, string>;
+  /** called when the user changes the local filter */
+  onLocalFilterChange?: (params: Record<string, string>) => void;
 }
 
 export const SQL_QUERY_DEFAULT =
@@ -147,9 +162,21 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
   linkedQuery = null,
   onLinkChange,
   hideName = false,
+  onResult,
   className,
+  filterEnabled = true,
+  onToggleFilter,
+  localFilterParams,
+  onLocalFilterChange,
 }) => {
   const rowLimit = value.rowLimit ?? 25;
+  // Kept in a ref so a new callback each render doesn't change the run function.
+  const onResultRef = useRef(onResult);
+  useEffect(() => {
+    onResultRef.current = onResult;
+  }, [onResult]);
+  const filterVersion = useFilterVersion();
+  const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
 
   // Some hosts (e.g. the dashboard grid) mount this via a one-off ReactDOM
   // root that isn't re-rendered on every onChange. So text fields need
@@ -159,6 +186,7 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
   const [name, setName] = useState(value.name ?? "");
   const [query, setQuery] = useState(value.query ?? SQL_QUERY_DEFAULT);
   const [schema, setSchema] = useState<TableSchema[]>(SQL_FALLBACK_SCHEMA);
+  const [tablesVisible, setTablesVisible] = useState(true);
   const [expanded, setExpanded] = useState<string | null>("events");
   const [result, setResult] = useState<SqlQueryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -275,7 +303,7 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
       setRunning(true);
       const t0 = performance.now();
       try {
-        const page = await runSqlQuery(fileId, q, { offset: 0, limit: rowLimit });
+        const page = await runSqlQuery(fileId, q, { offset: 0, limit: rowLimit, skipGlobalFilter: !filterEnabled, localFilterParams });
         if (seq !== runSeq.current) return;
         setResult({
           rows: page.data,
@@ -283,6 +311,7 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
           hasMore: page.hasMore,
           ms: Math.round(performance.now() - t0),
         });
+        onResultRef.current?.({ query: q, columns: page.columns, rows: page.data });
         setError(null);
         scrollRef.current?.scrollTo({ top: 0 });
       } catch (e) {
@@ -293,7 +322,7 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
         if (seq === runSeq.current) setRunning(false);
       }
     },
-    [query, fileId, rowLimit]
+    [query, fileId, rowLimit, filterEnabled, localFilterParams]
   );
 
   const loadMore = useCallback(async () => {
@@ -304,6 +333,8 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
       const page = await runSqlQuery(fileId, query, {
         offset: result.rows.length,
         limit: rowLimit,
+        skipGlobalFilter: !filterEnabled,
+        localFilterParams,
       });
       if (seq !== runSeq.current) return;
       setResult((prev) =>
@@ -317,7 +348,7 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
     } finally {
       if (seq === runSeq.current) setLoadingMore(false);
     }
-  }, [fileId, result, loadingMore, running, query, rowLimit]);
+  }, [fileId, result, loadingMore, running, query, rowLimit, filterEnabled, localFilterParams]);
 
   // Lazy loading: fetch the next page when the sentinel below the last row
   // scrolls into view.
@@ -336,12 +367,14 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
 
   // View mode auto-runs; edit-mode authoring runs are explicit (Run / ⌘↵).
   // While linked, wait for the stored text before running anything.
+  // A changed global filter, filter toggle or local filter re-runs the query.
+  const localFilterKey = JSON.stringify(localFilterParams ?? {});
   useEffect(() => {
     if (isEditMode) return;
     if (linked && storedQueryText == null) return;
     void run(linked ? storedQueryText ?? "" : query);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isEditMode, query, fileId, linked, storedQueryText, rowLimit]);
+  }, [isEditMode, query, fileId, linked, storedQueryText, rowLimit, effectiveFilterVersion, filterEnabled, localFilterKey]);
 
   const patchName = (v: string) => {
     setName(v);
@@ -577,11 +610,15 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
 
   if (!isEditMode) {
     return (
-      <Card className={cn("flex h-full w-full flex-col overflow-hidden text-left", className)}>
-        <CardHeader className="flex flex-row items-center gap-2 space-y-0 border-b py-3">
-          <CardTitle className="min-w-0 flex-1 truncate text-sm">
-            {name || linkedQuery?.name || "SQL query"}
-          </CardTitle>
+      <Card className={cn("flex h-full w-full flex-col gap-0 overflow-hidden pt-0 text-left", className)}>
+        <WidgetHeader
+          label={name || linkedQuery?.name || "SQL query"}
+          fileId={fileId}
+          filterEnabled={filterEnabled}
+          onToggleFilter={onToggleFilter}
+          localFilterParams={localFilterParams}
+          onLocalFilterChange={onLocalFilterChange}
+        >
           {linked && (
             <Badge variant="secondary" className="shrink-0 gap-1 text-[10px]" title={`linked to stored query "${linkedQuery?.name}"`}>
               <Link2 className="size-3" /> linked
@@ -593,7 +630,7 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
           >
             {statusCaption}
           </Badge>
-        </CardHeader>
+        </WidgetHeader>
         <CardContent
           ref={scrollRef}
           className="flex-1 overflow-auto p-0 pr-3 pl-3"
@@ -620,7 +657,7 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
 
   return (
     <Card className={cn("flex h-full w-full flex-col overflow-hidden text-left", className)}>
-      <CardHeader className="flex flex-row items-center gap-2 space-y-0 border-b py-2.5">
+      <CardHeader className="flex flex-row items-center gap-2 space-y-0 border-b px-4 py-2 text-left">
         <span
           className="h-2 w-2 shrink-0 rounded-[2px]"
           style={{
@@ -696,15 +733,41 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
           </DropdownMenu>
         )}
         {linked && (
-          <Badge
-            variant="secondary"
-            className="min-w-0 shrink gap-1 truncate text-[10px]"
-            title={`linked to stored query "${linkedQuery?.name}"`}
-          >
-            <Link2 className="size-3 shrink-0" />
-            <span className="truncate">{stored.asset?.name ?? linkedQuery?.name}</span>
-            {dirtyAgainstStore && <span className="shrink-0 text-amber-600">· unsaved</span>}
-          </Badge>
+          <div className="flex items-center gap-1.5">
+            <Badge
+              variant="secondary"
+              className="min-w-0 shrink gap-1 truncate text-[10px]"
+              title={`linked to stored query "${linkedQuery?.name}"`}
+            >
+              <Link2 className="size-3 shrink-0" />
+              <span className="truncate">{stored.asset?.name ?? linkedQuery?.name}</span>
+              {dirtyAgainstStore && <span className="shrink-0 text-amber-600">· unsaved</span>}
+            </Badge>
+            {dirtyAgainstStore && stored.asset && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-6 gap-1 px-2 text-[10px] text-amber-700 hover:text-amber-800"
+                onClick={async () => {
+                  try {
+                    await updateQueryAsset({
+                      assetId: stored.asset.id,
+                      query,
+                      current: stored.asset.content_json,
+                    });
+                    setStoredRefresh((n) => n + 1);
+                    toast.success(`Updated stored query "${stored.asset.name}"`);
+                  } catch {
+                    toast.error("Failed to update stored query");
+                  }
+                }}
+                title={`Save changes back to stored query "${stored.asset.name}"`}
+              >
+                <Save className="size-3" /> Save to store
+              </Button>
+            )}
+          </div>
         )}
         <span className="ml-auto min-w-0 flex-1 truncate whitespace-nowrap text-right text-[11px] text-muted-foreground">
           DuckDB · SELECT-only
@@ -732,56 +795,71 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
         />
 
         {/* table chips */}
-        <div className="flex flex-wrap items-center gap-2 border-b bg-muted/40 px-3.5 py-2">
-          <span className="mr-1 text-xs font-semibold text-muted-foreground">Tables</span>
-          {schema.map((t) => {
-            const active = expanded === t.name;
-            return (
-              <button
-                key={t.name}
-                type="button"
-                onClick={() => {
-                  // A double-click fires two "click" events before "dblclick",
-                  // so defer the single-click toggle and let a following
-                  // dblclick within the window cancel it.
-                  if (chipClickTimer.current != null) clearTimeout(chipClickTimer.current);
-                  chipClickTimer.current = window.setTimeout(() => {
-                    setExpanded((prev) => (prev === t.name ? null : t.name));
-                    chipClickTimer.current = null;
-                  }, 220);
-                }}
-                onDoubleClick={() => {
-                  if (chipClickTimer.current != null) {
-                    clearTimeout(chipClickTimer.current);
-                    chipClickTimer.current = null;
+        <div className="flex flex-wrap items-center gap-2 border-b bg-muted/40 px-3.5 py-1.5">
+          <button
+            type="button"
+            onClick={() => setTablesVisible((v) => !v)}
+            className="flex items-center gap-1 text-xs font-semibold text-muted-foreground hover:text-foreground"
+            title={tablesVisible ? "Collapse schema browser" : "Expand schema browser"}
+          >
+            {tablesVisible ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+            <span>Tables</span>
+          </button>
+          {tablesVisible &&
+            schema.map((t) => {
+              const active = expanded === t.name;
+              return (
+                <button
+                  key={t.name}
+                  type="button"
+                  onClick={() => {
+                    // A double-click fires two "click" events before "dblclick",
+                    // so defer the single-click toggle and let a following
+                    // dblclick within the window cancel it.
+                    if (chipClickTimer.current != null) clearTimeout(chipClickTimer.current);
+                    chipClickTimer.current = window.setTimeout(() => {
+                      setExpanded((prev) => (prev === t.name ? null : t.name));
+                      chipClickTimer.current = null;
+                    }, 220);
+                  }}
+                  onDoubleClick={() => {
+                    if (chipClickTimer.current != null) {
+                      clearTimeout(chipClickTimer.current);
+                      chipClickTimer.current = null;
+                    }
+                    insertTable(t.name);
+                  }}
+                  title="Click to browse columns, double-click to insert the table name"
+                  className="rounded-full border bg-background px-3 py-1 font-mono text-xs transition-colors hover:bg-accent"
+                  style={
+                    active
+                      ? {
+                          background: "hsl(142,60%,90%)",
+                          borderColor: "hsl(142,45%,70%)",
+                          color: "hsl(142,60%,22%)",
+                        }
+                      : undefined
                   }
-                  insertTable(t.name);
-                }}
-                title="Click to browse columns, double-click to insert the table name"
-                className="rounded-full border bg-background px-3 py-1 font-mono text-xs transition-colors hover:bg-accent"
-                style={
-                  active
-                    ? {
-                        background: "hsl(142,60%,90%)",
-                        borderColor: "hsl(142,45%,70%)",
-                        color: "hsl(142,60%,22%)",
-                      }
-                    : undefined
-                }
-              >
-                {t.name}
-              </button>
-            );
-          })}
-          <span className="ml-auto text-[11px]" style={{ color: "hsl(240,4%,60%)" }}>
-            double-click a table or column to insert
-          </span>
+                >
+                  {t.name}
+                </button>
+              );
+            })}
+          {tablesVisible && (
+            <span className="ml-auto text-[11px]" style={{ color: "hsl(240,4%,60%)" }}>
+              double-click a table or column to insert
+            </span>
+          )}
         </div>
 
         {/* column browser */}
-        {expandedTable && (
-          <div className="border-b">
-            <div className="flex items-center gap-2 px-4 pb-1 pt-2">
+        {tablesVisible && expandedTable && (
+          <div className="border-b bg-muted/10">
+            <div
+              className="flex cursor-pointer items-center gap-2 px-4 pb-1 pt-2 hover:bg-muted/30"
+              onClick={() => setExpanded(null)}
+              title="Click to collapse columns"
+            >
               <ChevronDown className="size-3.5 text-muted-foreground" />
               <span className="font-mono text-[13px] font-medium">{expandedTable.name}</span>
               <span className="text-[11px] text-muted-foreground">
@@ -793,8 +871,20 @@ const SqlQueryEditor: React.FC<SqlQueryEditorProps> = ({
                     }`
                   : "schema unavailable — could not load the table list"}
               </span>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="ml-auto h-5 px-1.5 text-[10px] text-muted-foreground hover:text-foreground"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setExpanded(null);
+                }}
+              >
+                Close
+              </Button>
             </div>
-            <div className="grid grid-cols-2 gap-x-6 px-4 pb-3 pt-1">
+            <div className="grid max-h-[180px] grid-cols-2 gap-x-6 overflow-y-auto px-4 pb-3 pt-1">
               {expandedTable.columns.map((c) => (
                 <div
                   key={c.name}

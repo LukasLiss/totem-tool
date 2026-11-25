@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, SlidersHorizontal } from "lucide-react";
+import { ArrowDownWideNarrow, ArrowUpNarrowWide, ChevronDown, SlidersHorizontal } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -10,12 +10,19 @@ import {
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
-import type { AxisOption, RowOrderOption } from "./dottedChartUtils";
+import type { AxisOption, RowOrderDirection, RowOrderOption } from "./dottedChartUtils";
 import {
-  DEFAULT_DOTTED_CHART_OPTIONS,
-  useDottedChartOptions,
-  type DottedChartOption,
-} from "./useDottedChartOptions";
+  OBJECT_TYPE_CONTROL_VALUE,
+  ROW_ORDER_OPTIONS,
+  axisToControlValue,
+  axisToPrimaryControlValue,
+  collapseObjectTypeOptions,
+  controlValueToAxis,
+  getObjectTypeValue,
+  withCurrentOption,
+  type AxisControlValue,
+} from "./dottedChartAxisOptions";
+import { useDottedChartOptions, type DottedChartOption } from "./useDottedChartOptions";
 
 export type DottedChartConfig = {
   xAxis: AxisOption;
@@ -23,6 +30,7 @@ export type DottedChartConfig = {
   colorBy: AxisOption;
   shapeBy: AxisOption;
   rowOrder: RowOrderOption;
+  rowOrderDirection: RowOrderDirection;
   maxPoints: number;
 };
 
@@ -32,13 +40,6 @@ type DottedChartControlsProps = {
   onConfigChange: (config: DottedChartConfig) => void;
   className?: string;
 };
-
-type AxisControlValue = string;
-const OBJECT_TYPE_CONTROL_VALUE = "__object_type__";
-const ROW_ORDER_OPTIONS: Array<{ label: string; value: RowOrderOption }> = [
-  { label: "First occurrence", value: "first_occurrence" },
-  { label: "Last occurrence", value: "last_occurrence" },
-];
 
 export function DottedChartControls({
   fileId,
@@ -57,6 +58,8 @@ export function DottedChartControls({
     [options.y_axis]
   );
   const selectedYObjectType = getObjectTypeValue(draftConfig.yAxis, objectTypeOptions);
+  const showsObjectTypeSelect =
+    axisToPrimaryControlValue(draftConfig.yAxis) === OBJECT_TYPE_CONTROL_VALUE;
   const selectOptions = useMemo(
     () => ({
       x_axis: withCurrentOption(options.x_axis, draftConfig.xAxis),
@@ -100,7 +103,16 @@ export function DottedChartControls({
       </div>
 
       <CollapsibleContent>
-        <div className="grid gap-3 border-t px-3 py-3 md:grid-cols-3 xl:grid-cols-6">
+        <div
+          className={cn(
+            "grid gap-3 border-t px-3 py-3 md:grid-cols-3",
+            // Give the Y Axis Order column extra room so its label and the
+            // Asc/Desc toggle fit on one line.
+            showsObjectTypeSelect
+              ? "xl:grid-cols-[repeat(5,minmax(0,1fr))_minmax(0,1.6fr)]"
+              : "xl:grid-cols-[repeat(4,minmax(0,1fr))_minmax(0,1.6fr)]"
+          )}
+        >
           <AxisSelect
             label="X Axis"
             value={axisToControlValue(draftConfig.xAxis)}
@@ -122,7 +134,7 @@ export function DottedChartControls({
               )
             }
           />
-          {axisToPrimaryControlValue(draftConfig.yAxis) === OBJECT_TYPE_CONTROL_VALUE && (
+          {showsObjectTypeSelect && (
             <AxisSelect
               label="Object Type"
               value={selectedYObjectType}
@@ -145,7 +157,35 @@ export function DottedChartControls({
             onChange={(value) => updateDraftConfig({ shapeBy: controlValueToAxis(value) })}
           />
           <div className="space-y-2">
-            <Label className="text-xs text-muted-foreground">Y Axis Order</Label>
+            <div className="flex items-center justify-between gap-2">
+              <Label className="whitespace-nowrap text-xs text-muted-foreground">Y Axis Order</Label>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="-my-0.5 h-5 shrink-0 gap-1 px-1.5 text-xs text-muted-foreground"
+                title={
+                  draftConfig.rowOrderDirection === "desc"
+                    ? "Descending order. Click to sort ascending."
+                    : "Ascending order. Click to sort descending."
+                }
+                aria-label={`Y axis order direction: ${
+                  draftConfig.rowOrderDirection === "desc" ? "descending" : "ascending"
+                }`}
+                onClick={() =>
+                  updateDraftConfig({
+                    rowOrderDirection: draftConfig.rowOrderDirection === "desc" ? "asc" : "desc",
+                  })
+                }
+              >
+                {draftConfig.rowOrderDirection === "desc" ? (
+                  <ArrowDownWideNarrow className="h-3 w-3" />
+                ) : (
+                  <ArrowUpNarrowWide className="h-3 w-3" />
+                )}
+                {draftConfig.rowOrderDirection === "desc" ? "Desc" : "Asc"}
+              </Button>
+            </div>
             <select
               value={draftConfig.rowOrder}
               onChange={(event) =>
@@ -162,7 +202,7 @@ export function DottedChartControls({
               ))}
             </select>
           </div>
-          <div className="space-y-2 md:col-span-3 xl:col-span-6">
+          <div className="space-y-2 md:col-span-3 xl:col-span-full">
             <div className="flex items-center justify-between gap-3">
               <Label className="text-xs text-muted-foreground">Max Points</Label>
               <span className="text-xs tabular-nums text-muted-foreground">
@@ -179,7 +219,7 @@ export function DottedChartControls({
               }
             />
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-2 md:col-span-3 xl:col-span-6">
+          <div className="flex flex-wrap items-center justify-end gap-2 md:col-span-3 xl:col-span-full">
             <span className="mr-auto text-xs text-muted-foreground">
               {loadingOptions
                 ? "Loading available columns..."
@@ -240,82 +280,4 @@ function AxisSelect({
       </select>
     </div>
   );
-}
-
-function axisToControlValue(axis: AxisOption): AxisControlValue {
-  if (axis.type === "event_attribute") return axis.name;
-  return axis.type;
-}
-
-function axisToPrimaryControlValue(axis: AxisOption): AxisControlValue {
-  const value = axisToControlValue(axis);
-  if (value.startsWith("object_type:")) return OBJECT_TYPE_CONTROL_VALUE;
-  return value;
-}
-
-function controlValueToAxis(value: AxisControlValue): AxisOption {
-  if (isBuiltinAxis(value)) return { type: value };
-  return { type: "event_attribute", name: value };
-}
-
-function withCurrentOption(options: DottedChartOption[], axis: AxisOption): DottedChartOption[] {
-  const currentValue = axisToPrimaryControlValue(axis);
-  if (options.some((option) => option.value === currentValue)) return options;
-  const fallback = findDefaultOption(currentValue);
-  if (fallback) return [fallback, ...options];
-  return [
-    {
-      label: currentValue,
-      value: currentValue,
-      kind: axis.type === "event_attribute" ? "categorical" : "none",
-    },
-    ...options,
-  ];
-}
-
-function collapseObjectTypeOptions(options: DottedChartOption[]): DottedChartOption[] {
-  const collapsed: DottedChartOption[] = [];
-  let hasObjectTypes = false;
-
-  options.forEach((option) => {
-    if (option.value.startsWith("object_type:")) {
-      hasObjectTypes = true;
-      return;
-    }
-    collapsed.push(option);
-  });
-
-  if (!hasObjectTypes) return collapsed;
-
-  const insertAfterActivity = collapsed.findIndex((option) => option.value === "activity");
-  const objectTypeOption = {
-    label: "Object Type",
-    value: OBJECT_TYPE_CONTROL_VALUE,
-    kind: "categorical" as const,
-  };
-
-  if (insertAfterActivity === -1) return [objectTypeOption, ...collapsed];
-  return [
-    ...collapsed.slice(0, insertAfterActivity + 1),
-    objectTypeOption,
-    ...collapsed.slice(insertAfterActivity + 1),
-  ];
-}
-
-function getObjectTypeValue(axis: AxisOption, options: DottedChartOption[]): AxisControlValue {
-  const value = axisToControlValue(axis);
-  if (value.startsWith("object_type:")) return value;
-  return options[0]?.value ?? "";
-}
-
-function findDefaultOption(value: string): DottedChartOption | undefined {
-  return Object.values(DEFAULT_DOTTED_CHART_OPTIONS)
-    .flat()
-    .find((option) => option.value === value);
-}
-
-function isBuiltinAxis(
-  value: string
-): value is "time" | "timestamp" | "timestamp_unix" | "since_start" | "activity" | "none" {
-  return ["time", "timestamp", "timestamp_unix", "since_start", "activity", "none"].includes(value);
 }

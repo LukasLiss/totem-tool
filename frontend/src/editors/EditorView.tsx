@@ -30,10 +30,10 @@ export function EditorView() {
   };
 
   return (
-    <div className="flex flex-col h-screen min-h-0">
-      <SidebarTrigger className="m-2 shrink-0" />
-      <div className="flex-1 min-h-0 flex justify-center p-4 pt-0">
-        <div className="w-full max-w-[1600px] min-h-0 flex">
+    <div className="flex flex-col min-h-0 md:h-screen">
+      <SidebarTrigger className="m-2 max-md:hidden shrink-0" />
+      <div className="flex-1 min-h-0 flex justify-center p-4 md:pt-0">
+        <div className="w-full min-w-0 max-w-[1600px] min-h-0 flex">
           {renderEditor()}
         </div>
       </div>

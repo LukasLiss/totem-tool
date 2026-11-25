@@ -36,8 +36,11 @@ frontend only ever holds one page of the log:
 
 ## Exports
 
-- **Download** — DuckDB (native), or OCEL 2.0 SQLite / JSON / XML via pm4py.
-  Event and object attribute columns are preserved in all formats.
+- **Download** — DuckDB (native), or OCEL 2.0 SQLite / JSON / XML
+  (`totem_lib.ocel.exporter`). Every event and object is exported, including
+  events without objects and objects no event refers to. Event attributes and
+  time-stamped object attribute values (`object_attribute_history`) are
+  preserved in all formats.
 - **LaTeX** — the E2O table (id / activity / timestamp / one column per
   object type, using `multirow` headers) and the O2O table as
   copy-paste-ready `tabular` environments. Row output is capped at 500 rows;

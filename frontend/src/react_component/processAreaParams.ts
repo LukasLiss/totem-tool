@@ -39,7 +39,7 @@ export const DEFAULT_PROCESS_AREA_PARAMS: ProcessAreaParams = {
   wTemporal: 1,
   wCardinality: 1,
   wDivergence: 1,
-  alpha: 1,
+  alpha: 2,
   beta: 1,
 };
 

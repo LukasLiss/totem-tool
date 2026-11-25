@@ -2,8 +2,10 @@ import React, { useEffect } from "react";
 import { GridStack } from "gridstack";
 import { useGrid } from "./gridContext";
 import {
+  AlignmentTile,
   BarChartTile,
   DottedChartTile,
+  HandoverTile,
   ImageTile,
   KpiTile,
   LogStatisticsTile,
@@ -11,8 +13,10 @@ import {
   OcdfgArcWeightTile,
   OcdfgVariantsTile,
   OcpnTile,
+  OcpnReplayTile,
   PieChartTile,
   ProcessAreaTile,
+  ResourceProfilingTile,
   ScatterPlotTile,
   SqlEditorTile,
   TextBoxTile,
@@ -20,6 +24,7 @@ import {
   TrashTile,
   VariantsTile,
 } from "@/components/tiles/tile-previews";
+import { TEXT_BOX_FORMAT_DEFAULTS } from "@/components/text-box/textBoxFormat";
 
 const SidePanel: React.FC = () => {
   const { grid } = useGrid();
@@ -33,7 +38,9 @@ const SidePanel: React.FC = () => {
         helper: "clone",
         appendTo: "body",
       },
-      [{ h: 1, w: 6, content: "Text Box", component_name: "TextBoxComponent", font_size: 14, text: "", order: 0 }]  // Ensure consistency
+      // Spread the shared defaults so a dragged-in text box starts out
+      // identical to one loaded from the database (#373).
+      [{ h: 1, w: 6, content: "Text Box", component_name: "TextBoxComponent", text: "", order: 0, rich_text: null, ...TEXT_BOX_FORMAT_DEFAULTS }]
     );
 
     GridStack.setupDragIn(
@@ -51,7 +58,7 @@ const SidePanel: React.FC = () => {
         helper: "clone",
         appendTo: "body",
       },
-      [{ h: 4, w: 6, content: "Variants Explorer", component_name: "VariantsComponent", automatic_loading: false, leading_object_type: '', business_object_types: [], business_activities: [], order: 0 }]
+      [{ h: 4, w: 6, content: "Variants Explorer", component_name: "VariantsComponent", automatic_loading: false, leading_object_type: '', business_object_types: [], business_activities: [], variants_mode: 'process_areas', order: 0 }]
     );
 
     GridStack.setupDragIn(
@@ -110,6 +117,7 @@ const SidePanel: React.FC = () => {
         color_by: "activity",
         shape_by: "none",
         row_order: "first_occurrence",
+        row_order_direction: "asc",
         max_points: 10000,
         order: 0
       }]
@@ -182,6 +190,23 @@ const SidePanel: React.FC = () => {
         component_name: "OCPNComponent",
         automatic_loading: false,
         timeout_s: 30,
+        order: 0
+      }]
+    );
+
+    GridStack.setupDragIn(
+      ".sidepanel .ocpn-replay-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 7,
+        w: 8,
+        content: "OCPN Flattened Replay",
+        component_name: "OCPNFlattenedReplayComponent",
+        ocpn_asset_id: null,
+        automatic_loading: false,
         order: 0
       }]
     );
@@ -296,6 +321,86 @@ const SidePanel: React.FC = () => {
       }]
     );
 
+    GridStack.setupDragIn(
+      ".sidepanel .oc-handover-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 8,
+        w: 10,
+        content: "Handover of Work",
+        component_name: "OCHandoverComponent",
+        show_controls: true,
+        automatic_loading: false,
+        resource_types: [],
+        businessobject_types: [],
+        max_gap: null,
+        normalization: "by_arcs_in_eog",
+        normalization_scope: "global",
+        parallel_filter_enabled: false,
+        parallel_threshold: 0.5,
+        min_parallel_observations: 1,
+        cluster_by_ot: false,
+        view_mode: "graph",
+        order: 0
+      }]
+    );
+
+    GridStack.setupDragIn(
+      ".sidepanel .resource-profiling-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 8,
+        w: 10,
+        content: "Resource Profiling",
+        component_name: "ResourceProfilingComponent",
+        show_controls: true,
+        automatic_loading: false,
+        resource_types: [],
+        business_object_types: [],
+        feature_groups: ["activity_fractions"],
+        tooltip_feature_groups: [],
+        compute_clusters: true,
+        cluster_method: "hdbscan",
+        n_clusters: 3,
+        min_cluster_size: 2,
+        distance_metric: "euclidean",
+        view_mode: "graph",
+        order: 0
+      }]
+    );
+
+    GridStack.setupDragIn(
+      ".sidepanel .oc-alignment-component",
+      {
+        helper: "clone",
+        appendTo: "body",
+      },
+      [{
+        h: 10,
+        w: 12,
+        content: "Object-Centric Alignment",
+        component_name: "OCAlignmentComponent",
+        show_controls: true,
+        automatic_loading: false,
+        model_asset: null,
+        execution_source: "area",
+        execution_column: "",
+        business_object_types: [],
+        business_activities: [],
+        execution_id: "",
+        max_states: 200000,
+        timeout_s: 60,
+        show_silent_moves: false,
+        order: 0
+      }]
+    );
+
   }, [grid]);
 
   // The panel's own markup: every tile is the same box, differing only in its
@@ -370,6 +475,11 @@ const SidePanel: React.FC = () => {
         <div>OC Petri Net</div>
       </div>
 
+      <div className={`${TILE_CLASS} ocpn-replay-component`}>
+        <OcpnReplayTile />
+        <div>OCPN Flattened Replay</div>
+      </div>
+
       <div className={`${TILE_CLASS} sql-query-component`}>
         <SqlEditorTile />
         <div>SQL Editor</div>
@@ -393,6 +503,21 @@ const SidePanel: React.FC = () => {
       <div className={`${TILE_CLASS} scatter-plot-component`}>
         <ScatterPlotTile />
         <div>Scatter Plot (by SQL)</div>
+      </div>
+
+      <div className={`${TILE_CLASS} oc-handover-component`}>
+        <HandoverTile />
+        <div>Handover of Work</div>
+      </div>
+
+      <div className={`${TILE_CLASS} resource-profiling-component`}>
+        <ResourceProfilingTile />
+        <div>Resource Profiling</div>
+      </div>
+
+      <div className={`${TILE_CLASS} oc-alignment-component`}>
+        <AlignmentTile />
+        <div>Object-Centric Alignment</div>
       </div>
       </div>
     </div>

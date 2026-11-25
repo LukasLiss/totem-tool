@@ -35,6 +35,27 @@ export interface SqlQueryFieldProps {
   editorTitle?: string;
   className?: string;
   id?: string;
+  /**
+   * grow the text box to show the whole query instead of capping it at
+   * 200px; inside a height-limited flex column it shrinks again (and
+   * scrolls) so the content below stays visible
+   */
+  grow?: boolean;
+  /**
+   * called after applying from the SQL editor when the user had run exactly
+   * the applied query there, with that result (so it needn't run again)
+   */
+  onRunResult?: (
+    result: { columns: string[]; rows: Record<string, unknown>[] },
+    query: string,
+    linkedQuery: LinkedQuery | null
+  ) => void;
+  /**
+   * rows per page for the SQL editor's page selector: it starts at this
+   * value, and onRowLimitChange gets the selection when the user applies
+   */
+  rowLimit?: number;
+  onRowLimitChange?: (rowLimit: number) => void;
 }
 
 export function SqlQueryField({
@@ -49,6 +70,10 @@ export function SqlQueryField({
   editorTitle = "Edit query",
   className,
   id,
+  grow = false,
+  onRunResult,
+  rowLimit,
+  onRowLimitChange,
 }: SqlQueryFieldProps) {
   const [editorOpen, setEditorOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -57,17 +82,19 @@ export function SqlQueryField({
   const shown = linked ? (stored.asset ? queryAssetSql(stored.asset) : value) : value;
 
   return (
-    <div className={cn("flex flex-col gap-1.5", className)}>
-      <div className="relative">
+    <div className={cn("flex flex-col gap-1.5", grow && "min-h-0", className)}>
+      <div className={cn("relative", grow && "flex min-h-0 flex-col")}>
         <SqlHighlightedTextarea
           id={id}
           value={shown}
           onChange={linked ? undefined : onChange}
           readOnly={linked}
           placeholder={placeholder}
+          autoHeight={grow}
           textClassName="px-2.5 py-1.5 pr-16 text-[12px] leading-[19px]"
           className={cn(
-            "min-h-[76px] max-h-[200px] rounded-md border shadow-xs",
+            "min-h-[76px] rounded-md border shadow-xs",
+            grow ? "shrink" : "max-h-[200px]",
             linked ? "bg-muted/40" : "bg-background"
           )}
         />
@@ -128,10 +155,15 @@ export function SqlQueryField({
         linkedQuery={onLinkChange ? linkedQuery : null}
         expectedResult={expectedResult}
         title={editorTitle}
-        onApply={(query, link) => {
+        rowLimit={rowLimit}
+        onApply={(query, link, result, selectedRowLimit) => {
           onChange(query);
           if (onLinkChange && (link?.id ?? null) !== (linkedQuery?.id ?? null)) {
             onLinkChange(link);
+          }
+          if (result) onRunResult?.(result, query, onLinkChange ? link : null);
+          if (selectedRowLimit !== undefined && selectedRowLimit !== rowLimit) {
+            onRowLimitChange?.(selectedRowLimit);
           }
         }}
       />

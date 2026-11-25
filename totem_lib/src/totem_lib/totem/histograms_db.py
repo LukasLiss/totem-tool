@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Dict, Iterable, Literal, Tuple
 
 from ..ocel.ocel_duckdb import OcelDuckDB
+from ..progress import as_progress
 from .conformance import TotemConformanceHistograms
 from .totem import (
     EC_MANY,
@@ -124,6 +125,7 @@ def compute_totem_histograms_db(
     ocel_db: OcelDuckDB,
     include_details: bool = False,
     connection_mode: ConnectionMode = "discovery",
+    progress=None,
 ) -> TotemConformanceHistograms:
     """Compute aggregate and optional detailed TOTeM histograms in DuckDB.
 
@@ -141,24 +143,29 @@ def compute_totem_histograms_db(
         raise ValueError(f"Unsupported TOTeM connection mode: {connection_mode}")
 
     conn = ocel_db.conn
+    progress = as_progress(progress)
     conformance_mode = connection_mode == "conformance"
     connections_cte = (
         _CONFORMANCE_CONNECTIONS_CTE
         if conformance_mode
         else _AGGREGATE_CONNECTIONS_CTE
     )
+    progress.report(0.0, "Computing event cardinalities")
     event_cardinality = _event_cardinality_histogram(
         conn,
         include_zero_counts=not conformance_mode,
     )
+    progress.report(0.3, "Computing log cardinalities")
     log_cardinality = _log_cardinality_histogram(
         conn,
         connections_cte,
         include_zero_counts=not conformance_mode,
     )
+    progress.report(0.6, "Computing temporal relations")
     temporal = _temporal_histogram(conn, connections_cte)
 
     if include_details:
+        progress.report(0.8, "Computing detailed histograms")
         event_by_activity = _event_cardinality_by_activity(conn)
         temporal_by_relation = _temporal_by_relation_type(conn)
         log_by_relation = _log_cardinality_by_relation_type(conn)
@@ -167,6 +174,7 @@ def compute_totem_histograms_db(
         temporal_by_relation = {}
         log_by_relation = {}
 
+    progress.report(1.0)
     return TotemConformanceHistograms(
         temporal=temporal,
         log_cardinality=log_cardinality,

@@ -4,15 +4,15 @@ name: electron
 # for Windows (x64), macOS Apple Silicon (arm64) and macOS Intel (x64).
 #
 # The PyInstaller backend is single-architecture, so each macOS flavour is
-# built on a runner of that architecture (macos-14 = arm64, macos-13 = x64).
+# built on a runner of that architecture (macos-14 = arm64, macos-15-intel = x64).
+# macos-13 was retired in Dec 2025; GitHub drops Intel macOS runners in fall 2027.
 #
 # Signing / notarization is optional: when the secrets below are not set the
 # build produces unsigned artifacts (fine for testing, not for distribution).
 #   macOS:   CSC_LINK (base64 .p12), CSC_KEY_PASSWORD, APPLE_ID,
 #            APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID
 #   Windows: WIN_CSC_LINK (base64 .pfx), WIN_CSC_KEY_PASSWORD
-#            (or WIN_CERT_SUBJECT_NAME for a certificate in the machine store,
-#            or electron-builder's azureSignOptions for Azure Trusted Signing)
+#            (or electron-builder's azureSignOptions for Azure Trusted Signing)
 
 on:
   workflow_dispatch:
@@ -37,7 +37,7 @@ jobs:
           - os: macos-14
             name: macos-arm64
             build-script: build-all-mac
-          - os: macos-13
+          - os: macos-15-intel
             name: macos-x64
             build-script: build-all-mac
 
@@ -94,12 +94,9 @@ jobs:
           # Windows Authenticode (PFX). Leave unset for an unsigned build.
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
-          WIN_CERT_SUBJECT_NAME: ${{ secrets.WIN_CERT_SUBJECT_NAME }}
           # Without a certificate electron-builder must not go looking for
           # one in the keychain (an unsigned build is the intended outcome).
           CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.CSC_LINK != '' }}
-          # Never publish from the build step; the release job below does it.
-          EB_PUBLISH: never
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -122,11 +119,47 @@ jobs:
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
-          path: release-artifacts
-          merge-multiple: true
+          path: artifacts
 
-      - name: List artifacts
-        run: ls -la release-artifacts
+      # Both macOS jobs write a latest-mac.yml (the electron-updater feed), so
+      # flattening the artifacts would keep only one. Merge their file lists:
+      # arm64 Macs pick the "arm64" entries, Intel Macs the others. The
+      # top-level path/sha512 stay on the x64 zip (legacy fallback).
+      - name: Collect artifacts and merge latest-mac.yml
+        run: |
+          mkdir release-artifacts
+          find artifacts -type f ! -name latest-mac.yml -exec cp {} release-artifacts/ \;
+          python3 - <<'EOF'
+          from pathlib import Path
+
+          def split(path):
+              parts = {"head": [], "files": [], "tail": []}
+              section = "head"
+              for line in Path(path).read_text().splitlines():
+                  if line == "files:":
+                      section = "files"
+                      continue
+                  if section == "files" and not line.startswith(" "):
+                      section = "tail"
+                  parts[section].append(line)
+              return parts
+
+          x64 = split("artifacts/totem-tool-macos-x64/latest-mac.yml")
+          arm64 = split("artifacts/totem-tool-macos-arm64/latest-mac.yml")
+          merged = x64["head"] + ["files:"] + x64["files"] + arm64["files"] + x64["tail"]
+          Path("release-artifacts/latest-mac.yml").write_text("\n".join(merged) + "\n")
+          EOF
+
+          # Version-free copies, so a website can link to
+          # .../releases/latest/download/<name> without updating it per
+          # release. The versioned files stay: electron-updater uses them.
+          cd release-artifacts
+          cp TOTeM-Tool-Setup-*.exe TOTeM-Tool-Windows-x64.exe
+          cp TOTeM-Tool-*-arm64.dmg TOTeM-Tool-macOS-AppleSilicon.dmg
+          cp TOTeM-Tool-*-x64.dmg TOTeM-Tool-macOS-Intel.dmg
+          cd ..
+          ls -la release-artifacts
+          cat release-artifacts/latest-mac.yml
 
       - name: Create / update GitHub Release
         uses: softprops/action-gh-release@v2

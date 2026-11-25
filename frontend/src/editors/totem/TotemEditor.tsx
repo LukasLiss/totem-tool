@@ -480,13 +480,20 @@ function TotemEditorInner() {
     for (const warning of assetWarnings) toast.warning(warning);
   }, [loadModel, recordSnapshot]);
 
-  const handleExport = useCallback(() => {
+  const handleExport = useCallback(async () => {
     const filename = toFilename(nameRef.current, 'totem-model');
     // Save in the canonical asset-store format so the file can be uploaded to
     // the project model asset store directly; the editor's layout travels in
     // the optional `layout` block.
-    downloadJson(filename, totemModelToAsset(serializeCurrent()));
-    toast.success(`Saved ${filename}.json`);
+    try {
+      const outcome = await downloadJson(filename, totemModelToAsset(serializeCurrent()));
+      if (outcome === 'cancelled') return;
+      toast.success(
+        outcome === 'saved' ? `Saved ${filename}.json` : `Downloading ${filename}.json`,
+      );
+    } catch {
+      toast.error('Could not save the model.');
+    }
   }, [serializeCurrent]);
 
   const bridge = useProjectAssetBridge({

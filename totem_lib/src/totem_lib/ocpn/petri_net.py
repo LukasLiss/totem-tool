@@ -13,10 +13,11 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
 from .process_tree import Operator, ProcessTree
+from ..visualization import VisualizableMixin, accepting_petri_net_to_graphviz
 
 
 @dataclass
-class AcceptingPetriNet:
+class AcceptingPetriNet(VisualizableMixin):
     """A labeled Petri net with a single source and sink place.
 
     ``transitions`` maps transition ids to their activity label
@@ -29,6 +30,9 @@ class AcceptingPetriNet:
     arcs: Set[Tuple[str, str]] = field(default_factory=set)
     source: str = ""
     sink: str = ""
+
+    def to_graphviz(self, **kwargs):
+        return accepting_petri_net_to_graphviz(self, **kwargs)
 
 
 class _NetBuilder:

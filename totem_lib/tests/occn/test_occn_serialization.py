@@ -1,4 +1,5 @@
 import copy
+import functools
 import json
 import sys
 from pathlib import Path
@@ -195,3 +196,104 @@ def test_validate_occn_dict_rejects_malformed_layout(layout, message):
 
     with pytest.raises(ValueError, match=message):
         validate_occn_dict(data)
+
+
+# --- discovered nets ---------------------------------------------------------
+# Discovery numbers marker keys from 1; markers of one group sharing
+# (marker_key, object_type) must bind disjoint objects. Key 0 means "no key
+# constraint" in the canonical format, the factory and the editors.
+
+_TEST_DATA = Path(__file__).parent.parent.parent / "test_data" / "small"
+
+
+def _load_running_example():
+    from totem_lib import import_ocel
+
+    return import_ocel(str(_TEST_DATA / "runningexample.json"))
+
+
+def _load_container_logistics():
+    # Yields groups whose markers share a key (key constraints); the running
+    # example only has unconstrained markers.
+    from totem_lib.ocel.importer_db import import_ocel_db
+
+    return import_ocel_db(str(_TEST_DATA / "container_logistics.duckdb"))
+
+
+@functools.lru_cache(maxsize=None)
+def _discover(load):
+    from totem_lib import discover_occn
+
+    return discover_occn(load(), 0)
+
+
+@pytest.fixture(
+    params=[_load_running_example, _load_container_logistics],
+    ids=["runningexample", "container_logistics"],
+)
+def discovered_occn(request):
+    # Copy so tests cannot leak mutations through the cache.
+    return copy.deepcopy(_discover(request.param))
+
+
+def _all_groups(occn):
+    for side in ("input_marker_groups", "output_marker_groups"):
+        for activity, groups in getattr(occn, side).items():
+            for group in groups:
+                yield (side, activity), group
+
+
+def _key_constraints(occn):
+    """Sorted multiset of (side, activity, key constraints) over all groups."""
+    return sorted(
+        (
+            where,
+            tuple(
+                sorted((*sorted((act_1, act_2)), ot) for act_1, ot, act_2 in group.key_constraints)
+            ),
+        )
+        for where, group in _all_groups(occn)
+    )
+
+
+def test_discovered_occn_uses_positive_marker_keys(discovered_occn):
+    keys = {
+        marker.marker_key
+        for _, group in _all_groups(discovered_occn)
+        for marker in group.markers
+    }
+    assert keys and min(keys) == 1
+
+
+def test_discovered_occn_roundtrips_through_canonical_dict(discovered_occn):
+    data = occn_to_dict(discovered_occn)
+    restored = occn_from_dict(json.loads(json.dumps(data)))
+
+    assert restored == discovered_occn
+    assert occn_to_dict(restored) == data
+    assert _key_constraints(restored) == _key_constraints(discovered_occn)
+
+
+def test_container_logistics_exercises_key_constraints():
+    occn = _discover(_load_container_logistics)
+    assert any(constraints for _, constraints in _key_constraints(occn))
+
+
+def test_zero_based_marker_keys_are_shifted_preserving_key_groups(discovered_occn):
+    # Nets discovered before keys were numbered from 1 (e.g. pickled ones)
+    # use 0 as an ordinary shared key, not as "no constraint".
+    legacy = copy.deepcopy(discovered_occn)
+    for _, group in _all_groups(legacy):
+        for marker in group.markers:
+            marker.marker_key -= 1
+    assert any(
+        marker.marker_key == 0
+        for _, group in _all_groups(legacy)
+        for marker in group.markers
+    )
+
+    data = occn_to_dict(legacy)
+    restored = occn_from_dict(data)
+
+    assert data == occn_to_dict(discovered_occn)
+    assert _key_constraints(restored) == _key_constraints(legacy)

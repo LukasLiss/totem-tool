@@ -14,7 +14,7 @@ import pytest
 
 from totem_lib.ocel.importer_db import import_ocel_db
 from totem_lib.ocel.ocel_duckdb import OcelDuckDB, create_ocel_schema
-from totem_lib.ocpn import discover_ocpn_db
+from totem_lib.ocpn import discover_ocpn_db, discover_process_trees_db
 
 TOTEM_LIB_DIR = Path(__file__).resolve().parents[2]
 CONTAINER_LOGISTICS = TOTEM_LIB_DIR / "example_data" / "ContainerLogistics.json"
@@ -211,3 +211,34 @@ def test_timeout_trips_on_tiny_budget():
         _assert_valid_model(model)
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# Process trees per object type (OC-DFG layout lab)
+# ---------------------------------------------------------------------------
+
+
+def _labels(tree):
+    if tree["operator"] is None:
+        return [tree["label"]] if tree["label"] is not None else []
+    return [label for child in tree["children"] for label in _labels(child)]
+
+
+def test_process_trees_per_object_type(paper_ocel_db):
+    trees = discover_process_trees_db(paper_ocel_db)
+    assert sorted(trees) == ["item", "order"]
+    assert trees["order"] == {
+        "operator": "sequence",
+        "label": None,
+        "children": [
+            {"operator": None, "label": "place order", "children": []},
+            {"operator": None, "label": "complete order", "children": []},
+        ],
+    }
+    assert trees["item"]["operator"] == "sequence"
+    assert _labels(trees["item"]) == ["place order", "pick item", "complete order"]
+
+
+def test_process_trees_object_type_subset(paper_ocel_db):
+    trees = discover_process_trees_db(paper_ocel_db, object_types=["order"])
+    assert list(trees) == ["order"]

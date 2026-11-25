@@ -5,7 +5,15 @@
  * colored tokens. Both share font metrics and padding so glyphs line up.
  */
 
-import React, { forwardRef, useCallback, useImperativeHandle, useMemo, useRef } from "react";
+import React, {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+} from "react";
 import { cn } from "@/lib/utils";
 import { SQL_TOKEN_COLORS, tokenizeSql } from "./sqlHighlight";
 
@@ -17,6 +25,11 @@ export interface SqlHighlightedTextareaProps
   className?: string;
   /** class applied to both text layers; use it for font / padding */
   textClassName?: string;
+  /**
+   * size the wrapper to the text instead of a fixed height; limit it with a
+   * max height, or let a flex container shrink it (the text then scrolls)
+   */
+  autoHeight?: boolean;
 }
 
 const LAYER_BASE =
@@ -24,12 +37,42 @@ const LAYER_BASE =
 
 export const SqlHighlightedTextarea = forwardRef<HTMLTextAreaElement, SqlHighlightedTextareaProps>(
   function SqlHighlightedTextarea(
-    { value, onChange, className, textClassName, style, readOnly, ...rest },
+    { value, onChange, className, textClassName, style, readOnly, autoHeight = false, ...rest },
     ref
   ) {
+    const wrapperRef = useRef<HTMLDivElement | null>(null);
     const textareaRef = useRef<HTMLTextAreaElement | null>(null);
     const preRef = useRef<HTMLPreElement | null>(null);
     useImperativeHandle(ref, () => textareaRef.current as HTMLTextAreaElement, []);
+
+    // autoHeight: let the wrapper fall back to its natural size, then set it
+    // to the text's full height (plus borders). Re-measured when the text
+    // changes or the width does, since that changes the line wrapping.
+    const fitHeight = useCallback(() => {
+      const wrapper = wrapperRef.current;
+      const ta = textareaRef.current;
+      if (!wrapper || !ta) return;
+      wrapper.style.height = "auto";
+      const borders = wrapper.offsetHeight - wrapper.clientHeight;
+      wrapper.style.height = `${ta.scrollHeight + borders}px`;
+    }, []);
+
+    useLayoutEffect(() => {
+      if (autoHeight) fitHeight();
+    }, [autoHeight, fitHeight, value]);
+
+    useEffect(() => {
+      const wrapper = wrapperRef.current;
+      if (!autoHeight || !wrapper) return;
+      let width = wrapper.clientWidth;
+      const observer = new ResizeObserver(() => {
+        if (wrapper.clientWidth === width) return;
+        width = wrapper.clientWidth;
+        fitHeight();
+      });
+      observer.observe(wrapper);
+      return () => observer.disconnect();
+    }, [autoHeight, fitHeight]);
 
     const tokens = useMemo(() => tokenizeSql(value), [value]);
 
@@ -44,7 +87,7 @@ export const SqlHighlightedTextarea = forwardRef<HTMLTextAreaElement, SqlHighlig
     const layerClass = cn(LAYER_BASE, "px-3.5 py-2.5", textClassName);
 
     return (
-      <div className={cn("relative min-h-0 w-full", className)} style={style}>
+      <div ref={wrapperRef} className={cn("relative min-h-0 w-full", className)} style={style}>
         <pre
           ref={preRef}
           aria-hidden

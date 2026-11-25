@@ -1,4 +1,6 @@
 import React, {
+  useCallback,
+  useContext,
   useRef,
   useEffect,
   useState,
@@ -9,8 +11,13 @@ import { GridStack, GridStackNode, GridStackOptions, GridStackWidget } from "gri
 import { componentMap } from "../../components/componentMapRegistry";
 import type { ComponentProps } from "../../components/componentMap";
 import type { SelectedFile } from "../../contexts/SelectedFileContext";
+import { DashboardContext } from "../../contexts/DashboardContext";
 import { GridContext, GridModeContext, type GridLayoutItem } from "./gridContext";
 import { toast } from "sonner";
+import { resolveTextBoxFormat } from "../../components/text-box/textBoxFormat";
+
+/** Widest window that still gets the one-column dashboard (matches useIsMobile). */
+const MOBILE_MAX_WIDTH = 767;
 
 type GridWidgetElement = HTMLElement & {
   _reactRoot?: Root;
@@ -35,11 +42,25 @@ const MIN_SIZES: Record<string, { minW: number; minH: number }> = {
   KpiComponent: { minW: 2, minH: 2 },
   BarChartComponent: { minW: 3, minH: 3 },
   ScatterPlotComponent: { minW: 3, minH: 3 },
+  OCHandoverComponent: { minW: 6, minH: 6 },
+  ResourceProfilingComponent: { minW: 6, minH: 6 },
+  OCAlignmentComponent: { minW: 6, minH: 6 },
 };
 const DEFAULT_MIN_SIZE = { minW: 2, minH: 2 };
 
 const getMinSize = (componentName?: string) =>
   (componentName && MIN_SIZES[componentName]) || DEFAULT_MIN_SIZE;
+
+/**
+ * Both spellings of the NumberOfEvents widget name.
+ *
+ * `_replace_components` writes "NumberOfEventsComponent" (capital O) and the
+ * React registry agrees, but rows written before that was settled carry the
+ * lowercase form, so both have to be accepted. One helper, so the two cannot
+ * drift apart again.
+ */
+const isNumberOfEvents = (name?: string) =>
+  name === "NumberOfEventsComponent" || name === "NumberofEventsComponent";
 
 interface GridProviderProps {
   children: ReactNode;
@@ -54,6 +75,19 @@ export const GridProvider: React.FC<GridProviderProps> = ({
   selectedFile,
   dashboardId = 0,
 }) => {
+  // Every widget is mounted in its own `ReactDOM.createRoot`, and React
+  // context does not cross a root boundary — a `useContext` inside a widget
+  // gets the context's *default* value, whose `setViewMode` does nothing.
+  // That is why `selectedFile` and `dashboardId` are props too. The ref keeps
+  // `renderCB` on the current function without rebuilding the effect.
+  const { setViewMode } = useContext(DashboardContext);
+  const setViewModeRef = useRef(setViewMode);
+  setViewModeRef.current = setViewMode;
+  const openDashboard = useCallback(
+    (id: number) => setViewModeRef.current({ type: 'dashboard', id }),
+    [],
+  );
+
   const gridRef = useRef<GridStack | null>(null);
   const [grid, setGrid] = useState<GridStack | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
@@ -65,6 +99,13 @@ export const GridProvider: React.FC<GridProviderProps> = ({
     acceptWidgets: true,
     removable: "#trash",
     float: true,
+    // Phones show the dashboard as a single column, widgets stacked in
+    // reading order. GridStack keeps the 12-column layout cached and puts it
+    // back when the window is wide again.
+    columnOpts: {
+      breakpointForWindow: true,
+      breakpoints: [{ w: MOBILE_MAX_WIDTH, c: 1 }],
+    },
     ...(options || {}),
   };
 
@@ -84,6 +125,34 @@ export const GridProvider: React.FC<GridProviderProps> = ({
     };
   }, []); // Empty dependency: run once on mount
 
+  // Widgets dragged in from the side panel don't go through addWidget with a
+  // minimum size (that only happens on load and when switching edit mode), so
+  // they could be resized below it until edit mode ended and then jumped up
+  // to it. Give a dropped widget its minimum right away.
+  useEffect(() => {
+    if (!grid) return;
+    const onDropped = (_event: Event, _previous: GridStackNode, node: GridStackNode) => {
+      if (!node?.el) return;
+      const min = getMinSize(node.component_name);
+      const minW = Math.min(min.minW, grid.getColumn());
+      const minH = min.minH;
+      try {
+        grid.update(node.el, {
+          minW,
+          minH,
+          w: Math.max(node.w ?? 1, minW),
+          h: Math.max(node.h ?? 1, minH),
+        });
+      } catch (err) {
+        console.warn(`Could not apply min size to ${node.component_name}`, err);
+      }
+    };
+    grid.on("dropped", onDropped);
+    return () => {
+      grid.off("dropped");
+    };
+  }, [grid]);
+
   // Separate effect for setting renderCB and updating grid static state when edit mode changes
   useEffect(() => {
     // Update renderCB with current isEditMode
@@ -100,9 +169,16 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             isEditMode={isEditMode}
             selectedFile={selectedFile}
             dashboardId={dashboardId}  // Pass dashboardId
+            onOpenDashboard={openDashboard}
             onUpdate={(updates) => {
               Object.assign(w, updates);
-              gridRef.current?.update(el, updates);
+              // `el` is the widget's content element. grid.update() writes the
+              // node's position styles onto whatever element it is given, so
+              // it must get the grid item itself — otherwise the content is
+              // offset by the item's own column/row inside the item and the
+              // widget appears to jump away from its stored position.
+              const itemEl = (el.closest('.grid-stack-item') as HTMLElement | null) ?? el;
+              gridRef.current?.update(itemEl, updates);
             }}
           />
         );
@@ -115,8 +191,16 @@ export const GridProvider: React.FC<GridProviderProps> = ({
 
     if (grid) {
       grid.setStatic(!isEditMode); // Lock grid when not in edit mode
-      // Re-render all components with updated isEditMode
-      const items = document.querySelectorAll('.grid-stack-item');
+      // Re-render all components with updated isEditMode. Only the grid's own
+      // items: the edit-mode palette tiles carry the same class and, once
+      // GridStack.setupDragIn has run, a gridstackNode too — passing one of
+      // them to grid.update() ends in "Infinite collide check".
+      const items = grid.getGridItems();
+      const column = grid.getColumn();
+      // Batch the min-size fixes so GridStack resolves collisions once instead of
+      // per widget — growing several widgets one by one with float enabled can
+      // send its collision resolver into "Infinite collide check".
+      grid.batchUpdate();
       items.forEach((item) => {
         const contentEl = (item.querySelector('.grid-stack-item-content') || item) as HTMLElement;
         const root = (contentEl as GridWidgetElement)._reactRoot;
@@ -124,9 +208,25 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         const component_name = node?.component_name || contentEl.dataset.componentName || (item as HTMLElement).dataset.componentName;
         // Self-heal widgets whose node predates the min-size feature (e.g. loaded
         // from an older saved layout) — grows them up to the minimum if needed.
-        if (node) {
-          const { minW, minH } = getMinSize(component_name);
-          gridRef.current?.update(item as HTMLElement, { minW, minH });
+        // Only touch widgets that actually need it, and never ask for a minimum
+        // wider than the grid has columns.
+        const gsNode = (item as GridWidgetElement).gridstackNode;
+        if (node && gsNode) {
+          const min = getMinSize(component_name);
+          const minW = Math.min(min.minW, column);
+          const minH = min.minH;
+          const needsUpdate =
+            gsNode.minW !== minW ||
+            gsNode.minH !== minH ||
+            (gsNode.w ?? 1) < minW ||
+            (gsNode.h ?? 1) < minH;
+          if (needsUpdate) {
+            try {
+              grid.update(item as HTMLElement, { minW, minH });
+            } catch (err) {
+              console.warn(`Could not apply min size to ${component_name}`, err);
+            }
+          }
         }
         const Component = componentMap[component_name];
         if (root && Component && node) {
@@ -136,6 +236,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               isEditMode={isEditMode}
               selectedFile={selectedFile}
               dashboardId={dashboardId}
+              onOpenDashboard={openDashboard}
               onUpdate={(updates) => {
                 Object.assign(node, updates);
                 gridRef.current?.update(item as HTMLElement, updates);
@@ -144,8 +245,14 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           );
         }
       });
+      try {
+        grid.batchUpdate(false);
+      } catch (err) {
+        console.warn("GridStack failed to settle min-size updates", err);
+      }
     }
-  }, [isEditMode, grid, selectedFile, dashboardId]);
+    // `openDashboard` is stable, so listing it never re-runs this.
+  }, [isEditMode, grid, selectedFile, dashboardId, openDashboard]);
 
   // Implement addWidget to add new widgets with generated component_id
   const addWidget = (content: string = "", componentName: string = "TextBoxComponent") => {
@@ -222,10 +329,22 @@ export const GridProvider: React.FC<GridProviderProps> = ({
       const h =
         node.h ??
         1; // necessary because GS sets h=1 to undefined
-      if (component_name === "NumberofEventsComponent") {
-        props = { color: "blue" };
+      if (isNumberOfEvents(component_name)) {
+        // The old test here spelled the name with a lowercase o, so it never
+        // matched a row `_replace_components` had written and no `color` was
+        // sent — the backend then fell back to "blue" and the widget lost its
+        // colour on the first save after any import or edit.
+        props = { color: node.color ?? "blue" };
       } else if (component_name === "TextBoxComponent") {
-        props = { text: node.text || "Enter text here", font_size: 14 };  
+        // Formatting comes off the node via one helper, so the save and
+        // load lists below cannot drift apart as options are added.
+        props = {
+          text: node.text ?? "",
+          ...resolveTextBoxFormat(node),
+          // The rich-text document, when the box has one. Null is meaningful:
+          // it means "plain text box", and the backend stores it as such.
+          rich_text: node.rich_text ?? null,
+        };
       } else if (component_name === "ImageComponent") {
         props = {
           image: node.image,
@@ -243,6 +362,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           timeout_s: node.timeout_s ?? 10.0,
           business_object_types: node.business_object_types ?? [],
           business_activities: node.business_activities ?? [],
+          variants_mode: node.variants_mode ?? 'process_areas',
+          area_execution_column: node.area_execution_column ?? 'process-executions-cc-process-areas',
+          area_variant_column: node.area_variant_column ?? 'variant-cc-process-areas',
         };
       } else if (component_name === "LogStatisticsComponent") {
         props = {
@@ -261,6 +383,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           color_by: node.color_by ?? "activity",
           shape_by: node.shape_by ?? "none",
           row_order: node.row_order ?? "first_occurrence",
+          row_order_direction: node.row_order_direction ?? "asc",
           max_points: node.max_points ?? 10000,
         };
       } else if (component_name === "NewOCDFGComponent" || component_name === "NewOCDFGVariantsComponent") {
@@ -268,6 +391,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           show_controls: node.show_controls ?? true,
           initial_interaction_locked: node.initial_interaction_locked ?? true,
           layout_direction: node.layout_direction ?? 'TB',
+          // Layout panel settings; saved as is (null = the defaults).
+          layout_options: node.layout_options ?? null,
         };
       } else if (component_name === "ProcessAreaComponent") {
         props = {
@@ -290,6 +415,11 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         props = {
           automatic_loading: node.automatic_loading ?? false,
           timeout_s: node.timeout_s ?? 30.0,
+        };
+      } else if (component_name === "OCPNFlattenedReplayComponent") {
+        props = {
+          ocpn_asset_id: node.ocpn_asset_id ?? null,
+          automatic_loading: node.automatic_loading ?? false,
         };
       } else if (component_name === "SqlQueryComponent") {
         props = {
@@ -317,6 +447,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           value_column: node.value_column ?? "",
           horizontal: node.horizontal ?? false,
           show_values: node.show_values ?? false,
+          chart_style: node.chart_style ?? {},
         };
       } else if (component_name === "ScatterPlotComponent") {
         props = {
@@ -328,6 +459,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           series_column: node.series_column ?? "",
           x_label: node.x_label ?? "",
           y_label: node.y_label ?? "",
+          chart_style: node.chart_style ?? {},
         };
       } else if (component_name === "PieChartComponent") {
         props = {
@@ -340,9 +472,59 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           value_column: node.value_column ?? '',
           show_legend: node.show_legend ?? true,
           show_tooltip: node.show_tooltip ?? true,
+          chart_style: node.chart_style ?? {},
+        };
+      } else if (component_name === "OCHandoverComponent") {
+        props = {
+          show_controls: node.show_controls ?? true,
+          automatic_loading: node.automatic_loading ?? false,
+          resource_types: node.resource_types ?? [],
+          businessobject_types: node.businessobject_types ?? [],
+          max_gap: node.max_gap ?? null,
+          normalization: node.normalization ?? 'by_arcs_in_eog',
+          normalization_scope: node.normalization_scope ?? 'global',
+          parallel_filter_enabled: node.parallel_filter_enabled ?? false,
+          parallel_threshold: node.parallel_threshold ?? 0.5,
+          min_parallel_observations: node.min_parallel_observations ?? 1,
+          cluster_by_ot: node.cluster_by_ot ?? false,
+          view_mode: node.view_mode ?? 'graph',
+        };
+      } else if (component_name === "ResourceProfilingComponent") {
+        props = {
+          show_controls: node.show_controls ?? true,
+          automatic_loading: node.automatic_loading ?? false,
+          resource_types: node.resource_types ?? [],
+          business_object_types: node.business_object_types ?? [],
+          feature_groups: node.feature_groups ?? ['activity_fractions'],
+          tooltip_feature_groups: node.tooltip_feature_groups ?? [],
+          compute_clusters: node.compute_clusters ?? true,
+          cluster_method: node.cluster_method ?? 'hdbscan',
+          n_clusters: node.n_clusters ?? 3,
+          min_cluster_size: node.min_cluster_size ?? 2,
+          distance_metric: node.distance_metric ?? 'euclidean',
+          view_mode: node.view_mode ?? 'graph',
+          point_size: node.point_size ?? 'medium',
+          transparent_points: node.transparent_points ?? false,
+        };
+      } else if (component_name === "OCAlignmentComponent") {
+        props = {
+          show_controls: node.show_controls ?? true,
+          automatic_loading: node.automatic_loading ?? false,
+          model_asset: node.model_asset ?? null,
+          execution_source: node.execution_source ?? 'area',
+          execution_column: node.execution_column ?? '',
+          business_object_types: node.business_object_types ?? [],
+          business_activities: node.business_activities ?? [],
+          execution_id: node.execution_id ?? '',
+          max_states: node.max_states ?? 200000,
+          timeout_s: node.timeout_s ?? 60,
+          show_silent_moves: node.show_silent_moves ?? false,
         };
       } else {
-        props = { text: node.el ? node.el.innerHTML.trim() : "", font_size: 14 };
+        props = {
+          text: node.el ? node.el.innerHTML.trim() : "",
+          ...resolveTextBoxFormat(node),
+        };
       }
       
       return {
@@ -353,6 +535,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
         h,
         order: index,
         ...props,
+        local_filter_params: node.local_filter_params ?? null,
         id: component_id,  // Now always set — spread last so this always wins
       };
     });
@@ -389,7 +572,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
     if (layout.length > 0) {
       layout.forEach((item) => {
         let content = "";
-        if (item.component_name === "NumberofEventsComponent") {
+        if (isNumberOfEvents(item.component_name)) {
           content = "Number of Events";
         } else if (item.component_name === "TextBoxComponent") {
           content = "Text Box";
@@ -411,6 +594,8 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "Object-Centric DFG (Variants)";
         } else if (item.component_name === "OCPNComponent") {
           content = "OC Petri Net";
+        } else if (item.component_name === "OCPNFlattenedReplayComponent") {
+          content = "OCPN Flattened Replay";
         } else if (item.component_name === "OCCNComponent") {
           content = "Object-Centric Causal Net (OCCN)";
         } else if (item.component_name === "SqlQueryComponent") {
@@ -423,6 +608,12 @@ export const GridProvider: React.FC<GridProviderProps> = ({
           content = "Bar Chart (by SQL)";
         } else if (item.component_name === "ScatterPlotComponent") {
           content = "Scatter Plot (by SQL)";
+        } else if (item.component_name === "OCHandoverComponent") {
+          content = "Handover of Work";
+        } else if (item.component_name === "ResourceProfilingComponent") {
+          content = "Resource Profiling";
+        } else if (item.component_name === "OCAlignmentComponent") {
+          content = "Object-Centric Alignment";
         } else {
           content = "Unknown";
         }
@@ -444,7 +635,18 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             component_name: item.component_name,
             component_id,  // Now always set
             color: item.color,
+            // TextBoxComponent formatting (#373)
             font_size: item.font_size,
+            font_family: item.font_family,
+            font_weight: item.font_weight,
+            italic: item.italic,
+            underline: item.underline,
+            text_align: item.text_align,
+            vertical_align: item.vertical_align,
+            text_color: item.text_color,
+            background_color: item.background_color,
+            line_height: item.line_height,
+            rich_text: item.rich_text,
             image: item.image,
             // ImageComponent (asset-store based) properties
             image_asset: item.image_asset,
@@ -459,6 +661,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             timeout_s: item.timeout_s,
             business_object_types: item.business_object_types,
             business_activities: item.business_activities,
+            variants_mode: item.variants_mode,
+            area_execution_column: item.area_execution_column,
+            area_variant_column: item.area_variant_column,
             // LogStatisticsComponent properties
             show_num_events: item.show_num_events,
             show_num_activities: item.show_num_activities,
@@ -476,8 +681,10 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             color_by: item.color_by,
             shape_by: item.shape_by,
             row_order: item.row_order,
+            row_order_direction: item.row_order_direction,
             max_points: item.max_points,
             layout_direction: item.layout_direction,
+            layout_options: item.layout_options,
             // PieChartComponent properties
             query: item.query,
             ring_text: item.ring_text,
@@ -487,6 +694,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             value_column: item.value_column,
             show_legend: item.show_legend,
             show_tooltip: item.show_tooltip,
+            chart_style: item.chart_style,
+            // OCPNFlattenedReplayComponent properties
+            ocpn_asset_id: item.ocpn_asset_id,
             // OCCNComponent properties
             relative_occurrence_threshold: item.relative_occurrence_threshold,
             object_types: item.object_types,
@@ -513,6 +723,34 @@ export const GridProvider: React.FC<GridProviderProps> = ({
             series_column: item.series_column,
             x_label: item.x_label,
             y_label: item.y_label,
+            // OCHandoverComponent / ResourceProfilingComponent
+            resource_types: item.resource_types,
+            businessobject_types: item.businessobject_types,
+            max_gap: item.max_gap,
+            normalization: item.normalization,
+            normalization_scope: item.normalization_scope,
+            parallel_filter_enabled: item.parallel_filter_enabled,
+            parallel_threshold: item.parallel_threshold,
+            min_parallel_observations: item.min_parallel_observations,
+            cluster_by_ot: item.cluster_by_ot,
+            view_mode: item.view_mode,
+            feature_groups: item.feature_groups,
+            tooltip_feature_groups: item.tooltip_feature_groups,
+            compute_clusters: item.compute_clusters,
+            cluster_method: item.cluster_method,
+            n_clusters: item.n_clusters,
+            min_cluster_size: item.min_cluster_size,
+            distance_metric: item.distance_metric,
+            point_size: item.point_size,
+            transparent_points: item.transparent_points,
+            local_filter_params: item.local_filter_params ?? null,
+            // OCAlignmentComponent
+            model_asset: item.model_asset,
+            execution_source: item.execution_source,
+            execution_column: item.execution_column,
+            execution_id: item.execution_id,
+            max_states: item.max_states,
+            show_silent_moves: item.show_silent_moves,
           });
           // After adding, ensure custom properties are on the node
           if (widgetEl) {
@@ -522,7 +760,20 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node.component_id = component_id;  // Ensure it's set
               node.text = item.text;
               node.color = item.color; // For NumberOfEventsComponent
+              // TextBoxComponent formatting (#373) — must be set here too,
+              // not only in the addWidget literal above, or the values
+              // round-trip to the DB but never reach the component.
               node.font_size = item.font_size;
+              node.font_family = item.font_family;
+              node.font_weight = item.font_weight;
+              node.italic = item.italic;
+              node.underline = item.underline;
+              node.text_align = item.text_align;
+              node.vertical_align = item.vertical_align;
+              node.text_color = item.text_color;
+              node.background_color = item.background_color;
+              node.line_height = item.line_height;
+              node.rich_text = item.rich_text;
               node.image = item.image; // For ImageComponent (legacy upload)
               node.image_asset = item.image_asset; // For ImageComponent
               node.image_asset_url = item.image_asset_url; // For ImageComponent
@@ -535,6 +786,9 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node.timeout_s = item.timeout_s;     // For VariantsComponent advanced settings
               node.business_object_types = item.business_object_types; // VariantsComponent resource-aware
               node.business_activities = item.business_activities;     // VariantsComponent resource-aware
+              node.variants_mode = item.variants_mode;                 // VariantsComponent method
+              node.area_execution_column = item.area_execution_column; // VariantsComponent process-area mode
+              node.area_variant_column = item.area_variant_column;     // VariantsComponent process-area mode
               // LogStatisticsComponent properties
               node.show_num_events = item.show_num_events;
               node.show_num_activities = item.show_num_activities;
@@ -552,6 +806,7 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node.value_column = item.value_column;
               node.show_legend = item.show_legend;
               node.show_tooltip = item.show_tooltip;
+              node.chart_style = item.chart_style;
               // NewOCDFGComponent properties
               node.show_controls = item.show_controls;
               node.initial_interaction_locked = item.initial_interaction_locked;
@@ -561,8 +816,12 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node.color_by = item.color_by;
               node.shape_by = item.shape_by;
               node.row_order = item.row_order;
+              node.row_order_direction = item.row_order_direction;
               node.max_points = item.max_points;
               node.layout_direction = item.layout_direction;
+              node.layout_options = item.layout_options;
+              // OCPNFlattenedReplayComponent properties
+              node.ocpn_asset_id = item.ocpn_asset_id;
               // OCCNComponent properties
               node.relative_occurrence_threshold = item.relative_occurrence_threshold;
               node.object_types = item.object_types;
@@ -589,6 +848,34 @@ export const GridProvider: React.FC<GridProviderProps> = ({
               node.series_column = item.series_column;
               node.x_label = item.x_label;
               node.y_label = item.y_label;
+              // OCHandoverComponent / ResourceProfilingComponent
+              node.resource_types = item.resource_types;
+              node.businessobject_types = item.businessobject_types;
+              node.max_gap = item.max_gap;
+              node.normalization = item.normalization;
+              node.normalization_scope = item.normalization_scope;
+              node.parallel_filter_enabled = item.parallel_filter_enabled;
+              node.parallel_threshold = item.parallel_threshold;
+              node.min_parallel_observations = item.min_parallel_observations;
+              node.cluster_by_ot = item.cluster_by_ot;
+              node.view_mode = item.view_mode;
+              node.feature_groups = item.feature_groups;
+              node.tooltip_feature_groups = item.tooltip_feature_groups;
+              node.compute_clusters = item.compute_clusters;
+              node.cluster_method = item.cluster_method;
+              node.n_clusters = item.n_clusters;
+              node.min_cluster_size = item.min_cluster_size;
+              node.distance_metric = item.distance_metric;
+              node.point_size = item.point_size;
+              node.transparent_points = item.transparent_points;
+              node.local_filter_params = item.local_filter_params ?? null;
+              // OCAlignmentComponent
+              node.model_asset = item.model_asset;
+              node.execution_source = item.execution_source;
+              node.execution_column = item.execution_column;
+              node.execution_id = item.execution_id;
+              node.max_states = item.max_states;
+              node.show_silent_moves = item.show_silent_moves;
             }
           }
           // Set data attribute for persistence

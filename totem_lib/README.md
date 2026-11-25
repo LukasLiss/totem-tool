@@ -42,6 +42,50 @@ totem = totemDiscovery(ocel, tau=0.9)
 process_view = mlpaDiscovery(totem)
 ```
 
+## Visualizing models in Python & Jupyter
+
+All core discovery algorithms produce models that can be visualized directly in Jupyter notebooks or Python scripts via `.plot()` / `.to_graphviz()` / `.view()`, or using the universal `plot()` helper:
+
+```python
+from totem_lib import (
+    import_ocel,
+    import_ocel_db,
+    discover_ocpn_db,
+    discover_occn,
+    totemDiscovery,
+    mlpaDiscovery,
+    OCDFG,
+    plot,
+)
+
+db = import_ocel_db("example_data/ContainerLogistics.sqlite")
+
+# 1. Object-Centric Petri Net (OCPN)
+ocpn = discover_ocpn_db(db)
+ocpn.plot()                          # Returns a graphviz.Digraph (renders inline in Jupyter)
+ocpn.view()                          # Opens in default system viewer
+ocpn.plot().render("ocpn", format="png")  # Saves ocpn.png
+
+# 2. Object-Centric Causal Net (OCCN)
+occn = discover_occn(db, relativeOccuranceThreshold=0.5)
+occn.plot()
+
+# 3. Temporal Model (TOTeM) & Process Areas
+ocel = import_ocel("example_data/ContainerLogistics.sqlite")
+totem = totemDiscovery(ocel, tau=0.9)
+totem.plot()
+
+areas = mlpaDiscovery(totem)
+areas.plot()
+
+# 4. Object-Centric Directly-Follows Graph (OC-DFG)
+dfg = OCDFG.from_ocel(ocel)
+dfg.plot()
+
+# Universal plot helper works across all models:
+plot(ocpn)
+```
+
 ## TOTeM conformance checking
 
 TOTeM conformance compares an independently loaded model with a current event
@@ -157,6 +201,271 @@ To run all tests, execute:
 ```bash
 pytest ./tests/
 ```
+
+## Evaluation logs
+
+Runtime evaluation runs against eight real OCEL logs published on
+[ocel-standard.org](https://www.ocel-standard.org/event-logs/overview/) - the eight of the
+TOTeM conformance-checking paper. Each log records several size statistics, so runtime
+can be plotted against any of them.
+
+| Log | Events | Objects | Activities | Object types | E2O relations | O2O relations | Where |
+|---|---|---|---|---|---|---|---|
+| `ocel2-p2p` | 14,671 | 9,054 | 10 | 7 | 35,927 | 16,757 | in git |
+| `order-management` | 21,008 | 10,840 | 11 | 6 | 147,463 | 28,391 | in git |
+| `lrms-reasoning-steps` | 31,709 | 1,645 | 32 | 2 | 63,418 | 0 | download |
+| `container_logistics` | 35,372 | 13,882 | 14 | 7 | 74,272 | 15,920 | in git |
+| `hinge-production` | 38,528 | 23,771 | 11 | 12 | 144,827 | 20,561 | download |
+| `bundestag` | 62,719 | 37,665 | 148 | 44 | 67,185 | 0 | download |
+| `enron` | 517,891 | 316,848 | 9 | 2 | 1,765,575 | 0 | download |
+| `age-of-empires` | 2,372,505 | 361,935 | 829 | 30 | 10,387,384 | 2,541,715 | download |
+
+Which log is "bigger" depends on the metric: `order-management` has fewer events than
+`container_logistics` but twice as many event-to-object relations.
+
+Three logs ship with the repo. The other five (about 2.2 GB) do not belong in git, so
+`test_data/large/` is gitignored and filled by a download script that verifies each file
+against the MD5 Zenodo publishes. Run from the `totem_lib/` directory:
+
+```bash
+python evaluation/download_logs.py --list
+python evaluation/download_logs.py
+python evaluation/log_stats.py
+```
+
+`evaluation/datasets.py` is the manifest - names, Zenodo records, locations and recorded
+statistics, with the details in its module docstring (which file versions, why Enron and
+Age of Empires are read from SQLite, which logs carry placeholder timestamps).
+`log_stats.py` re-measures the statistics and reports any that have drifted.
+
+## Running the benchmarks
+
+One command runs the evaluation of every dissertation chapter on every log. It records
+time, peak memory, and what each algorithm produced:
+
+```bash
+python evaluation/run_benchmarks.py
+python evaluation/run_benchmarks.py --list
+python evaluation/run_benchmarks.py --chapters totem-conformance,process-area
+python evaluation/run_benchmarks.py --logs ocel2-p2p --repeats 1 --warmup 0
+python evaluation/run_benchmarks.py --algorithms totemDiscovery,OCDFG.from_ocel
+python evaluation/run_benchmarks.py --repeats 10 --timeout 7200
+```
+
+| Chapter (`--chapters`) | What is measured |
+|---|---|
+| `totem-discovery` | TOTeM discovery (DuckDB) at tau = 0.0, 0.1, ..., 1.0; model size per tau |
+| `totem-conformance` | conformance of the model discovered at each tau: time, and fitness and precision of temporal relations, log and event cardinalities |
+| `occn-discovery` | OCCN discovery (DuckDB, as the tool runs it); activities, arcs, marker groups |
+| `occn-conformance` | on four logs, their main object types only (`MAIN_OBJECT_TYPES` in `evaluation/algorithms.py`, chosen by hand): the OCCN of those types, then replay of every process execution (connected components over those types) against it, filtered at 0%, 5%, 10%, 20% and 30%. Each execution is timed on its own and replayed without a state limit |
+| `process-area` | the pipeline TOTeM discovery plus level-assignment ILP; levels, areas, types and activities per area |
+| `totem-tool` | every library algorithm side by side, and each Polars algorithm against its DuckDB twin |
+
+A sweep point is its own measurement, named e.g. `totem_conformance@tau=0.3`, so it is
+resumed, retried and timed out on its own. Results print as each measurement finishes. A
+failing, crashing or timed-out algorithm is reported and the run continues.
+`find_variants` only runs when named in `--algorithms`, because it exhausts memory on
+`order-management`.
+
+### Run folders: saved as it goes, resumable
+
+Every run gets its own folder, `evaluation/results/runs/<date>_<time>[_<name>]/`, and
+every measurement is appended to its `measurements.jsonl` the moment it finishes. A crash,
+a reboot or Ctrl+C loses nothing, and the run can be continued:
+
+```bash
+python evaluation/run_benchmarks.py --name laptop
+python evaluation/run_benchmarks.py --resume evaluation/results/runs/2026-11-20_14-03-12_laptop
+python evaluation/run_benchmarks.py --resume <folder> --retry-failed
+python evaluation/run_benchmarks.py --resume <folder> --logs age-of-empires
+```
+
+A resumed run skips every (log, algorithm) pair it already has. `--retry-failed` measures
+failed ones again, and `--logs`/`--algorithms` add to its plan. Settings (repeats,
+warm-up, timeout, isolation) stay fixed for the whole run, so all its numbers are
+comparable. If a resumed session runs on another machine or commit, `run.json` records
+both and each measurement notes its commit.
+
+| File in the run folder | For |
+|---|---|
+| `run.json` | the settings, the planned logs and algorithms, the machine(s) and commit(s) |
+| `measurements.jsonl` | the source of truth: one line per measurement, every repeat included |
+| `benchmark_results.md` / `.csv` / `.json` | reading / tools / everything plus run metadata |
+| `artifacts/<log>/<algorithm>.json` | what the measurement produced: the TOTeM or OCCN model, all conformance values per type pair, every replayed execution with its time and outcome, the process areas |
+| `figures/<chapter>/` | each chapter's figures (PDF and PNG) and tables (CSV, Markdown, LaTeX) |
+
+Each line of `measurements.jsonl` also carries the measurement's `properties`: its
+parameters and a summary of its output (fitness, precision, number of arcs, marker
+groups, levels, ...). So a figure against a property nobody thought of yet can be drawn
+from a finished run, without measuring again.
+
+The summaries and figures are rebuilt from `measurements.jsonl` at the end of every
+session. Run folders are gitignored; copy one elsewhere or `git add -f` it to keep it.
+
+Follow a run from another terminal, and combine several runs into one set of figures:
+
+```bash
+python evaluation/status.py evaluation/results/runs/<folder> --watch 30
+python evaluation/figures.py <run folder> [<run folder> ...]   # or a folder of runs
+```
+
+`status.py` shows finished / planned measurements, failures, and the pair being measured
+right now against its 1-hour timeout. Set `TOTEM_EVAL_DATA` to keep downloaded logs
+outside the repo, and `TOTEM_EVAL_RUNS` to put run folders elsewhere.
+
+### On a cluster, or anywhere with Docker
+
+`evaluation/hpc/` packages the evaluation as a Docker image that Apptainer can run on an
+HPC cluster, with Slurm scripts that measure one log per node and draw the combined
+figures at the end. See [evaluation/hpc/README.md](evaluation/hpc/README.md).
+
+### How the numbers are taken
+
+- **One process per measurement.** Each (log, algorithm) pair runs in a fresh Python
+  process (`evaluation/worker.py`) that imports the log and then runs the algorithm.
+  Nothing an earlier algorithm cached or allocated can affect the next one, a hung run
+  is killed after `--timeout` seconds (default 3600), and a crash takes down only that
+  process. `--in-process` runs everything in one process instead, without memory figures
+  or a timeout.
+- **Only the algorithm is timed.** Preparing its input (importing the log, discovering
+  the TOTeM model `mlpaDiscovery` needs) happens before the clock starts. The timer is a
+  bare `time.perf_counter()` around the call, with nothing else running.
+- **Warm-up, then repeats.** `--warmup` untimed calls (default 1) absorb one-off costs
+  such as lazy imports. Then come `--repeats` timed calls (default 3). Every repeat is
+  saved, along with the mean, standard deviation, minimum, median and the 95% confidence
+  interval of the mean.
+- **Memory is the job's peak RSS.** The operating system's resident-memory high-water
+  mark (`ru_maxrss`), read before the first call (*input*: interpreter plus importing the
+  log) and after the last (*peak*: input plus algorithm). It includes native Polars and
+  DuckDB memory. *Added* is how far the algorithm raised the peak. It is 0 when the
+  algorithm fits in memory the import already needed, because freed memory stays with the
+  process and no process-level figure can separate the two.
+- **The machine is recorded.** The JSON holds the settings, CPU, core count, RAM, OS,
+  Python and library versions, and the git commit, with a flag for uncommitted changes.
+
+Earlier versions measured memory with `tracemalloc` during the timed calls. Tracing slows
+Python-heavy code a lot: on `ocel2-p2p` it made `totemDiscovery` 13x slower and
+`import_ocel` 5x slower, while DuckDB-based code was unaffected. Numbers from before this
+change are not comparable with current ones.
+
+### Figures
+
+Each run draws one folder per dissertation chapter into `figures/`. To redraw a run
+without measuring anything, for example after changing a plot:
+
+```bash
+python evaluation/figures.py evaluation/results/runs/<run folder>
+```
+
+| Folder | Figures | Tables |
+|---|---|---|
+| `totem-discovery/` | `runtime`: time over events and objects at tau = 0.9 (and `runtime_types` with object types); `over_tau`: time and number of arcs over tau | `discovery`: mean, 95% CI, peak memory, nodes and D/I/P arcs per log |
+| `totem-conformance/` | `conformance_time`: time over events, objects and TOTeM arcs, every model of the sweep; `metrics_over_tau`: the six fitness and precision values over tau | `conformance`: time and values at tau = 0.9 per log |
+| `occn-discovery/` | `runtime`: time over events and objects with a linear fit and Pearson's r, as in the OCCN paper; `runtime_log`: the same on log axes | `discovery`: time and net size per log |
+| `occn-conformance/` | `execution_time`: time of each process execution over its events and objects at the paper's 10% filter; `fitness_over_threshold`: fitness and share of conclusive executions; `check_time`: the whole check over log size | `conformance`: executions fitting, not fitting and inconclusive per log and filter; `main_object_types`: the types each log was checked on and their OCCN |
+| `process-area/` | `runtime`: pipeline time over events and objects with a linear fit, and on log axes | `areas`: levels, areas, average types and activities per area (the paper's Table 2), TOTeM's share of the time |
+| `totem-tool/` | `runtime_by_algorithm_events` / `_objects`, `memory_by_algorithm`: one panel per algorithm; `polars_vs_duckdb`: Polars time against DuckDB time per log | `all_algorithms` |
+
+Every log has one colour, marker and short name in every figure, set in
+`evaluation/style.py`. The eight logs of the TOTeM conformance paper keep exactly the
+look they had there; a new log gets an entry there too. The style is the conformance
+paper's: outlined markers, light grid, log axes for runtime, one legend beside the panels.
+
+The algorithms differ enormously in cost, from `CCDFG.from_ocel` at a few milliseconds
+to OCCN replay at minutes per filter, so try anything new on `ocel2-p2p` with
+`--repeats 1 --warmup 0` first. `evaluation/algorithms.py` lists what runs, how each one
+is called and which chapter uses it; it is also where a new algorithm or sweep is added,
+with `evaluation/outcomes.py` describing what it produced.
+
+## Example run
+
+> **Out of date.** The committed example below was measured with the old harness
+> (memory tracing during the timed calls, three logs only), so its runtimes are inflated
+> by up to 13x. It also predates the run folders and is drawn with the old flat figures,
+> which the per-chapter figures above replace. It will be replaced by a fresh run.
+
+One full run is committed, so the output can be read without running anything. It was
+produced on an otherwise idle machine with the default three repeats, leaving out the one
+algorithm that cannot complete (see below):
+
+```bash
+python evaluation/run_benchmarks.py --repeats 3 \
+  --algorithms import_ocel,import_ocel_db,totemDiscovery,totemDiscovery_db,mlpaDiscovery,discover_oc_petri_net_polars,discover_occn,OCDFG.from_ocel,CCDFG.from_ocel
+```
+
+That takes about 30 minutes, almost all of it `discover_occn` on `order-management`.
+
+The committed run predates the removal of pm4py: its `discover_oc_petri_net_polars` rows
+measure the former pm4py-based OCPN miner, which the registry has since replaced with the
+native `discover_ocpn_db`.
+
+- [`evaluation/results/benchmark_results.md`](evaluation/results/benchmark_results.md) — the tables
+- [`evaluation/results/benchmark_results.csv`](evaluation/results/benchmark_results.csv) — the same rows, for tools
+- [`figures/`](figures/) — one plot per size metric
+
+![Algorithm runtime against number of events](figures/runtime_vs_num_events.png)
+
+### What it shows
+
+The choice of x-axis changes the story, which is why the tool records six size metrics
+instead of only the event count.
+
+`discover_occn` is by far the slowest algorithm, and it is slowest on
+`order-management` — the log in the **middle** by event count, not the largest. Plotted
+against events its line spikes and then falls, which reads as nonsense. Plotted against
+event-to-object relations it rises steadily, because that is what it actually scales
+with: `order-management` has 147k such relations against 74k for the larger
+`container_logistics`.
+
+Compare the two figures side by side:
+
+- [runtime against events](figures/runtime_vs_num_events.png) — the misleading view
+- [runtime against event-to-object relations](figures/runtime_vs_num_e2o_relations.png) — the explanatory one
+
+### DuckDB is fast, but the loading is not free
+
+`totemDiscovery_db` looks dramatically faster than the Polars `totemDiscovery` — 9x to
+17x on the algorithm alone. That is real, but on its own it is misleading, because the
+two need different loaders and loading into DuckDB costs more.
+
+| Log | Loading | Algorithm alone | Whole job |
+|---|---|---|---|
+| `ocel2-p2p` | 2.90 s / 6.12 s | 3.28 s / 0.29 s = 11.3x | 6.18 s / 6.41 s = **0.96x** |
+| `order-management` | 3.52 s / 8.58 s | 7.42 s / 0.80 s = 9.2x | 10.94 s / 9.38 s = **1.17x** |
+| `container_logistics` | 3.46 s / 4.40 s | 6.53 s / 0.40 s = 16.5x | 9.99 s / 4.79 s = **2.08x** |
+
+(Polars / DuckDB.)
+
+Read end to end, the advantage shrinks a lot, and on the smallest log it disappears — the
+whole job is slightly *slower* through DuckDB. The win grows with the log, so DuckDB
+still looks like the better bet as logs get bigger. But one load feeding many algorithms
+is where it pays off, not one load feeding one algorithm.
+
+### How to read the numbers
+
+- **Timings are from one machine** (a Windows dev laptop) and are only meaningful
+  relative to each other. Re-run the command to get numbers for your own hardware.
+- **Peak RAM understates Polars and DuckDB.** It comes from `tracemalloc`, which counts
+  Python allocations only, and both libraries do most of their work in native memory.
+- **Two metrics are weak axes.** Object types (6–7) and activities (10–14) barely vary
+  across three logs, so those two figures show little. A larger log would fix this; the
+  2.4M-event Age of Empires log is not usable yet, for the reason recorded in
+  `evaluation/datasets.py`.
+- **`find_variants` is missing.** It exhausts memory on `order-management` and ends in a
+  `MemoryError`, so it is left out of the committed run rather than taking the machine
+  down with it. `order-management` has 147k event-to-object relations, twice
+  `container_logistics`, and variant extraction scales with that rather than with events.
+  Run it on its own if you want to measure it.
+- **The two importers disagree slightly.** The `_db` algorithms build their DuckDB copy
+  from the same OCEL file the Polars side reads, so both measure the same log. They are
+  not byte-identical though: the Polars importer filters out objects the DuckDB one
+  keeps, so `ocel2-p2p` has 9,543 objects on the DuckDB side against 9,054 on the Polars
+  side. Event counts and labels match everywhere.
+- **Both loaders are timed, so compare like with like.** A Polars algorithm costs
+  `import_ocel` plus its own time; a DuckDB one costs `import_ocel_db` plus its own. The
+  algorithm rows on their own leave the loading out.
+- **Re-running with `--logs` or `--algorithms` overwrites these files** with partial
+  data. Regenerate the committed example only from the full command.
 
 ## Acknowledgements
 

@@ -1,4 +1,4 @@
-import { ChevronRight, BarChart3, Network, TextAlignStart, ChartScatter, Workflow, CircleDot, Database } from "lucide-react"
+import { ChevronRight, BarChart3, Network, TextAlignStart, ChartScatter, Workflow, CircleDot, Database, Users } from "lucide-react"
 import { BoxesArrowRight, CausalNet } from "@/components/icons/totem-icons"
 import { useContext, useEffect, useState } from 'react'
 import {
@@ -28,6 +28,7 @@ const analysisItems: { id: AnalysisComponent; label: string; icon: typeof BarCha
   { id: 'variants', label: 'Variants', icon: TextAlignStart },
   { id: 'dottedChart', label: 'OC Dotted Chart', icon: ChartScatter },
   { id: 'sqlQuery', label: 'SQL Queries', icon: Database },
+  { id: 'orgaMining', label: 'Organizational Mining', icon: Users },
 ];
 
 export function NavAnalysis() {

@@ -1,6 +1,13 @@
 import axios from "axios";
 import { useFilterStore, buildFilterParams } from "@/store/filterStore";
+import {
+  computationFileId,
+  computationLabel,
+  newJobId,
+  useComputationStore,
+} from "@/store/computationStore";
 import { API_BASE_URL, getApiUrl } from "../config/api";
+import { LOCAL_MODE } from "@/lib/env";
 
 /**
  * Configure default Axios base URL from environment / config
@@ -143,6 +150,124 @@ async function guestReAuth() {
   return access;
 }
 
+// One refresh for everyone: concurrent callers share the in-flight promise.
+// In local mode a failed refresh (refresh token expired too) falls back to a
+// fresh Guest login, so the desktop app never ends up signed out.
+function sharedRefresh() {
+  if (!refreshInFlight) {
+    refreshInFlight = performRefresh()
+      .catch((err) => {
+        if (LOCAL_MODE) return guestReAuth();
+        throw err;
+      })
+      .finally(() => {
+        refreshInFlight = null;
+      });
+  }
+  return refreshInFlight;
+}
+
+const TOKEN_URL = /\/token\/(refresh\/)?$/;
+
+// True when the JWT's `exp` has passed (with a little slack, so a token about
+// to expire isn't sent and rejected in flight). Unparseable tokens count as
+// not expired and are left to the server to judge.
+function isExpired(token) {
+  try {
+    const payload = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    const { exp } = JSON.parse(atob(payload));
+    return typeof exp === "number" && exp * 1000 < Date.now() + 10_000;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Proactive refresh
+ * -----------------
+ * The stored access token outlives the app session, so after a restart or a
+ * long idle the first requests would carry an expired token, each come back
+ * 401 and only then be retried by the response interceptor below. Checking
+ * the expiry up front and refreshing once before sending avoids those 401s.
+ * If the refresh fails, the request goes out unchanged and the 401 handling
+ * below decides what happens (logout in normal mode).
+ */
+axios.interceptors.request.use(async (config) => {
+  if (config._skipAuthRefresh || TOKEN_URL.test(String(config.url ?? ""))) {
+    return config;
+  }
+  const token = localStorage.getItem("access_token");
+  if (!token || token === "null" || token === "undefined" || !isExpired(token)) {
+    return config;
+  }
+  try {
+    const newAccess = await sharedRefresh();
+    config.headers = config.headers || {};
+    config.headers["Authorization"] = `Bearer ${newAccess}`;
+  } catch {
+    /* fall through: the response interceptor handles the 401 */
+  }
+  return config;
+});
+
+/**
+ * Computation tracking
+ * --------------------
+ * Requests to the heavy analysis endpoints get a client-generated job id in
+ * the `X-Totem-Job-Id` header and an AbortController, and are registered in
+ * the computation store, which polls their progress and can cancel them
+ * (see `store/computationStore.ts`). A caller-supplied `signal` keeps
+ * working: aborting it aborts the tracked request too.
+ */
+axios.interceptors.request.use((config) => {
+  if (config._skipJobTracking || config._totemJobId) return config;
+  const url = String(config.url ?? "");
+  const label = computationLabel(url, config.method);
+  if (!label) return config;
+
+  const id = newJobId();
+  const controller = new AbortController();
+  const callerSignal = config.signal;
+  if (callerSignal) {
+    if (callerSignal.aborted) controller.abort();
+    else callerSignal.addEventListener("abort", () => controller.abort(), { once: true });
+  }
+  config.signal = controller.signal;
+  // However the request gets aborted (the panel's Cancel button, a component
+  // unmounting or refetching), the backend must stop computing too, or the
+  // abandoned computation keeps the per-file lock busy for the next request.
+  controller.signal.addEventListener(
+    "abort",
+    () => {
+      const store = useComputationStore.getState();
+      const job = store.jobs[id];
+      if (job && job.status !== "cancelling") store.cancel(id);
+    },
+    { once: true },
+  );
+  config.headers = config.headers || {};
+  config.headers["X-Totem-Job-Id"] = id;
+  config._totemJobId = id;
+  useComputationStore.getState().start({
+    id,
+    label,
+    url,
+    method: String(config.method ?? "get"),
+    fileId: computationFileId(url, config.params),
+    startedAt: Date.now(),
+    fraction: null,
+    message: "",
+    status: "running",
+    controller,
+  });
+  return config;
+});
+
+function finishTrackedJob(config) {
+  const id = config && config._totemJobId;
+  if (id) useComputationStore.getState().finish(id);
+}
+
 axios.interceptors.request.use((config) => {
   if (config._skipGlobalFilter) return config;
   const { appliedRules, isApplied } = useFilterStore.getState();
@@ -150,9 +275,13 @@ axios.interceptors.request.use((config) => {
   const isDataEndpoint =
     url.includes("/api/files/") ||
     url.includes("/api/new-ocdfg/") ||
+    url.includes("/api/ocdfg-block-structure/") ||
     url.includes("/api/variants/") ||
     url.includes("/api/occn/") ||
-    url.includes("/api/ocpn/");
+    url.includes("/api/ocpn/") ||
+    url.includes("/api/handover/") ||
+    url.includes("/api/profile-matrix/") ||
+    url.includes("/api/event-log/");
   if (isApplied && isDataEndpoint) {
     const filterParams = buildFilterParams(appliedRules);
     config.params = { ...config.params, ...filterParams };
@@ -161,10 +290,22 @@ axios.interceptors.request.use((config) => {
 });
 
 axios.interceptors.response.use(
-  (resp) => resp,
+  (resp) => {
+    finishTrackedJob(resp.config);
+    return resp;
+  },
   async (error) => {
     const cfg = error.config || {};
     const url = String(cfg.url ?? "");
+    // A tracked request that will not be retried below is over for the
+    // computation store, whatever the reason (abort, cancel, failure).
+    const willRetry =
+      error.response &&
+      error.response.status === 401 &&
+      !cfg._skipAuthRefresh &&
+      !cfg._retried &&
+      !TOKEN_URL.test(url);
+    if (!willRetry) finishTrackedJob(cfg);
     // Only handle 401s, and never recurse on the token endpoints themselves
     // (login or refresh): a 401 from /token/ means bad credentials, and
     // retrying it via the refresh/guest path would loop indefinitely.
@@ -173,7 +314,7 @@ axios.interceptors.response.use(
       error.response.status !== 401 ||
       cfg._skipAuthRefresh ||
       cfg._retried ||
-      /\/token\/(refresh\/)?$/.test(url)
+      TOKEN_URL.test(url)
     ) {
       return Promise.reject(error);
     }
@@ -181,30 +322,14 @@ axios.interceptors.response.use(
     // Mark the failed request so we don't retry it more than once.
     cfg._retried = true;
 
-    // Coalesce concurrent refreshes: only one /token/refresh/ in flight.
-    if (!refreshInFlight) {
-      refreshInFlight = performRefresh().finally(() => {
-        refreshInFlight = null;
-      });
-    }
-
     try {
-      const newAccess = await refreshInFlight;
+      const newAccess = await sharedRefresh();
       cfg.headers = cfg.headers || {};
       cfg.headers["Authorization"] = `Bearer ${newAccess}`;
       return axios(cfg);
     } catch (refreshError) {
-      if (import.meta.env.VITE_LOCAL_MODE) {
-        // Local mode: silently re-authenticate as Guest instead of redirecting.
-        try {
-          const newAccess = await guestReAuth();
-          cfg.headers = cfg.headers || {};
-          cfg.headers["Authorization"] = `Bearer ${newAccess}`;
-          return axios(cfg);
-        } catch {
-          return Promise.reject(refreshError);
-        }
-      }
+      // Local mode: even the Guest re-login failed; nothing to redirect to.
+      if (LOCAL_MODE) return Promise.reject(refreshError);
       // Normal mode: refresh token is gone or itself expired — force logout.
       localStorage.clear();
       delete axios.defaults.headers.common["Authorization"];

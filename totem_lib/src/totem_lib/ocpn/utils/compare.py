@@ -10,7 +10,7 @@ def compare_ocpns(ocpn1: Dict[str, Any], ocpn2: Dict[str, Any]) -> Dict[str, Any
     core components of the OCPNs.
 
     Args:
-        ocpn1: The first OCPN dictionary, as produced by the pm4py mining algorithm.
+        ocpn1: The first OCPN dictionary (activities, object_types, petri_nets, ...).
         ocpn2: The second OCPN dictionary.
 
     Returns:

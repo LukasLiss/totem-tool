@@ -1,8 +1,9 @@
 import polars as pl
 import networkx as nx
 from totem_lib import ObjectCentricEventLog as OCEL 
+from ..visualization import VisualizableMixin, ocdfg_to_graphviz
 
-class CCDFG(nx.DiGraph):
+class CCDFG(nx.DiGraph, VisualizableMixin):
     """
     Represents a Case-Centric Directly-Follows Graph for a single object type.
     Nodes are activities, and edges represent the directly-follows relation,
@@ -11,6 +12,10 @@ class CCDFG(nx.DiGraph):
     def __init__(self, obj_type: str, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.object_type = obj_type
+
+    def to_graphviz(self, **kwargs):
+        """Draws the CCDFG as a Graphviz Digraph."""
+        return ocdfg_to_graphviz(self, **kwargs)
 
     @classmethod
     def from_ocel(cls, ocel: OCEL, object_type: str, base_df: pl.DataFrame) -> 'CCDFG':

@@ -1,15 +1,8 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-
-import { GlobalFilterToggle } from '@/components/ui/GlobalFilterToggle';
+import { WidgetHeader } from '@/components/ui/WidgetTitle';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import {
@@ -24,10 +17,27 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { RefreshCcw, SlidersHorizontal } from 'lucide-react';
+import { Layers, Pencil, RefreshCcw, Save, SlidersHorizontal } from 'lucide-react';
+import { toast } from 'sonner';
 import TotemVisualizer, {
+  type ProcessAreaDiscoveryInfo,
   type TotemVisualizerControls,
 } from './TotemVisualizer';
+import { SelectedFileContext } from '@/contexts/SelectedFileContext';
+import { extractAssetApiError } from '@/api/assetsApi';
+import { createProcessAreaAsset, updateProcessAreaAsset } from '@/api/processAreaAssetsApi';
+import { useProcessAreaAssets, useProcessAreaAssetsStore } from '@/store/processAreaAssetsStore';
+import { useProcessAreaStore } from '@/store/processAreaStore';
+import { mapTypesToColors } from '@/utils/objectColors';
+import { ProcessAreaEditor } from './process-area/ProcessAreaEditor';
+import {
+  compositionFromLayers,
+  compositionToLayers,
+  fromAssetContent,
+  hasBlockingProblems,
+  type ProcessAreaComposition,
+} from './process-area/composition';
+import { discoveredSnapshotAreas } from './variants/variantsApi';
 import {
   PROCESS_AREA_ALGORITHM_LABELS,
   PROCESS_AREA_PARAM_RANGES,
@@ -69,7 +79,25 @@ export type ProcessAreaProps = {
     algorithm: ProcessAreaAlgorithm;
     params: ProcessAreaParams;
   }) => void;
+  initialLocalFilterParams?: Record<string, string>;
+  onLocalFilterChange?: (params: Record<string, string>) => void;
+  /** Stored composition (PROCESS_AREAS asset) to show instead of the discovery. */
+  initialCompositionAssetId?: number | null;
+  /** Fired when the user switches between the discovery and a stored composition. */
+  onCompositionAssetChange?: (assetId: number | null) => void;
 };
+
+const DISCOVERED = '__discovered__';
+const UNSAVED = '__unsaved__';
+
+/** "Process areas", "Process areas 2", … — the first name no stored asset has. */
+function freshCompositionName(taken: string[]): string {
+  const names = new Set(taken.map((n) => n.toLocaleLowerCase()));
+  if (!names.has('process areas')) return 'Process areas';
+  let n = 2;
+  while (names.has(`process areas ${n}`)) n += 1;
+  return `Process areas ${n}`;
+}
 
 import { API_BASE_URL } from '../config/api';
 
@@ -81,10 +109,178 @@ export default function ProcessArea({
   initialAlgorithm,
   initialParams,
   onSettingsChange,
+  initialLocalFilterParams,
+  onLocalFilterChange,
+  initialCompositionAssetId,
+  onCompositionAssetChange,
 }: ProcessAreaProps) {
   const [totemControls, setTotemControls] = useState<TotemVisualizerControls | null>(null);
   const [reloadSignal, setReloadSignal] = useState(0);
   const [filterEnabled, setFilterEnabled] = useState(true);
+  const [localFilterParams, setLocalFilterParams] = useState<Record<string, string>>(initialLocalFilterParams ?? {});
+
+  // Follow the host's filter when it changes from outside (loaded
+  // asynchronously, or reset on a project switch).
+  const initialLocalFilterJson = JSON.stringify(initialLocalFilterParams ?? {});
+  useEffect(() => {
+    setLocalFilterParams((prev) =>
+      JSON.stringify(prev) === initialLocalFilterJson ? prev : JSON.parse(initialLocalFilterJson),
+    );
+  }, [initialLocalFilterJson]);
+
+  // ---- compositions ------------------------------------------------------
+  const { selectedFile } = useContext(SelectedFileContext);
+  const projectId = selectedFile?.project ?? null;
+  const storedAssets = useProcessAreaAssets(projectId);
+  const upsertAsset = useProcessAreaAssetsStore((state) => state.upsert);
+  const [discovery, setDiscovery] = useState<ProcessAreaDiscoveryInfo | null>(null);
+  /** Shown instead of the discovered areas; null shows the discovery. */
+  const [composition, setComposition] = useState<ProcessAreaComposition | null>(null);
+  /** Applied edits that are not stored in the project assets yet. */
+  const [dirty, setDirty] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const numericFileId = Number(fileId);
+  const validFileId = Number.isFinite(numericFileId) && numericFileId > 0 ? numericFileId : null;
+  const activeAssetId = composition?.source?.kind === 'asset' ? composition.source.assetId ?? null : null;
+
+  const handleDiscoveryLoaded = useCallback((info: ProcessAreaDiscoveryInfo) => {
+    setDiscovery(info);
+  }, []);
+
+  // A different log: start from its discovery again unless a stored
+  // composition is pinned (dashboards).
+  const lastFileRef = useRef(validFileId);
+  useEffect(() => {
+    if (lastFileRef.current === validFileId) return;
+    lastFileRef.current = validFileId;
+    setDiscovery(null);
+    if (!activeAssetId) {
+      setComposition(null);
+      setDirty(false);
+    }
+  }, [validFileId, activeAssetId]);
+
+  const loadAsset = useCallback(
+    (assetId: number) => {
+      const asset = storedAssets.assets.find((a) => a.id === assetId);
+      if (!asset) return false;
+      setComposition(
+        fromAssetContent(asset.content_json, {
+          name: asset.name,
+          assetId: asset.id,
+          allObjectTypes: discovery?.allObjectTypes,
+        }),
+      );
+      setDirty(false);
+      return true;
+    },
+    [storedAssets.assets, discovery?.allObjectTypes],
+  );
+
+  // Open the persisted / deep-linked composition once the assets are known.
+  const seededAssetRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!initialCompositionAssetId || seededAssetRef.current === initialCompositionAssetId) return;
+    if (!storedAssets.loaded) return;
+    seededAssetRef.current = initialCompositionAssetId;
+    if (!loadAsset(initialCompositionAssetId)) onCompositionAssetChange?.(null);
+  }, [initialCompositionAssetId, storedAssets.loaded, loadAsset, onCompositionAssetChange]);
+
+  // A stored composition changed elsewhere (another view saved it): follow
+  // it, unless there are unsaved edits here.
+  const activeAsset = activeAssetId ? storedAssets.assets.find((a) => a.id === activeAssetId) : undefined;
+  const activeAssetVersion = activeAsset?.updated_at;
+  useEffect(() => {
+    if (!activeAssetId || dirty || !activeAssetVersion) return;
+    loadAsset(activeAssetId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeAssetVersion]);
+
+  const discoveredComposition = useMemo(
+    () =>
+      discovery
+        ? compositionFromLayers(discovery.layers, {
+            name: freshCompositionName(storedAssets.assets.map((a) => a.name)),
+            allObjectTypes: discovery.allObjectTypes,
+            source: { kind: 'discovered', algorithm: discovery.algorithm, fileId: validFileId ?? undefined },
+          })
+        : null,
+    [discovery, storedAssets.assets, validFileId],
+  );
+  const compositionLayers = useMemo(
+    () => (composition ? compositionToLayers(composition) : null),
+    [composition],
+  );
+  const typeColors = useMemo(
+    () => mapTypesToColors(discovery?.allObjectTypes ?? []),
+    [discovery?.allObjectTypes],
+  );
+
+  // Share what is shown, so the Variants Explorer and the alignments use
+  // the same areas (the visualizer publishes plain discoveries itself).
+  useEffect(() => {
+    if (!validFileId) return;
+    if (composition && compositionLayers) {
+      useProcessAreaStore.getState().publish({
+        fileId: validFileId,
+        algorithm: 'manual',
+        filtered: false,
+        composition: { name: composition.name, assetId: activeAssetId },
+        areas: compositionLayers.flatMap((layer) => layer.areas),
+        objectTypeToActivities: discovery?.objectTypeToActivities ?? {},
+      });
+    } else if (discovery) {
+      useProcessAreaStore.getState().publish({
+        fileId: validFileId,
+        algorithm: discovery.algorithm,
+        filtered: discovery.filtered,
+        areas: discoveredSnapshotAreas(discovery.layers),
+        objectTypeToActivities: discovery.objectTypeToActivities,
+      });
+    }
+    // Only when what is shown changes, not on every discovery of the same.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [validFileId, composition, compositionLayers, activeAssetId]);
+
+  const handleSourceChange = (value: string) => {
+    if (value === UNSAVED) return;
+    if (value === DISCOVERED) {
+      setComposition(null);
+      setDirty(false);
+      onCompositionAssetChange?.(null);
+      return;
+    }
+    const assetId = Number(value.replace('asset:', ''));
+    if (loadAsset(assetId)) onCompositionAssetChange?.(assetId);
+  };
+
+  const saveDirectly = async () => {
+    if (!composition || !projectId) return;
+    if (hasBlockingProblems(composition)) {
+      setEditorOpen(true);
+      return;
+    }
+    setSaving(true);
+    try {
+      const asset = activeAssetId
+        ? await updateProcessAreaAsset({ assetId: activeAssetId, composition })
+        : await createProcessAreaAsset({ projectId, composition });
+      upsertAsset(asset);
+      setComposition({ ...composition, name: asset.name, source: { kind: 'asset', assetId: asset.id } });
+      setDirty(false);
+      onCompositionAssetChange?.(asset.id);
+      toast.success(`Saved process areas "${asset.name}" to the project assets.`);
+    } catch (error) {
+      toast.error(`Saving failed: ${extractAssetApiError(error).message}`);
+      setEditorOpen(true);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const sourceValue = composition ? (activeAssetId ? `asset:${activeAssetId}` : UNSAVED) : DISCOVERED;
+  const editorSeed = composition ?? discoveredComposition;
 
   const handleControlsReady = useCallback((controls: TotemVisualizerControls) => {
     setTotemControls(controls);
@@ -108,9 +304,12 @@ export default function ProcessArea({
         embedded={true}
         onControlsReady={handleControlsReady}
         filterEnabled={filterEnabled}
+        localFilterParams={localFilterParams}
         initialAlgorithm={initialAlgorithm}
         initialParams={initialParams}
         onSettingsChange={onSettingsChange}
+        compositionLayers={compositionLayers}
+        onDiscoveryLoaded={handleDiscoveryLoaded}
       />
     </ReactFlowProvider>
   );
@@ -125,15 +324,77 @@ export default function ProcessArea({
 
   return (
     <Card
-      className={`@container/card w-full flex flex-col ${fillContainer ? 'h-full rounded-none' : ''}`}
+      className={`@container/card w-full flex flex-col gap-0 py-0 overflow-hidden ${fillContainer ? 'h-full rounded-none' : ''}`}
     >
-      <CardHeader className="items-center relative z-10 justify-between flex-shrink-0">
-        <div className="flex items-center gap-2">
-          <CardTitle>Process Area Visualizer</CardTitle>
-          <GlobalFilterToggle filterEnabled={filterEnabled} onToggle={() => setFilterEnabled(prev => !prev)} />
-        </div>
-        <CardAction className="flex items-center gap-2">
-          {totemControls && (
+      <WidgetHeader
+        label="Process Area Visualizer"
+        fileId={fileId}
+        filterEnabled={filterEnabled}
+        onToggleFilter={() => setFilterEnabled(prev => !prev)}
+        localFilterParams={localFilterParams}
+        onLocalFilterChange={(params) => {
+          setLocalFilterParams(params);
+          onLocalFilterChange?.(params);
+        }}
+      >
+          <Select value={sourceValue} onValueChange={handleSourceChange}>
+            <SelectTrigger
+              className="h-8 w-[220px]"
+              aria-label="Shown process areas"
+              title="Show the discovered process areas or a composition stored in the project assets"
+            >
+              <Layers className="h-3.5 w-3.5 shrink-0 opacity-60" />
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={DISCOVERED}>Discovered areas</SelectItem>
+              {composition && !activeAssetId ? (
+                <SelectItem value={UNSAVED}>{composition.name || 'Adjusted'} (not saved)</SelectItem>
+              ) : null}
+              {storedAssets.assets.length > 0 ? (
+                <>
+                  <div className="px-2 pb-1 pt-2 text-[11px] font-medium text-muted-foreground">
+                    Stored in project assets
+                  </div>
+                  {storedAssets.assets.map((asset) => (
+                    <SelectItem key={asset.id} value={`asset:${asset.id}`}>
+                      {asset.name}
+                      {asset.id === activeAssetId && dirty ? ' (edited)' : ''}
+                    </SelectItem>
+                  ))}
+                </>
+              ) : null}
+            </SelectContent>
+          </Select>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setEditorOpen(true)}
+            disabled={!editorSeed}
+            title={
+              editorSeed
+                ? 'Move object types between process areas and levels, name the areas and choose their activities'
+                : 'Waiting for the discovery to finish'
+            }
+          >
+            <Pencil className="h-4 w-4" />
+            Adjust
+          </Button>
+          {composition && (dirty || !activeAssetId) ? (
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => void saveDirectly()}
+              disabled={saving || !projectId}
+              title={activeAssetId ? 'Store the changes in the project assets' : 'Store this composition in the project assets'}
+            >
+              <Save className="h-4 w-4" />
+              {saving ? 'Saving…' : 'Save'}
+            </Button>
+          ) : null}
+          <div className="w-px h-6 bg-border" />
+          {totemControls && !composition && (
             <>
               <Select
                 value={totemControls.algorithm}
@@ -141,7 +402,7 @@ export default function ProcessArea({
                   totemControls.onAlgorithmChange(value as ProcessAreaAlgorithm)
                 }
               >
-                <SelectTrigger className="h-8 w-[230px]" aria-label="Discovery algorithm">
+                <SelectTrigger className="h-8 w-[230px] max-w-full" aria-label="Discovery algorithm">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -169,7 +430,7 @@ export default function ProcessArea({
                       <SlidersHorizontal className="h-4 w-4" />
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent align="end" className="w-[320px] space-y-4">
+                  <PopoverContent align="end" className="w-[320px] max-w-[calc(100vw-2rem)] space-y-4">
                     <div className="space-y-1">
                       <p className="text-sm font-medium">Resource indicators</p>
                       <p className="text-xs text-muted-foreground">
@@ -220,14 +481,35 @@ export default function ProcessArea({
             <RefreshCcw className="h-4 w-4" />
             Reload
           </Button>
-        </CardAction>
-      </CardHeader>
+      </WidgetHeader>
       <CardContent
         className={`p-0 ${fillContainer ? 'flex-1 min-h-0' : ''}`}
         style={fillContainer ? undefined : { height: heightStyle }}
       >
         {visualizerContent}
       </CardContent>
+      {editorSeed ? (
+        <ProcessAreaEditor
+          open={editorOpen}
+          onOpenChange={setEditorOpen}
+          initial={editorSeed}
+          discovered={discoveredComposition}
+          objectTypeToActivities={discovery?.objectTypeToActivities ?? {}}
+          allActivities={discovery?.allActivities ?? []}
+          typeColors={typeColors}
+          projectId={projectId}
+          assetId={activeAssetId}
+          onApply={(next) => {
+            setComposition(next);
+            setDirty(true);
+          }}
+          onSaved={(next, asset) => {
+            setComposition({ ...next, name: asset.name });
+            setDirty(false);
+            onCompositionAssetChange?.(asset.id);
+          }}
+        />
+      ) : null}
     </Card>
   );
 }

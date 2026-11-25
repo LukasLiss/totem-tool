@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from "react";
-import { Routes, Route, Navigate } from "react-router-dom";
+import React, { useState, useEffect, useCallback } from "react";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import axios from "axios";
 import { Login } from "./react_component/login";
 import { Logout } from "./react_component/logout";
-import { Title } from "./Title";
+import { OAuthCallback } from "./react_component/oauthCallback";
 import UploadView from "./UploadView";
-import { SelectedFileContext } from "./contexts/SelectedFileContext";
+import { SelectedFileContext, type SelectedFile } from "./contexts/SelectedFileContext";
 import "./styles/app.css";
 import { ProcessOverview } from "./ProcessOverview";
 import { DashboardProvider } from "./contexts/DashboardContext";
@@ -19,8 +19,7 @@ import { ChatWidget } from "./components/chat/ChatWidget";
 import { useAssistantContext } from "./components/chat/useAssistantContext";
 import { setBypassCache } from "./interceptors/axios";
 import { getUserSettings } from "./api/settingsApi";
-
-const LOCAL_MODE = Boolean(import.meta.env.VITE_LOCAL_MODE);
+import { LOCAL_MODE } from "./lib/env";
 
 async function guestLogin() {
   const { data } = await axios.post(
@@ -34,60 +33,54 @@ async function guestLogin() {
   if (data.refresh) localStorage.setItem("refresh_token", data.refresh);
 }
 
-function MainAppShell({
-  splashDone,
-  handleSplashComplete,
-}: {
-  splashDone: boolean;
-  handleSplashComplete: () => void;
-}) {
-  const assistantContext = useAssistantContext();
+const SPLASH_SEEN_KEY = "totem_splash_seen";
 
+function hasSeenSplash(): boolean {
+  try {
+    return sessionStorage.getItem(SPLASH_SEEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function markSplashSeen() {
+  try {
+    sessionStorage.setItem(SPLASH_SEEN_KEY, "1");
+  } catch {
+    /* storage unavailable — the splash just plays again next load */
+  }
+}
+
+/** Pages where nobody is signed in yet: no assistant, no live-wire socket. */
+const PUBLIC_PATHS = new Set(["/login", "/oauth/callback", "/title", "/logout"]);
+
+/**
+ * AI assistant drawer, guided tours and the agent socket. Rendered inside the
+ * file and dashboard providers because the assistant reads both.
+ */
+function AssistantLayer({ children }: { children: React.ReactNode }) {
+  const assistantContext = useAssistantContext();
+  const { pathname } = useLocation();
+  const signedInArea = !PUBLIC_PATHS.has(pathname);
   return (
     <TourController>
-      <AgentBridge />
-      <div className="website-background">
-        <Toaster position="top-center" richColors />
-        {!splashDone && (
-          <SplashAnimation onComplete={handleSplashComplete} />
-        )}
-
-        <Routes>
-          <Route
-            path="/title"
-            element={LOCAL_MODE ? <Navigate to="/upload" replace /> : <Title />}
-          />
-          <Route
-            path="/login"
-            element={LOCAL_MODE ? <Navigate to="/upload" replace /> : <Login />}
-          />
-          <Route path="/logout" element={<Logout />} />
-          <Route path="/upload" element={<UploadView />} />
-          <Route path="/overview" element={<ProcessOverview />} />
-          <Route path="/userdatadelete" element={<DeleteView />} />
-          <Route path="/settings" element={<SettingsView />} />
-          <Route
-            path="/"
-            element={
-              <Navigate to={LOCAL_MODE ? "/upload" : "/title"} replace />
-            }
-          />
-        </Routes>
-
-        {/* Global Floating AI Assistant Drawer */}
-        <ChatWidget context={assistantContext} />
-      </div>
+      {signedInArea && <AgentBridge />}
+      {children}
+      {signedInArea && <ChatWidget context={assistantContext} />}
     </TourController>
   );
 }
 
 function AppRoutes({ selectedFile, setSelectedFile }) {
   const [ready, setReady] = useState(!LOCAL_MODE);
-  // Splash plays on every mount — including dev — until dismissed. Press Esc
-  // or click anywhere to skip.
-  const [splashDone, setSplashDone] = useState(false);
+  // Splash plays once per browser tab. Login hops (the OAuth round trip, the
+  // interceptor's redirect to /login) are full page loads, so without the
+  // sessionStorage flag it would replay on each of them. Press Esc or click
+  // anywhere to skip.
+  const [splashDone, setSplashDone] = useState(hasSeenSplash);
 
   const handleSplashComplete = () => {
+    markSplashSeen();
     setSplashDone(true);
   };
 
@@ -154,28 +147,74 @@ function AppRoutes({ selectedFile, setSelectedFile }) {
       });
   }, [ready]);
 
-  if (!ready) {
-    return (
-      <div className="website-background">
-        <div className="flex items-center justify-center h-dvh" />
-      </div>
-    );
-  }
-
+  // The splash sits outside the `ready` switch so it keeps playing (rather
+  // than restarting) while the local-mode Guest login finishes underneath.
   return (
-    <SelectedFileContext.Provider value={{ selectedFile, setSelectedFile }}>
-      <DashboardProvider>
-        <MainAppShell
-          splashDone={splashDone}
-          handleSplashComplete={handleSplashComplete}
-        />
-      </DashboardProvider>
-    </SelectedFileContext.Provider>
+    <div className="website-background">
+      {!splashDone && <SplashAnimation onComplete={handleSplashComplete} />}
+      {!ready ? (
+        <div className="flex items-center justify-center h-dvh" />
+      ) : (
+        <SelectedFileContext.Provider value={{ selectedFile, setSelectedFile }}>
+          <DashboardProvider>
+            <AssistantLayer>
+            <Toaster position="top-center" richColors />
+            <Routes>
+              {/* Old landing page; kept as a redirect for existing links. */}
+              <Route
+                path="/title"
+                element={<Navigate to={LOCAL_MODE ? "/upload" : "/login"} replace />}
+              />
+              <Route
+                path="/login"
+                element={LOCAL_MODE ? <Navigate to="/upload" replace /> : <Login />}
+              />
+              <Route
+                path="/oauth/callback"
+                element={LOCAL_MODE ? <Navigate to="/upload" replace /> : <OAuthCallback />}
+              />
+              <Route path="/logout" element={<Logout />} />
+              <Route path="/upload" element={<UploadView />} />
+              <Route path="/overview" element={<ProcessOverview />} />
+              <Route path="/userdatadelete" element={<DeleteView />} />
+              <Route path="/settings" element={<SettingsView />} />
+              <Route
+                path="/"
+                element={
+                  <Navigate to={LOCAL_MODE ? "/upload" : "/login"} replace />
+                }
+              />
+            </Routes>
+            </AssistantLayer>
+          </DashboardProvider>
+        </SelectedFileContext.Provider>
+      )}
+    </div>
   );
 }
 
 function App() {
-  const [selectedFile, setSelectedFile] = useState(null);
+  const [selectedFile, setSelectedFileState] = useState<SelectedFile | null>(() => {
+    try {
+      const saved = localStorage.getItem("totem_selected_file");
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const setSelectedFile = useCallback((file: SelectedFile | null) => {
+    setSelectedFileState(file);
+    try {
+      if (file) {
+        localStorage.setItem("totem_selected_file", JSON.stringify(file));
+      } else {
+        localStorage.removeItem("totem_selected_file");
+      }
+    } catch {
+      /* ignore storage quota errors */
+    }
+  }, []);
 
   return (
     <AppRoutes selectedFile={selectedFile} setSelectedFile={setSelectedFile} />

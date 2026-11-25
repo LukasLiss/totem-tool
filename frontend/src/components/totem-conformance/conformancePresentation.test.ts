@@ -5,8 +5,9 @@ import type { TotemConformanceResponse } from "@/api/totemConformanceApi";
 import { createTotemConformanceLookup } from "./conformanceLookup";
 import {
   formatConformanceMetric,
+  getConformanceScore,
   getFitnessBand,
-  getPairFitness,
+  getRelationElementColors,
 } from "./conformancePresentation";
 
 const response: TotemConformanceResponse = {
@@ -45,14 +46,27 @@ const response: TotemConformanceResponse = {
 };
 
 describe("TOTeM conformance presentation", () => {
-  it("uses the weaker directional fitness for a visualized pair", () => {
+  it("scores an element by the lower of its fitness and precision", () => {
+    expect(getConformanceScore({ fitness: 0.92, precision: 0.8 })).toBe(0.8);
+    expect(getConformanceScore({ fitness: 0.7, precision: null })).toBe(0.7);
+    expect(getConformanceScore({ fitness: null, precision: null })).toBeNull();
+    expect(getConformanceScore(null)).toBeNull();
+  });
+
+  it("colours every element of a relation per direction", () => {
     const lookup = createTotemConformanceLookup(response);
 
-    expect(getPairFitness(lookup, "Order", "Item", "temporal")).toBe(0.7);
-    expect(getPairFitness(lookup, "Order", "Item", "log_cardinality")).toBe(
-      0.78
-    );
-    expect(getPairFitness(lookup, "Order", "Item", "event_cardinality")).toBeNull();
+    // Order → Item is drawn at the Item (target) end, Item → Order at the
+    // Order (source) end.
+    expect(getRelationElementColors(lookup, "Order", "Item")).toEqual({
+      target: { temporal: "#D97706", log: "#DC2626", event: "#94A3B8" },
+      source: { temporal: "#DC2626", log: "#DC2626", event: "#94A3B8" },
+    });
+    expect(getRelationElementColors(lookup, "Item", "Order").target).toEqual({
+      temporal: "#DC2626",
+      log: "#DC2626",
+      event: "#94A3B8",
+    });
   });
 
   it("maps reference thresholds to explicit fitness bands", () => {

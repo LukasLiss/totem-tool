@@ -232,7 +232,6 @@ Loaders auto-detect format: `import_ocel(path)`
 ### Dependencies (Key)
 - `polars` - Fast DataFrame operations
 - `networkx` - Graph algorithms
-- `pm4py` - Process mining library
 - `pandas` - Data manipulation
 
 ---

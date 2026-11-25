@@ -1,9 +1,10 @@
 import networkx as nx
 from typing import List, Optional
 from totem_lib import ObjectCentricEventLog as OCEL 
+from ..visualization import VisualizableMixin, ocdfg_to_graphviz
 from . import CCDFG
 
-class OCDFG(nx.DiGraph):
+class OCDFG(nx.DiGraph, VisualizableMixin):
     """
     Represents an Object-Centric Directly-Follows Graph, aggregating
     all case-centric DFGs from an OCEL.
@@ -11,6 +12,10 @@ class OCDFG(nx.DiGraph):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.graph['kind'] = 'ocdfg'
+
+    def to_graphviz(self, **kwargs):
+        """Draws the OCDFG as a Graphviz Digraph."""
+        return ocdfg_to_graphviz(self, **kwargs)
 
     def merge_graph(self, other_graph: nx.DiGraph, otype: str):
         """Merges nodes and edges from another graph (like a CCDFG)."""

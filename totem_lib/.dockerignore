@@ -1,0 +1,17 @@
+# Build context for evaluation/hpc/Dockerfile: keep logs, results and caches out.
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ipynb_checkpoints
+.venv
+build
+dist
+*.egg-info
+test_data/large
+test_data/edge_cases
+test_data/small/*.duckdb
+test_data/small/*.sqlite
+test_data/small/*.xml
+evaluation/results
+evaluation/*.png
+evaluation/*.ipynb

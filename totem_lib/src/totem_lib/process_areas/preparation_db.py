@@ -21,6 +21,7 @@ rely on that symmetry to keep the attractive force symmetric.
 from typing import Dict, Set, Tuple
 
 from ..ocel.ocel_duckdb import OcelDuckDB
+from ..progress import as_progress
 from .aggregates import (
     CardinalityCounts,
     DivergenceCounts,
@@ -222,7 +223,7 @@ def _dominant_signature_counts(rows) -> Dict[Tuple[str, str], int]:
     return dominant
 
 
-def prepare_db(ocel_db: OcelDuckDB) -> LogAggregates:
+def prepare_db(ocel_db: OcelDuckDB, progress=None) -> LogAggregates:
     """
     Compute all indicator inputs from a DuckDB-backed event log.
 
@@ -238,9 +239,12 @@ def prepare_db(ocel_db: OcelDuckDB) -> LogAggregates:
     dropped again before returning, including on failure.
     """
     conn = ocel_db.conn
+    progress = as_progress(progress)
     try:
+        progress.report(0.0, "Preparing object lifecycles")
         conn.execute(_SETUP_SQL)
 
+        progress.report(0.2, "Counting objects")
         object_counts: Dict[str, int] = {
             object_type: int(count)
             for object_type, count in conn.execute(_OBJECT_COUNTS_SQL).fetchall()
@@ -248,6 +252,7 @@ def prepare_db(ocel_db: OcelDuckDB) -> LogAggregates:
         object_types = tuple(sorted(object_counts))
         all_pairs = [(a, b) for a in object_types for b in object_types]
 
+        progress.report(0.3, "Computing temporal indicators")
         temporal_rows = conn.execute(_TEMPORAL_SQL).fetchall()
         temporal = {
             (source, target): TemporalCounts(
@@ -258,6 +263,7 @@ def prepare_db(ocel_db: OcelDuckDB) -> LogAggregates:
             for source, target, total, dependent, initiating in temporal_rows
         }
 
+        progress.report(0.5, "Computing cardinality indicators")
         constant_counts = _dominant_signature_counts(
             conn.execute(_CARDINALITY_SQL).fetchall()
         )
@@ -269,6 +275,7 @@ def prepare_db(ocel_db: OcelDuckDB) -> LogAggregates:
                 total=total, constant=constant, many=total - constant
             )
 
+        progress.report(0.7, "Computing divergence indicators")
         related_sources = {
             (source, target): int(count)
             for source, target, count in conn.execute(_RELATED_SOURCES_SQL).fetchall()
@@ -285,6 +292,7 @@ def prepare_db(ocel_db: OcelDuckDB) -> LogAggregates:
             for pair in all_pairs
         }
 
+        progress.report(0.9, "Collecting activities")
         event_types_by_object_type: Dict[str, Set[str]] = {}
         for object_type, activity in conn.execute(_ACTIVITIES_SQL).fetchall():
             event_types_by_object_type.setdefault(object_type, set()).add(activity)
@@ -304,6 +312,7 @@ def prepare_db(ocel_db: OcelDuckDB) -> LogAggregates:
     # complete matrix and never has to distinguish the two.
     for pair in all_pairs:
         temporal.setdefault(pair, TemporalCounts())
+    progress.report(1.0, "Done")
 
     return LogAggregates(
         object_types=object_types,

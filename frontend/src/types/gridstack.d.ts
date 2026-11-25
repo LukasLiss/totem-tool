@@ -1,4 +1,12 @@
 import 'gridstack';
+import type {
+  TextAlign,
+  TextFontFamily,
+  TextFontWeight,
+  TextVerticalAlign,
+} from '@/components/text-box/textBoxFormat';
+import type { RichTextDoc } from '@/components/text-box/richText';
+import type { ChartStyle } from '@/components/sql-widgets/chartLegendUtils';
 
 declare module 'gridstack' {
   interface GridStackWidget {
@@ -6,7 +14,19 @@ declare module 'gridstack' {
     component_name?: string;
     order?: number;
     text?: string;
+    // TextBoxComponent block-level formatting (see #373). `sans`/`serif`/`mono`
+    // and the align keywords are choice keys mirrored from the Django model.
     font_size?: number;
+    font_family?: TextFontFamily;
+    font_weight?: TextFontWeight;
+    italic?: boolean;
+    underline?: boolean;
+    text_align?: TextAlign;
+    vertical_align?: TextVerticalAlign;
+    text_color?: string;
+    background_color?: string;
+    line_height?: number;
+    rich_text?: RichTextDoc | null;
     color?: string;
     image?: string;
     automatic_loading?: boolean;
@@ -16,6 +36,11 @@ declare module 'gridstack' {
     timeout_s?: number;
     business_object_types?: string[];
     business_activities?: string[];
+    variants_mode?: 'process_areas' | 'custom';
+    area_execution_column?: string;
+    area_variant_column?: string;
+    // Stored process-area composition of the variants' process-area mode
+    process_area_asset?: number | null;
     show_num_events?: boolean;
     show_num_activities?: boolean;
     show_num_objects?: boolean;
@@ -31,14 +56,19 @@ declare module 'gridstack' {
     color_by?: string;
     shape_by?: string;
     row_order?: 'first_occurrence' | 'last_occurrence';
+    row_order_direction?: 'asc' | 'desc';
     max_points?: number;
     show_minimap?: boolean;
     layout_direction?: 'TB' | 'LR';
+    // NewOCDFGComponent: layout panel settings ({version, options}), null = defaults
+    layout_options?: unknown;
     // ImageComponent (asset store)
     image_asset?: number | null;
     image_asset_url?: string | null;
     image_fit?: string;
     image_alignment?: string;
+    // OCPNFlattenedReplayComponent
+    ocpn_asset_id?: number | null;
     // OCCNComponent
     relative_occurrence_threshold?: number;
     object_types?: string;
@@ -68,10 +98,41 @@ declare module 'gridstack' {
     title?: string;
     show_legend?: boolean;
     show_tooltip?: boolean;
+    // PieChartComponent display options (legend, colors, …), stored as JSON
+    chart_style?: ChartStyle;
     label_column?: string;
     value_column?: string;
     // FilterStackComponent
     filter_stack_json?: unknown;
+    // OCHandoverComponent (show_controls / automatic_loading are shared above)
+    resource_types?: string[];
+    businessobject_types?: string[];
+    max_gap?: number | null;
+    normalization?: 'by_source' | 'by_target' | 'by_arcs_in_eog' | 'by_total_weight';
+    normalization_scope?: 'global' | 'per_bo_type';
+    parallel_filter_enabled?: boolean;
+    parallel_threshold?: number;
+    min_parallel_observations?: number;
+    cluster_by_ot?: boolean;
+    view_mode?: 'graph' | 'table' | 'log';
+    // OCAlignmentComponent (show_controls, automatic_loading, business_object_types,
+    // business_activities and timeout_s are shared above)
+    model_asset?: number | null;
+    execution_source?: 'area' | 'stored';
+    execution_column?: string;
+    execution_id?: string;
+    max_states?: number;
+    show_silent_moves?: boolean;
+    // ResourceProfilingComponent (business_object_types / resource_types shared)
+    feature_groups?: string[];
+    tooltip_feature_groups?: string[];
+    compute_clusters?: boolean;
+    cluster_method?: 'kmeans' | 'agglomerative' | 'hdbscan';
+    n_clusters?: number;
+    min_cluster_size?: number;
+    distance_metric?: 'euclidean' | 'hellinger';
+    point_size?: 'small' | 'medium' | 'large';
+    transparent_points?: boolean;
     // ProcessAreaComponent
     algorithm?: 'mlpa' | 'advanced';
     w_temporal?: number;
@@ -79,5 +140,9 @@ declare module 'gridstack' {
     w_divergence?: number;
     alpha?: number;
     beta?: number;
+    // Local filter params - persisted per widget
+    local_filter_params?: Record<string, string> | null;
+    // ProcessAreaComponent: stored composition shown instead of the discovery
+    composition_asset?: number | null;
   }
 }

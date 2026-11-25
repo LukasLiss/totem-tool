@@ -12,9 +12,9 @@ Design notes
 - Attribute columns are dynamic (VARCHAR) exactly like `OcelDuckDB`. Writing
   an attribute key that has no column yet issues `ALTER TABLE ADD COLUMN` on
   the fly (for objects: on both `objects` and `object_attribute_history`).
-- Object attribute edits are mirrored into `object_attribute_history` so the
-  attribute values survive a round trip through the polars importer
-  (`import_ocel_from_duckdb`) and therefore into every export format.
+- Object attribute edits are mirrored into `object_attribute_history`, which
+  is where the OCEL 2.0 exports (and `import_ocel_from_duckdb`) read
+  time-stamped attribute values from.
 - All list methods are paginated and support server-side filtering/sorting,
   so the frontend never has to hold the full log.
 """
@@ -30,6 +30,7 @@ from typing import Dict, List, Optional, Tuple
 import duckdb
 import polars as pl
 
+from .exporter import export_ocel2
 from .ocel_duckdb import create_ocel_schema
 
 _FIXED_EVENT_COLS = ("event_id", "activity", "timestamp_unix")
@@ -1002,8 +1003,8 @@ class OcelEditor:
         Export the working log to `dest_path` in the given format.
 
         - ``duckdb``: native DuckDB copy (works from the live connection).
-        - ``sqlite`` / ``json`` / ``xml``: OCEL 2.0 via pm4py, enriched with
-          the event and object attribute columns.
+        - ``sqlite`` / ``json`` / ``xml``: OCEL 2.0, see
+          :mod:`totem_lib.ocel.exporter`.
         """
         fmt = (fmt or "").lower()
         if fmt not in EXPORT_FORMATS:
@@ -1030,66 +1031,4 @@ class OcelEditor:
                 self.conn.execute("DETACH _export_dest")
             return dest_path
 
-        import pm4py
-
-        from .importer_duckdb import import_ocel_from_duckdb
-        from .pm4py_adapter import (
-            PM4PY_EVENT_ID,
-            PM4PY_OBJECT_ID,
-            convert_ocel_polars_to_pm4py,
-        )
-
-        # The polars importer opens its own read-only connection, which
-        # DuckDB refuses while our read-write connection is open on the same
-        # file. Go through a temporary native copy instead.
-        tmp_copy = f"{dest_path}.tmp.duckdb"
-        self.export(tmp_copy, "duckdb")
-        try:
-            polars_ocel = import_ocel_from_duckdb(tmp_copy)
-        finally:
-            os.remove(tmp_copy)
-        converted = convert_ocel_polars_to_pm4py(polars_ocel)
-        # The adapter fills e2e / object_changes with column-less empty
-        # DataFrames, which pm4py's OCEL 2.0 exporters reject. Rebuild the
-        # OCEL and let the constructor create correctly-columned defaults.
-        from pm4py.objects.ocel.obj import OCEL
-
-        pm4py_ocel = OCEL(
-            events=converted.events,
-            objects=converted.objects,
-            relations=converted.relations,
-            o2o=converted.o2o,
-        )
-
-        # The shared adapter drops attributes; re-attach them from the
-        # DuckDB tables so exports keep everything the user edited.
-        event_attr_cols = self.event_attribute_columns()
-        if event_attr_cols:
-            cols = "".join(f', "{c}"' for c in event_attr_cols)
-            events_attrs = self.conn.execute(
-                f'SELECT event_id AS "{PM4PY_EVENT_ID}"{cols} FROM events'
-            ).pl()
-            pm4py_ocel.events = (
-                pm4py_ocel.events.merge(
-                    events_attrs.to_pandas(), on=PM4PY_EVENT_ID, how="left"
-                )
-            )
-        obj_attr_cols = self.object_attribute_columns()
-        if obj_attr_cols:
-            cols = "".join(f', "{c}"' for c in obj_attr_cols)
-            objects_attrs = self.conn.execute(
-                f'SELECT obj_id AS "{PM4PY_OBJECT_ID}"{cols} FROM objects'
-            ).pl()
-            pm4py_ocel.objects = (
-                pm4py_ocel.objects.merge(
-                    objects_attrs.to_pandas(), on=PM4PY_OBJECT_ID, how="left"
-                )
-            )
-
-        if fmt == "sqlite":
-            pm4py.write_ocel2_sqlite(pm4py_ocel, dest_path)
-        elif fmt == "json":
-            pm4py.write_ocel2_json(pm4py_ocel, dest_path)
-        else:  # xml
-            pm4py.write_ocel2_xml(pm4py_ocel, dest_path)
-        return dest_path
+        return export_ocel2(self.conn, dest_path, fmt)

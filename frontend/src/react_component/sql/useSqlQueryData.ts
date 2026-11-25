@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { executeQuery } from "@/api/queryApi";
+import { useFilterVersion } from "@/store/filterStore";
 import { useEffectiveQuery } from "./useStoredQuery";
 
 export interface SqlQueryDataState {
@@ -30,6 +31,10 @@ export interface UseSqlQueryDataOptions {
   limit?: number;
   /** bump to force a re-run */
   refreshKey?: unknown;
+  /** false = bypass global filter for this widget */
+  filterEnabled?: boolean;
+  /** per-widget local filter params */
+  localFilterParams?: Record<string, string>;
 }
 
 export function useSqlQueryData({
@@ -39,7 +44,11 @@ export function useSqlQueryData({
   enabled = true,
   limit = 2000,
   refreshKey,
+  filterEnabled = true,
+  localFilterParams,
 }: UseSqlQueryDataOptions): SqlQueryDataState {
+  const filterVersion = useFilterVersion();
+  const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
   const effective = useEffectiveQuery(query, queryAssetId);
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
   const [columns, setColumns] = useState<string[]>([]);
@@ -77,7 +86,7 @@ export function useSqlQueryData({
     let alive = true;
     setLoading(true);
     setError(null);
-    executeQuery(fileId, sql, { offset: 0, limit })
+    executeQuery(fileId, sql, { offset: 0, limit, skipGlobalFilter: !filterEnabled, localFilterParams })
       .then((page) => {
         if (!alive) return;
         setRows(page.data);
@@ -96,7 +105,7 @@ export function useSqlQueryData({
     return () => {
       alive = false;
     };
-  }, [enabled, fileId, sql, ready, storedError, limit, tick, refreshKey]);
+  }, [enabled, fileId, sql, ready, storedError, limit, tick, refreshKey, effectiveFilterVersion, filterEnabled, localFilterParams]);
 
   return { rows, columns, loading, error, truncated, query: sql, refresh };
 }

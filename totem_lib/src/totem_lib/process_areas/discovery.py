@@ -26,6 +26,7 @@ them, so both algorithms draw the same boxes for the same layer assignment.
 from typing import Dict, List, Set, Tuple
 
 from ..totem.totem import connected_components_undirected
+from ..visualization import ProcessAreas
 from .aggregates import LogAggregates
 from .indicators import JoinedIndicator
 from .layer_assignment import assign_layers
@@ -120,7 +121,7 @@ def build_process_view(
         layer: FIRST_LEVEL + index for index, layer in enumerate(used_layers)
     }
 
-    process_view: ProcessView = {}
+    process_view = ProcessAreas()
     remaining_event_types = set(all_event_types)
 
     for layer in used_layers:

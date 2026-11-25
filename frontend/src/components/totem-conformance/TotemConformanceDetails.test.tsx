@@ -72,4 +72,49 @@ describe("TotemConformanceDetails", () => {
     expect(screen.getByLabelText("Activity")).toBeTruthy();
     expect(screen.getByText("Pick Item")).toBeTruthy();
   });
+
+  it("shows the distribution of the metric row the user clicks", () => {
+    const result = createConformanceResponse();
+    const lookup = createTotemConformanceLookup(result);
+    const selection = {
+      kind: "relation" as const,
+      relationId: '["Order","Item"]',
+      source: "Order",
+      target: "Item",
+    };
+    const { rerender } = render(
+      <TotemConformanceDetails
+        result={result}
+        lookup={lookup}
+        selection={selection}
+        activeDimension="temporal"
+        onClearSelection={vi.fn()}
+      />
+    );
+    expect(screen.getByText("Temporal distribution")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("Event card."));
+    expect(screen.getByText("Event cardinality distribution")).toBeTruthy();
+    expect(screen.getByLabelText("Activity")).toBeTruthy();
+    expect(
+      screen.getByText("Event card.").closest("tr")?.getAttribute("aria-selected")
+    ).toBe("true");
+
+    fireEvent.keyDown(screen.getByText("Log card.").closest("tr")!, {
+      key: "Enter",
+    });
+    expect(screen.getByText("Log cardinality distribution")).toBeTruthy();
+
+    // Changing the dimension above the canvas still carries over.
+    rerender(
+      <TotemConformanceDetails
+        result={result}
+        lookup={lookup}
+        selection={selection}
+        activeDimension="event_cardinality"
+        onClearSelection={vi.fn()}
+      />
+    );
+    expect(screen.getByText("Event cardinality distribution")).toBeTruthy();
+  });
 });

@@ -8,13 +8,12 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
-import { useFilterVersion } from '@/store/filterStore';
+import { useFilterVersion, getEffectiveFilterConfig } from '@/store/filterStore';
 import {
   Background,
   BackgroundVariant,
   ConnectionMode,
   Controls,
-  MarkerType,
   ReactFlow,
   ReactFlowProvider,
   applyNodeChanges,
@@ -34,13 +33,13 @@ import {
   type OcpnModelFile,
 } from '@/editors/shared/model-types';
 import { downloadJson, toFilename } from '@/editors/shared/io';
-import { modelToFlow, placeTypeMap, type FlowState } from '@/editors/ocpn/model';
+import { modelToFlow } from '@/editors/ocpn/model';
+import { toDisplay } from '@/editors/ocpn/display';
+import { toast } from 'sonner';
 import { layoutOcpn } from '@/editors/ocpn/layout';
 import { nodeTypes } from '@/editors/ocpn/nodes';
 import { edgeTypes } from '@/editors/ocpn/ArcEdge';
 import {
-  FALLBACK_TYPE_COLOR,
-  isPlaceNode,
   type ArcFlowEdge,
   type OcpnFlowNode,
   type OcpnObjectType,
@@ -60,70 +59,7 @@ export interface OCPNVisualizerProps {
   /** Called when the user edits the timeout (e.g. to persist it). */
   onTimeoutSChange?: (timeoutS: number) => void;
   filterEnabled?: boolean;
-}
-
-/**
- * Derive presentation data the editor computes on the fly: place colors,
- * transition type-dots, and colored arrow markers per arc.
- */
-function toDisplay(state: FlowState): {
-  nodes: OcpnFlowNode[];
-  edges: ArcFlowEdge[];
-} {
-  const typeColors: Record<string, string> = {};
-  for (const type of state.objectTypes) typeColors[type.name] = type.color;
-  const placeTypes = placeTypeMap(state.nodes);
-
-  const touched = new Map<string, Set<string>>();
-  for (const edge of state.edges) {
-    const transition = placeTypes.has(edge.source) ? edge.target : edge.source;
-    const type = placeTypes.get(placeTypes.has(edge.source) ? edge.source : edge.target);
-    if (!type) continue;
-    if (!touched.has(transition)) touched.set(transition, new Set());
-    touched.get(transition)!.add(type);
-  }
-
-  const nodes = state.nodes.map((node) => {
-    if (isPlaceNode(node)) {
-      return {
-        ...node,
-        data: {
-          ...node.data,
-          color: typeColors[node.data.objectType] ?? FALLBACK_TYPE_COLOR,
-        },
-      };
-    }
-    const types = touched.get(node.id);
-    return {
-      ...node,
-      data: {
-        ...node.data,
-        typeDotColors: state.objectTypes
-          .filter((t) => types?.has(t.name))
-          .map((t) => t.color),
-      },
-    };
-  }) as OcpnFlowNode[];
-
-  const edges = state.edges.map((edge) => {
-    const type =
-      placeTypes.get(placeTypes.has(edge.source) ? edge.source : edge.target) ?? '';
-    const color = typeColors[type] ?? FALLBACK_TYPE_COLOR;
-    const variable = edge.data?.variable === true;
-    return {
-      ...edge,
-      data: { ...edge.data!, color, objectType: type },
-      markerEnd: {
-        type: MarkerType.ArrowClosed,
-        color,
-        markerUnits: 'userSpaceOnUse',
-        width: variable ? 22 : 18,
-        height: variable ? 22 : 18,
-      },
-    };
-  }) as ArcFlowEdge[];
-
-  return { nodes, edges };
+  localFilterParams?: Record<string, string>;
 }
 
 const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
@@ -134,6 +70,7 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
   showControls = true,
   onTimeoutSChange,
   filterEnabled = true,
+  localFilterParams,
 }) => {
   const filterVersion = useFilterVersion();
   const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
@@ -144,18 +81,31 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [timeoutS, setTimeoutS] = useState<number>(defaultTimeoutS);
+  const [timeoutInput, setTimeoutInput] = useState<string>(String(defaultTimeoutS));
 
   const rfInstance = useRef<ReactFlowInstance | null>(null);
   const requestSeq = useRef(0);
   const autoStartedFor = useRef<number | string | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Keep the timeout in sync when the persisted setting changes.
   useEffect(() => {
     setTimeoutS(defaultTimeoutS);
+    setTimeoutInput(String(defaultTimeoutS));
   }, [defaultTimeoutS]);
 
-  // Reset when the selected log changes.
+  const cancelDiscovery = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setLoading(false);
+  }, []);
+
+  // Reset and abort when the selected log changes.
   useEffect(() => {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
     requestSeq.current += 1;
     setModel(null);
     setObjectTypes([]);
@@ -165,21 +115,39 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
     setLoading(false);
   }, [fileId]);
 
+  // Abort in-flight requests on unmount.
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
+    };
+  }, []);
+
   const timeoutRef = useRef(timeoutS);
   timeoutRef.current = timeoutS;
 
   const filterEnabledRef = useRef(filterEnabled);
   filterEnabledRef.current = filterEnabled;
 
+  const localFilterParamsRef = useRef(localFilterParams);
+  localFilterParamsRef.current = localFilterParams;
+
   const discover = useCallback(async () => {
     if (!fileId) return;
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     const seq = ++requestSeq.current;
     setLoading(true);
     setError(null);
     try {
+      const filterConfig = getEffectiveFilterConfig(localFilterParamsRef.current, filterEnabledRef.current);
+      if (filterConfig._noResults) { setLoading(false); setNodes([]); setEdges([]); return; }
       const { data } = await axios.get(`/api/files/${fileId}/discover_ocpn/`, {
-        params: { timeout_s: timeoutRef.current },
-        _skipGlobalFilter: !filterEnabledRef.current,
+        params: { timeout_s: timeoutRef.current, ...(filterConfig.params ?? {}) },
+        _skipGlobalFilter: filterConfig._skipGlobalFilter,
+        signal: controller.signal,
       });
       const parsed = parseOcpnModelFile(data?.ocpn);
       if (parsed.ok === false) throw new Error(parsed.error);
@@ -196,6 +164,9 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
       );
     } catch (err) {
       if (seq !== requestSeq.current) return;
+      if (axios.isCancel(err) || (err instanceof Error && err.name === 'CanceledError')) {
+        return;
+      }
       if (axios.isAxiosError(err) && err.response?.status === 408) {
         const info = err.response.data as { timeout_s?: number } | undefined;
         setError(
@@ -212,11 +183,11 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
     }
   }, [fileId]);
 
-  // Re-discover when filter is toggled or version changes.
+  // Re-discover when filter is toggled, version changes, or local filter changes.
   useEffect(() => {
     if (!fileId || !autoStart) return;
     discover();
-  }, [filterEnabled, effectiveFilterVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [filterEnabled, effectiveFilterVersion, localFilterParams]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-start discovery (once per file).
   useEffect(() => {
@@ -227,15 +198,29 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
   }, [autoStart, fileId, discover]);
 
   const handleTimeoutChange = (raw: string) => {
+    setTimeoutInput(raw);
     const value = Number(raw);
-    const safe = Number.isFinite(value) && value > 0 ? value : DEFAULT_OCPN_TIMEOUT_S;
-    setTimeoutS(safe);
-    onTimeoutSChange?.(safe);
+    if (Number.isFinite(value) && value > 0) {
+      setTimeoutS(value);
+      onTimeoutSChange?.(value);
+    }
+  };
+
+  const handleTimeoutBlur = () => {
+    const value = Number(timeoutInput);
+    if (!Number.isFinite(value) || value <= 0) {
+      setTimeoutInput(String(timeoutS));
+    } else {
+      setTimeoutS(value);
+      onTimeoutSChange?.(value);
+    }
   };
 
   const handleDownload = () => {
     if (!model) return;
-    downloadJson(toFilename(model.name, 'discovered-ocpn'), model);
+    downloadJson(toFilename(model.name, 'discovered-ocpn'), model).catch(() => {
+      toast.error('Could not save the model.');
+    });
   };
 
   const onNodesChange = useCallback(
@@ -256,9 +241,12 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
     }
     if (loading) {
       return (
-        <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
+        <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
           <Loader2 className="h-6 w-6 animate-spin" />
-          Discovering Object-Centric Petri Net…
+          <p>Discovering Object-Centric Petri Net…</p>
+          <Button size="sm" variant="outline" onClick={cancelDiscovery}>
+            Cancel
+          </Button>
         </div>
       );
     }
@@ -325,27 +313,38 @@ const OCPNVisualizer: React.FC<OCPNVisualizerProps> = ({
                 min={1}
                 max={600}
                 step={1}
-                value={timeoutS}
+                value={timeoutInput}
                 onChange={(event) => handleTimeoutChange(event.target.value)}
+                onBlur={handleTimeoutBlur}
                 className="h-8 w-20"
               />
             </div>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={discover}
-              disabled={!fileId || loading}
-            >
-              {model ? (
-                <>
-                  <RefreshCw className="mr-1 h-4 w-4" /> Re-discover
-                </>
-              ) : (
-                <>
-                  <Play className="mr-1 h-4 w-4" /> Discover
-                </>
-              )}
-            </Button>
+            {loading ? (
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={cancelDiscovery}
+              >
+                Cancel
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={discover}
+                disabled={!fileId}
+              >
+                {model ? (
+                  <>
+                    <RefreshCw className="mr-1 h-4 w-4" /> Re-discover
+                  </>
+                ) : (
+                  <>
+                    <Play className="mr-1 h-4 w-4" /> Discover
+                  </>
+                )}
+              </Button>
+            )}
             <Button
               size="sm"
               variant="outline"

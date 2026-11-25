@@ -42,6 +42,11 @@ export const SCATTER_EXPECTED_RESULT: ExpectedResult = {
   ],
 };
 
+// Explains the layout sketches of the chart widgets (edit tile and settings popup).
+export const CHART_SKETCH_HINT =
+  "Layout preview: shows how your settings arrange the chart. Grey bars stand in for " +
+  "labels and values; the real data is shown when you leave edit mode.";
+
 export const PIE_CHART_EXPECTED_RESULT: ExpectedResult = {
   description: "One row per slice: a label column (text) and a numeric value column.",
   columns: ["label", "value"],

@@ -1,6 +1,4 @@
-import { LoaderCircle, RefreshCcw } from "lucide-react";
-
-import { Button } from "@/components/ui/button";
+import { useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -13,14 +11,13 @@ import {
 import { Switch } from "@/components/ui/switch";
 import type { ProcessAreasSnapshot } from "@/store/processAreaStore";
 
+import { ProcessAreaPicker } from "../process-area/ProcessAreaPicker";
 import { MultiSelectPopover } from "./MultiSelectPopover";
 import {
   applyProcessArea,
   columnNameError,
   isLeadingExtraction,
   isResourceAware,
-  matchingProcessAreaId,
-  processAreaOptionLabel,
 } from "./settings";
 import {
   EXTRACTION_OPTIONS,
@@ -49,8 +46,6 @@ export type VariantsSettingsPanelProps = {
   disabled?: boolean;
 };
 
-const NO_AREA = "__none__";
-
 /**
  * The three decisions behind a variant computation, each in its own box:
  * how executions are cut out of the log, how they are grouped into
@@ -76,7 +71,6 @@ export function VariantsSettingsPanel({
   const extractionOption = EXTRACTION_OPTIONS.find((o) => o.value === execution.extraction);
   const isoOption = ISO_OPTIONS.find((o) => o.value === grouping.iso);
   const groupingSkipped = store.enabled && !store.computeVariants;
-  const selectedAreaId = matchingProcessAreaId(execution, processAreas?.areas ?? []);
   const executionColumnError = store.enabled ? columnNameError(store.executionColumn) : null;
   const variantColumnError =
     store.enabled && store.computeVariants && store.storeVariantColumn
@@ -143,59 +137,20 @@ export function VariantsSettingsPanel({
         {isResourceAware(execution.extraction) ? (
           <>
             <Field label="From a process area">
-              {processAreas ? (
-                <>
-                  <Select
-                    value={selectedAreaId ?? NO_AREA}
-                    onValueChange={(value) => {
-                      const area = processAreas.areas.find((a) => a.id === value);
-                      if (area) onExecutionChange(applyProcessArea(execution, area));
-                    }}
-                    disabled={disabled || processAreas.areas.length === 0}
-                  >
-                    <SelectTrigger aria-label="Process area" className="w-full">
-                      <SelectValue placeholder="Pick a process area" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={NO_AREA} disabled>
-                        {selectedAreaId ? "Custom selection" : "Pick a process area"}
-                      </SelectItem>
-                      {processAreas.areas.map((area) => (
-                        <SelectItem key={area.id} value={area.id}>
-                          {processAreaOptionLabel(area)}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Hint>
-                    Selecting an area fills in its object types and activities below
-                    {processAreas.filtered ? " (areas computed on the filtered log)" : ""}.
-                  </Hint>
-                </>
-              ) : (
-                <>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="w-full"
-                    onClick={onComputeProcessAreas}
-                    disabled={disabled || processAreasLoading}
-                  >
-                    {processAreasLoading ? (
-                      <LoaderCircle className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <RefreshCcw className="h-4 w-4" />
-                    )}
-                    Compute process areas
-                  </Button>
-                  <Hint>
-                    {processAreasError
-                      ? processAreasError
-                      : "No process areas computed for this log yet. Open the Process Area component or compute them here with default settings."}
-                  </Hint>
-                </>
-              )}
+              <ProcessAreaPicker
+                current={processAreas}
+                selectedObjectTypes={execution.businessObjectTypes}
+                selectedActivities={execution.businessActivities}
+                onPick={(area) => onExecutionChange(applyProcessArea(execution, area))}
+                onComputeCurrent={onComputeProcessAreas}
+                computeLoading={processAreasLoading}
+                computeError={processAreasError}
+                disabled={disabled}
+              />
+              <Hint>
+                Selecting an area fills in its object types and activities below. Areas of
+                compositions stored in the project assets are listed by name.
+              </Hint>
             </Field>
             <Field label="Business object types">
               <MultiSelectPopover
@@ -268,19 +223,10 @@ export function VariantsSettingsPanel({
           <Hint>{isoOption?.hint}</Hint>
         </Field>
         <Field label="Timeout (seconds)" htmlFor="variants-timeout">
-          <Input
-            id="variants-timeout"
-            type="number"
-            min={1}
-            max={600}
-            step={1}
+          <TimeoutInput
             value={grouping.timeoutS}
-            onChange={(event) => {
-              const n = Number(event.target.value);
-              onGroupingChange({ ...grouping, timeoutS: Number.isFinite(n) && n > 0 ? n : 10 });
-            }}
+            onChange={(timeoutS) => onGroupingChange({ ...grouping, timeoutS })}
             disabled={disabled}
-            className="w-full"
           />
           <Hint>Wall-clock budget per computation; a timed-out run returns an error instead of blocking.</Hint>
         </Field>
@@ -353,7 +299,7 @@ export function VariantsSettingsPanel({
   );
 }
 
-function SettingsSection({
+export function SettingsSection({
   step,
   title,
   description,
@@ -385,7 +331,7 @@ function SettingsSection({
   );
 }
 
-function Field({
+export function Field({
   label,
   htmlFor,
   error,
@@ -407,7 +353,7 @@ function Field({
   );
 }
 
-function Hint({ children }: { children: React.ReactNode }) {
+export function Hint({ children }: { children: React.ReactNode }) {
   if (!children) return null;
   return <p className="text-[11px] leading-snug text-muted-foreground">{children}</p>;
 }
@@ -437,6 +383,51 @@ function SwitchRow({
         {hint ? <Hint>{hint}</Hint> : null}
       </div>
     </div>
+  );
+}
+
+export function TimeoutInput({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: number;
+  onChange: (n: number) => void;
+  disabled?: boolean;
+}) {
+  const [text, setText] = useState(String(value));
+
+  useEffect(() => {
+    setText(String(value));
+  }, [value]);
+
+  return (
+    <Input
+      id="variants-timeout"
+      type="number"
+      min={1}
+      max={600}
+      step={1}
+      value={text}
+      onChange={(event) => {
+        const val = event.target.value;
+        setText(val);
+        const n = Number(val);
+        if (Number.isFinite(n) && n > 0) {
+          onChange(n);
+        }
+      }}
+      onBlur={() => {
+        const n = Number(text);
+        if (!Number.isFinite(n) || n <= 0) {
+          setText(String(value));
+        } else {
+          onChange(n);
+        }
+      }}
+      disabled={disabled}
+      className="w-full"
+    />
   );
 }
 

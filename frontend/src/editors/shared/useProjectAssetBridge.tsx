@@ -70,6 +70,7 @@ const ASSET_LABELS: Record<AssetType, string> = {
   OCDFG: 'OC-DFG',
   // Stored SQL queries share the asset store but have no model editor.
   QUERY: 'SQL query',
+  PROCESS_AREAS: 'Process areas',
 };
 
 const assetLabel = (assetType: AssetType) => ASSET_LABELS[assetType] ?? assetType;

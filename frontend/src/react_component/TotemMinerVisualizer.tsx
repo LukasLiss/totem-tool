@@ -20,7 +20,9 @@ import {
 } from 'react';
 import axios from 'axios';
 import { API_BASE_URL } from '@/config/api';
-import { useFilterVersion } from '@/store/filterStore';
+import { useFilterVersion, getEffectiveFilterConfig } from '@/store/filterStore';
+import { isCancelledError } from '@/store/computationStore';
+import ComputationStatus from '@/components/ComputationStatus';
 import { Button } from '@/components/ui/button';
 import { VisualizerEmptyState } from '@/components/ui/VisualizerEmptyState';
 import {
@@ -31,7 +33,13 @@ import {
   CardAction,
 } from '@/components/ui/card';
 import { RefreshCcw, Plus, Minus, Scan, Lock, Unlock } from 'lucide-react';
+import { ControlPill } from '@/components/canvas/ControlPill';
+import type { PillRegion, PillSpot } from '@/components/canvas/pillSpots';
+import { FIT_GAP, bestFit, pillRect } from '@/components/canvas/canvasFit';
+import { useCanvasGestures } from '@/components/canvas/useCanvasGestures';
+import { useFitAvoidRects } from '@/components/canvas/useFitAvoidRects';
 import { mapTypesToColors, textColorForBackground } from '../utils/objectColors';
+import { computeTotemHubLayout } from '@/components/totem/totemLayout';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -107,17 +115,42 @@ type TotemMinerVisualizerProps = {
   backendBaseUrl?: string;
   reloadSignal?: number;
   relayoutSignal?: number;
-  title?: string;
-  topInset?: number;
+  /** The card's title (with its filters), drawn in the canvas's top-left corner. */
+  title?: React.ReactNode;
+  /** More controls at the end of the control pill (τ, relayout, save). */
+  pillExtras?: React.ReactNode;
   embedded?: boolean;
   onControlsReady?: (controls: TotemMinerVisualizerControls) => void;
   tau?: number;
   filterEnabled?: boolean;
+  localFilterParams?: Record<string, string>;
 };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const DEFAULT_BACKEND = API_BASE_URL;
+/** Where the control pill may go, as on the other graph canvases: the top corners hold the title. */
+const TOTEM_PILL_SPOTS: readonly PillSpot[] = ['bottom-right', 'bottom-left', 'left', 'right'];
+/**
+ * The space the layout runs in (layout units), the same for every tile, so the
+ * arrangement does not depend on the tile's size (as the handover's canvas).
+ */
+const LAYOUT_SPACE = { width: 1000, height: 700 };
+/** Zoom limits of the view. */
+const MIN_ZOOM = 0.15;
+const MAX_ZOOM = 5;
+/** Largest zoom of the fit, so a small model is not blown up (as before). */
+const FIT_MAX_ZOOM = 1.6;
+/**
+ * Room the fit keeps around the node boxes (layout units) where the drawing
+ * cannot be measured (no getBBox, e.g. in tests): above and below for the
+ * curved same-layer arcs (they bow up to ~30 beyond their nodes) with their
+ * cardinality bubble, at the sides for arrowheads and bubbles.
+ */
+const FIT_PAD_X = 16;
+const FIT_PAD_Y = 28;
+/** Around the measured drawing: half the widest stroke, which the measured box leaves out. */
+const FIT_STROKE_PAD = 3;
 
 const RELATION_COLOR: Record<string, string> = {
   D: '#0f172a',
@@ -262,105 +295,6 @@ function extractEdges(
   return edges;
 }
 
-// ─── Radial / Hub-centered layout with crossing minimization ────────────────
-
-/**
- * Positions the highest-degree (hub) node at the center of the canvas and arranges
- * surrounding connected nodes in an ellipse ordered by a DFS traversal to minimize
- * edge crossings.
- */
-function computeHierarchicalLayout(
-  nodeIds: string[],
-  edges: GraphEdge[],
-  width: number,
-  height: number,
-): Map<string, { x: number; y: number }> {
-  if (nodeIds.length === 0) return new Map();
-  if (nodeIds.length === 1) {
-    return new Map([[nodeIds[0], { x: width / 2, y: height / 2 }]]);
-  }
-
-  // Count degree (incoming + outgoing) of each node
-  const degree = new Map<string, number>(nodeIds.map((id) => [id, 0]));
-  for (const e of edges) {
-    if (degree.has(e.from)) degree.set(e.from, (degree.get(e.from) ?? 0) + 1);
-    if (degree.has(e.to)) degree.set(e.to, (degree.get(e.to) ?? 0) + 1);
-  }
-
-  // Find hub node (node with maximum degree)
-  let hubNode = nodeIds[0];
-  let maxDeg = -1;
-  for (const [id, deg] of degree.entries()) {
-    if (deg > maxDeg) {
-      maxDeg = deg;
-      hubNode = id;
-    }
-  }
-
-  const nonHubNodes = nodeIds.filter((id) => id !== hubNode);
-
-  // Build adjacency list for non-hub nodes (subgraph)
-  const nonHubAdj = new Map<string, string[]>(nonHubNodes.map((id) => [id, []]));
-  for (const e of edges) {
-    if (e.from === hubNode || e.to === hubNode) continue;
-    if (nonHubAdj.has(e.from) && nonHubAdj.has(e.to)) {
-      nonHubAdj.get(e.from)!.push(e.to);
-      nonHubAdj.get(e.to)!.push(e.from);
-    }
-  }
-
-  // Sort non-hub nodes alphabetically to ensure stable DFS traversal starting node order
-  const sortedNonHubNodes = [...nonHubNodes].sort();
-
-  // Traverse the non-hub subgraph using DFS to order the nodes circularly to minimize crossings
-  const visited = new Set<string>();
-  const sortedNonHub: string[] = [];
-
-  function dfs(node: string) {
-    visited.add(node);
-    sortedNonHub.push(node);
-    for (const nb of nonHubAdj.get(node) ?? []) {
-      if (!visited.has(nb)) {
-        dfs(nb);
-      }
-    }
-  }
-
-  // Start DFS with endpoints of paths (nodes of degree <= 1 in the non-hub subgraph)
-  for (const node of sortedNonHubNodes) {
-    if (!visited.has(node) && (nonHubAdj.get(node) ?? []).length <= 1) {
-      dfs(node);
-    }
-  }
-  // Fallback for remaining nodes (e.g. cycle components)
-  for (const node of sortedNonHubNodes) {
-    if (!visited.has(node)) {
-      dfs(node);
-    }
-  }
-
-  const cx = width / 2;
-  const cy = height / 2;
-  const rx = Math.max(180, width * 0.32);
-  const ry = Math.max(130, height * 0.3);
-
-  const positions = new Map<string, { x: number; y: number }>();
-  positions.set(hubNode, { x: cx, y: cy });
-
-  // Map sorted non-hub nodes around a circle starting from bottom-left (1.92 rad ~ 110 degrees)
-  const startAngle = 1.92;
-  const angleStep = (2 * Math.PI) / sortedNonHub.length;
-
-  sortedNonHub.forEach((id, idx) => {
-    const angle = startAngle + idx * angleStep;
-    const x = cx + rx * Math.cos(angle);
-    const y = cy + ry * Math.sin(angle);
-    positions.set(id, { x, y });
-  });
-
-  return positions;
-}
-
 // ─── Arc / geometry helpers ──────────────────────────────────────────────────
 
 /** Point where the line from (cx,cy)→(tx,ty) exits a rectangle centred at (cx,cy). */
@@ -438,9 +372,14 @@ function TotemMinerVisualizer({
   onControlsReady,
   tau = 0.8,
   filterEnabled = true,
+  localFilterParams,
+  title,
+  pillExtras,
 }: TotemMinerVisualizerProps) {
   const filterVersion = useFilterVersion();
   const effectiveFilterVersion = filterEnabled ? filterVersion : 0;
+  const localFilterParamsRef = useRef(localFilterParams);
+  localFilterParamsRef.current = localFilterParams;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rawData, setRawData] = useState<TotemApiResponse | null>(null);
@@ -469,6 +408,16 @@ function TotemMinerVisualizer({
   );
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+  /** The drawn model (nodes, arcs, bubbles, labels), measured for the fit. */
+  const contentRef = useRef<SVGGElement>(null);
+  /**
+   * The fit mode (the fit button grey), as on the other graph canvases: the
+   * model is placed clear of the title and the pill and follows when they or
+   * the box change, until the user zooms, pans or drags a node.
+   */
+  const [fitted, setFitted] = useState(true);
+  const [pillRegion, setPillRegion] = useState<PillRegion | null>(null);
   const [svgSize, setSvgSize] = useState({ width: 800, height: 600 });
   const [stableSvgSize, setStableSvgSize] = useState<{ width: number; height: number } | null>(null);
 
@@ -482,25 +431,39 @@ function TotemMinerVisualizer({
   const effectiveReloadSignal = reloadSignal ?? 0;
 
   // ── Fetch ────────────────────────────────────────────────────────────────────
+  const abortRef = useRef<AbortController | null>(null);
   const fetchData = useCallback(async () => {
     if (!eventLogId) { setRawData(null); return; }
+    const filterConfig = getEffectiveFilterConfig(localFilterParamsRef.current, filterEnabled);
+    if (filterConfig._noResults) { setRawData(null); return; }
+    // A superseded request is aborted so the backend stops computing it.
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     setLoading(true);
     setError(null);
     try {
       const { data } = await axios.get<TotemApiResponse>(
         `${backendBaseUrl}/api/files/${eventLogId}/discover_totem/`,
-        { _skipGlobalFilter: !filterEnabled },
+        { params: filterConfig.params, _skipGlobalFilter: filterConfig._skipGlobalFilter, signal: controller.signal },
       );
+      if (abortRef.current !== controller) return;
       setRawData(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load TOTeM data');
+      if (abortRef.current !== controller) return;
+      setError(
+        isCancelledError(err)
+          ? 'Computation cancelled'
+          : err instanceof Error ? err.message : 'Failed to load TOTeM data',
+      );
       setRawData(null);
     } finally {
-      setLoading(false);
+      if (abortRef.current === controller) setLoading(false);
     }
-  }, [backendBaseUrl, eventLogId, filterEnabled, effectiveFilterVersion]);
+  }, [backendBaseUrl, eventLogId, filterEnabled, effectiveFilterVersion, localFilterParams]);
 
   useEffect(() => { fetchData(); }, [fetchData, effectiveReloadSignal]);
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   // ── Container size ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -612,26 +575,35 @@ function TotemMinerVisualizer({
   );
 
   // ── Hierarchical layout & Relayout controls ──────────────────────────────────
+  // The layout runs in a fixed space (LAYOUT_SPACE), not the canvas: its ring
+  // grows with the width it gets, so laying out for the canvas made the nodes
+  // small in a wide tile. In a fixed space the arrangement does not depend on
+  // the tile, and resizing only changes the view (the fit's zoom).
   const handleRelayout = useCallback(() => {
-    if (nodeIds.length === 0 || !stableSvgSize) return;
-    const newLayout = computeHierarchicalLayout(nodeIds, edges, stableSvgSize.width, stableSvgSize.height);
+    if (nodeIds.length === 0) return;
+    const newLayout = computeTotemHubLayout(nodeIds, edges, LAYOUT_SPACE.width, LAYOUT_SPACE.height, nodeWidth);
     setLayoutPositions(newLayout);
     setManualNodePositions(new Map());
-  }, [nodeIds, edges, stableSvgSize, widthMap]);
+    setFitted(true);
+  }, [nodeIds, edges]);
 
+  // Relayout runs when the button is pressed (the signal counts up), not
+  // whenever its inputs change (e.g. τ), which used to lay the model out again.
+  const handledRelayout = useRef(0);
   useEffect(() => {
-    if (relayoutSignal && relayoutSignal > 0) {
-      handleRelayout();
-    }
+    if (!relayoutSignal || relayoutSignal === handledRelayout.current) return;
+    handledRelayout.current = relayoutSignal;
+    handleRelayout();
   }, [relayoutSignal, handleRelayout]);
 
   // Run layout on initial load or if layoutPositions is empty
   useEffect(() => {
-    if (nodeIds.length > 0 && layoutPositions.size === 0 && stableSvgSize) {
-      const initialLayout = computeHierarchicalLayout(nodeIds, edges, stableSvgSize.width, stableSvgSize.height);
+    if (nodeIds.length > 0 && layoutPositions.size === 0) {
+      const initialLayout = computeTotemHubLayout(nodeIds, edges, LAYOUT_SPACE.width, LAYOUT_SPACE.height, nodeWidth);
       setLayoutPositions(initialLayout);
+      setFitted(true);
     }
-  }, [nodeIds, edges, stableSvgSize, widthMap, layoutPositions.size]);
+  }, [nodeIds, edges, layoutPositions.size]);
 
   useEffect(() => {
     setLayoutPositions(new Map());
@@ -663,63 +635,86 @@ function TotemMinerVisualizer({
     });
   }, [nodeIds]);
 
-  // ── Auto-fit on layout change ────────────────────────────────────────────────
-  useEffect(() => {
+  // ── Fit mode ─────────────────────────────────────────────────────────────────
+  // The controls the fit keeps clear of (the title: marked data-fit-avoid), and the pill.
+  const avoidRects = useFitAvoidRects(containerRef, [Boolean(title), nodeIds.length]);
+  const fitAvoid = useMemo(
+    () => [...avoidRects, ...(pillRegion ? [pillRect(pillRegion)] : [])],
+    [avoidRects, pillRegion],
+  );
+  /** The whole model as large as fits clear of the controls (bestFit), centred while it has room. */
+  const placeFitted = useCallback(() => {
     if (layoutNodes.length === 0 || !stableSvgSize) return;
-    if (manualPositionsRef.current.size > 0) return;
-    const xs = layoutNodes.map((n) => n.x);
-    const ys = layoutNodes.map((n) => n.y);
-    const minX = Math.min(...xs) - 80;
-    const maxX = Math.max(...xs) + 80;
-    const minY = Math.min(...ys) - 60;
-    const maxY = Math.max(...ys) + 60;
-    const gW = maxX - minX;
-    const gH = maxY - minY;
-    const newZoom = Math.min(stableSvgSize.width / gW, stableSvgSize.height / gH, 1.6);
-    setZoom(newZoom);
-    setPan({
-      x: (stableSvgSize.width - gW * newZoom) / 2 - minX * newZoom,
-      y: (stableSvgSize.height - gH * newZoom) / 2 - minY * newZoom,
-    });
-  }, [layoutPositions, layoutNodes, stableSvgSize]);
-
-  // ── Zoom / pan handlers ──────────────────────────────────────────────────────
+    // What is drawn, measured (in layout units: the box before the view's
+    // pan and zoom); without a measurement, the node boxes plus the room for
+    // arcs and bubbles.
+    let box: { x: number; y: number; width: number; height: number } | null = null;
+    try {
+      const measured = contentRef.current?.getBBox();
+      if (measured && measured.width > 0 && measured.height > 0) box = measured;
+    } catch {
+      /* not rendered (yet) */
+    }
+    const minX = box ? box.x - FIT_STROKE_PAD : Math.min(...layoutNodes.map((n) => n.x - n.width / 2)) - FIT_PAD_X;
+    const maxX = box ? box.x + box.width + FIT_STROKE_PAD : Math.max(...layoutNodes.map((n) => n.x + n.width / 2)) + FIT_PAD_X;
+    const minY = box ? box.y - FIT_STROKE_PAD : Math.min(...layoutNodes.map((n) => n.y - n.height / 2)) - FIT_PAD_Y;
+    const maxY = box ? box.y + box.height + FIT_STROKE_PAD : Math.max(...layoutNodes.map((n) => n.y + n.height / 2)) + FIT_PAD_Y;
+    const fit = bestFit(
+      { w: stableSvgSize.width, h: stableSvgSize.height },
+      { w: maxX - minX, h: maxY - minY },
+      { top: FIT_GAP, right: FIT_GAP, bottom: FIT_GAP, left: FIT_GAP },
+      fitAvoid,
+      FIT_MAX_ZOOM,
+    );
+    const nz = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, fit.scale));
+    setZoom(nz);
+    setPan({ x: fit.x - minX * nz, y: fit.y - minY * nz });
+  }, [layoutNodes, stableSvgSize, fitAvoid]);
+  // In the fit mode, fit whenever the layout, the box or a control changes.
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
+    if (fitted) placeFitted();
+  }, [fitted, placeFitted]);
 
-    const handleWheelRaw = (e: WheelEvent) => {
-      if (panLocked) return;
-      e.preventDefault();
-      
-      const rect = container.getBoundingClientRect();
-      const cursorX = e.clientX - rect.left;
-      const cursorY = e.clientY - rect.top;
-
+  /**
+   * Trackpad, pinch and touch, as on the other graph canvases (the shared
+   * hook): two fingers move the model, a pinch or the mouse wheel zooms at the
+   * pointer, two fingers on a touch screen do both. Dragging the background
+   * stays as it is. The lock switches all of it off.
+   */
+  useCanvasGestures(svgRef, !panLocked, {
+    onPan: (dx, dy) => {
+      setFitted(false);
+      setPan((p) => ({ x: p.x + dx, y: p.y + dy }));
+    },
+    onZoom: (scale, clientX, clientY) => {
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setFitted(false);
+      const cursorX = clientX - rect.left;
+      const cursorY = clientY - rect.top;
       setZoom((z) => {
-        const newZoom = Math.max(0.15, Math.min(5, z * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
+        const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z * scale));
         setPan((p) => ({
           x: cursorX - (cursorX - p.x) * (newZoom / z),
           y: cursorY - (cursorY - p.y) * (newZoom / z),
         }));
         return newZoom;
       });
-    };
-
-    container.addEventListener('wheel', handleWheelRaw, { passive: false });
-    return () => {
-      container.removeEventListener('wheel', handleWheelRaw);
-    };
-  }, [panLocked]);
+    },
+    onMultiTouchStart: () => {
+      isPanning.current = false;
+    },
+  });
 
   const zoomToCenter = (factor: number) => {
     if (!containerRef.current) return;
+    setFitted(false);
     const rect = containerRef.current.getBoundingClientRect();
     const centerX = rect.width / 2;
     const centerY = rect.height / 2;
 
     setZoom((z) => {
-      const newZoom = Math.max(0.15, Math.min(5, z * factor));
+      const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z * factor));
       setPan((p) => ({
         x: centerX - (centerX - p.x) * (newZoom / z),
         y: centerY - (centerY - p.y) * (newZoom / z),
@@ -730,19 +725,10 @@ function TotemMinerVisualizer({
 
   const handleZoomIn = () => zoomToCenter(1.2);
   const handleZoomOut = () => zoomToCenter(1 / 1.2);
+  /** Back to the fit mode. */
   const handleFit = () => {
-    if (layoutNodes.length === 0 || !stableSvgSize) return;
-    const xs = layoutNodes.map((n) => n.x);
-    const ys = layoutNodes.map((n) => n.y);
-    const minX = Math.min(...xs) - 80, maxX = Math.max(...xs) + 80;
-    const minY = Math.min(...ys) - 60, maxY = Math.max(...ys) + 60;
-    const gW = maxX - minX, gH = maxY - minY;
-    const nz = Math.min(stableSvgSize.width / gW, stableSvgSize.height / gH, 1.6);
-    setZoom(nz);
-    setPan({
-      x: (stableSvgSize.width - gW * nz) / 2 - minX * nz,
-      y: (stableSvgSize.height - gH * nz) / 2 - minY * nz,
-    });
+    setFitted(true);
+    placeFitted();
   };
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -753,6 +739,7 @@ function TotemMinerVisualizer({
   }, [pan, panLocked]);
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (!isPanning.current) return;
+    setFitted(false);
     setPan({ x: panOrigin.current.x + e.clientX - panStart.current.x, y: panOrigin.current.y + e.clientY - panStart.current.y });
   }, []);
   const handleMouseUp = useCallback(() => { isPanning.current = false; }, []);
@@ -764,6 +751,8 @@ function TotemMinerVisualizer({
 
     e.preventDefault();
     e.stopPropagation();
+    // Moving a node makes the arrangement the user's: the fit mode ends.
+    setFitted(false);
     draggedNode.current = {
       id: nodeId,
       origin: { x: node.x, y: node.y },
@@ -1143,6 +1132,8 @@ function TotemMinerVisualizer({
   const core = (
     <div
       ref={containerRef}
+      // The box in which the fit looks for the controls (data-fit-avoid).
+      data-canvas-shell
       style={{
         position: 'relative',
         width: '100%',
@@ -1174,15 +1165,22 @@ function TotemMinerVisualizer({
       {/* Loading */}
       {(loading || !stableSvgSize) && (
         <div style={{ position: 'absolute', inset: 0, zIndex: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.65)', backdropFilter: 'blur(4px)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, borderRadius: 8, border: '1px solid #e2e8f0', background: 'white', padding: '10px 20px', boxShadow: '0 2px 12px rgba(0,0,0,0.08)' }}>
-            <div style={{ width: 16, height: 16, borderRadius: '50%', border: '2.5px solid #2563eb', borderTopColor: 'transparent', animation: 'totem-spin 0.8s linear infinite' }} />
-            <span style={{ fontSize: 13, fontWeight: 500, color: '#475569' }}>Discovering TOTeM model…</span>
-          </div>
+          <ComputationStatus
+            fileId={eventLogId}
+            urlIncludes="/discover_totem/"
+            fallback={(
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, borderRadius: 8, border: '1px solid #e2e8f0', background: 'white', padding: '10px 20px', boxShadow: '0 2px 12px rgba(0,0,0,0.08)' }}>
+                <div style={{ width: 16, height: 16, borderRadius: '50%', border: '2.5px solid #2563eb', borderTopColor: 'transparent', animation: 'totem-spin 0.8s linear infinite' }} />
+                <span style={{ fontSize: 13, fontWeight: 500, color: '#475569' }}>Discovering TOTeM model…</span>
+              </div>
+            )}
+          />
         </div>
       )}
 
       {/* SVG graph */}
       <svg
+        ref={svgRef}
         width={svgSize.width}
         height={svgSize.height}
         style={{ display: 'block', userSelect: 'none' }}
@@ -1190,41 +1188,42 @@ function TotemMinerVisualizer({
         <defs>
           <style>{`@keyframes totem-spin { to { transform: rotate(360deg); } }`}</style>
         </defs>
-        <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
+        <g ref={contentRef} transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
           {renderedEdges}
           {renderedNodes}
         </g>
       </svg>
 
-      {/* Zoom controls — bottom left */}
-      <div style={{ position: 'absolute', bottom: 14, left: 14, zIndex: 20, display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          onClick={handleZoomIn}
-          className="rounded-full h-9 w-9 bg-white/95 shadow-sm border-slate-200 text-slate-600 hover:text-slate-900"
-          title="Zoom in"
+      {/* The card's title (with its filters), top left as on the other canvases. */}
+      {title && (
+        <div
+          data-fit-avoid="header"
+          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          style={{ position: 'absolute', top: 16, left: 16, zIndex: 15, maxWidth: 'calc(100% - 32px)', cursor: 'default' }}
         >
+          {title}
+        </div>
+      )}
+
+      {/* The shared control pill, movable: zoom, fit and lock first, then the card's own controls. */}
+      <ControlPill spots={TOTEM_PILL_SPOTS} storageKey={embedded ? 'totemminer:embedded' : 'totemminer'} onRegionChange={setPillRegion}>
+        <Button type="button" variant="outline" size="icon" onClick={handleZoomIn} className="rounded-full h-9 w-9" title="Zoom in">
           <Plus className="h-4 w-4" />
         </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          onClick={handleZoomOut}
-          className="rounded-full h-9 w-9 bg-white/95 shadow-sm border-slate-200 text-slate-600 hover:text-slate-900"
-          title="Zoom out"
-        >
+        <Button type="button" variant="outline" size="icon" onClick={handleZoomOut} className="rounded-full h-9 w-9" title="Zoom out">
           <Minus className="h-4 w-4" />
         </Button>
         <Button
           type="button"
-          variant="outline"
+          // Grey while the view follows the fit; zooming, panning or dragging a node ends it.
+          variant={fitted ? 'secondary' : 'outline'}
           size="icon"
           onClick={handleFit}
-          className="rounded-full h-9 w-9 bg-white/95 shadow-sm border-slate-200 text-slate-600 hover:text-slate-900"
-          title="Fit"
+          className="rounded-full h-9 w-9"
+          title={fitted ? 'Fitted to view: follows the panels until you zoom or pan' : 'Fit to view'}
+          aria-label="Fit to view"
+          aria-pressed={fitted}
         >
           <Scan className="h-4 w-4" />
         </Button>
@@ -1233,12 +1232,13 @@ function TotemMinerVisualizer({
           variant={panLocked ? 'secondary' : 'outline'}
           size="icon"
           onClick={() => setPanLocked((v) => !v)}
-          className="rounded-full h-9 w-9 bg-white/95 shadow-sm border-slate-200 text-slate-600 hover:text-slate-900"
-          title={panLocked ? 'Unlock pan' : 'Lock pan'}
+          className="rounded-full h-9 w-9"
+          title={panLocked ? 'Unlock interactions' : 'Lock interactions'}
         >
-          {panLocked ? <Lock className="h-4 w-4" /> : <Unlock className="h-4 w-4" />}
+          {panLocked ? <Unlock className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
         </Button>
-      </div>
+        {pillExtras}
+      </ControlPill>
 
       {/* Legend — bottom right */}
     </div>

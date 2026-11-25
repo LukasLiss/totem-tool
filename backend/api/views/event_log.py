@@ -4,9 +4,11 @@ The heaviest module in the package: every discovery/conformance algorithm the
 frontend can trigger against a stored event log is an ``@action`` here.
 """
 
-import copy
 import json
 import os
+import shutil
+import tempfile
+import zipfile
 from contextlib import contextmanager
 
 import duckdb
@@ -17,11 +19,16 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.utils.text import slugify
+from django.conf import settings
 from django.core.cache import cache
+from django.core.files import File as DjangoFile
+from django.db import transaction
+from django.http import FileResponse
 
 from totem_lib.dfg import NewOCDFGDb
 from totem_lib import (
     discover_occn,
+    extract_occn_input,
     extract_occn_replay_units,
     occn_from_dict,
     occn_replay_fitness,
@@ -36,9 +43,13 @@ from totem_lib.totem import (
 )
 from totem_lib.process_areas import prepare_db, process_areas_from_aggregates
 from totem_lib.ocel import FilterStack, apply_filter_stack, import_ocel_db
-from totem_lib.ocel.pm4py_adapter import convert_ocel_duckdb_to_pm4py
 from totem_lib.ocel.event_columns import list_event_columns
-from totem_lib.ocpn import discover_ocpn_db
+from totem_lib.ocpn import (
+    DuplicateTransitionLabelError,
+    InvalidOCPNError,
+    discover_ocpn_db,
+    flattened_token_based_replay_db,
+)
 from totem_lib.ocel.validation import OCELValidationException
 from totem_lib.oc_dotted_chart import (
     get_oc_dotted_chart_columns,
@@ -52,18 +63,42 @@ from ..serializers import (
     OCCNReplayUnitDetailRequestSerializer,
     ProjectAssetSerializer,
     TotemConformanceRequestSerializer,
+    OCPNFlattenedReplayRequestSerializer,
 )
 from ..cache_utils import get_cached_result, set_cached_result
+from ..jobs import JobCancelled, cancelled_response, job_scope
+from ..limits import ProjectLimitReached, check_project_limit, create_project
+from ..project_bundle import (
+    ProjectBundleError,
+    build_project_bundle,
+    clean_view_settings,
+    bundle_filename,
+    check_archive_safety,
+    read_bundle,
+    restore_dashboards,
+    restore_images,
+    restore_model_assets,
+    totem_version,
+    unique_display_name,
+    unique_project_name,
+)
 from ..query_refs import QueryReferenceError, resolve_query_references
+# Streams a scratch file and deletes it once the response has gone out.
+from ..views_ocel_editor import _DeleteOnCloseFile
+from totem_lib.progress import Progress
 from ._ocel_db import (
+    LARGE_LOG_EVENT_LIMIT,
     _OCEL_DB_REGISTRY,
     _OCEL_DB_REGISTRY_LOCK,
     _OCEL_OBJECT_TYPES_REGISTRY,
+    _OCEL_TIME_WINDOW_REGISTRY,
     _activities_with_counts,
     _build_ocel_db_from_path,
     _close_ocel_db,
     _filter_shadow,
     _get_ocel_object_types,
+    _get_ocel_time_window,
+    _log_time_window,
     _object_types,
     _object_types_with_counts,
     _with_ocel_db,
@@ -81,9 +116,12 @@ from ._process_view import (
     _parse_process_area_params,
     _process_area_cache_params,
     _serialize_mlpa,
+    _serialize_relation_stats,
     _serialize_process_layers,
 )
+from .dashboards import DashboardViewSet
 from .occn import _get_or_discover_base_occn
+from .oc_alignment import OCAlignmentActionsMixin
 # Bounds for the client-supplied discovery watchdog (seconds).
 MIN_TIMEOUT_S = 1.0
 MAX_TIMEOUT_S = 300.0
@@ -92,6 +130,9 @@ MAX_TIMEOUT_S = 300.0
 
 # Upper bound on rows returned by the ad-hoc SQL endpoint.
 EXECUTE_QUERY_MAX_ROWS = 10_000
+
+# `LARGE_LOG_EVENT_LIMIT` (imported from `_ocel_db`): logs with more events
+# get a global time-range filter proposed (see `suggested_time_window`).
 
 # Tables the SQL editor's schema browser lists. Mirrors
 # totem_lib/src/totem_lib/ocel/ocel_duckdb.py:create_ocel_schema. Attribute
@@ -118,7 +159,7 @@ QUERY_BROWSER_COLUMN_NOTES = {
 
 
 @contextmanager
-def _sandboxed_query_connection(log_path: str):
+def _sandboxed_query_connection(log_path: str, filter_params: dict | None = None):
     """Yield a DuckDB connection that can only read the given log.
 
     A fresh in-memory instance attaches the log file READ_ONLY (multiple
@@ -127,16 +168,59 @@ def _sandboxed_query_connection(log_path: str):
     That setting is one-way for the lifetime of the instance, which is why
     this is not done on the long-lived registry connection (it relies on
     DataFrame replacement scans, which the setting also disables).
+
+    With ``filter_params`` (as parsed by ``_parse_filter_params``) a temporary
+    ``events`` view holding only the matching events shadows the log's table,
+    so user SQL sees the filtered log without knowing about the filter.
     """
     conn = duckdb.connect(":memory:")
     try:
         escaped = log_path.replace("'", "''")
         conn.execute(f"ATTACH '{escaped}' AS log (READ_ONLY)")
         conn.execute("USE log")
+        view_sql = _filtered_events_view_sql(filter_params or {})
+        if view_sql:
+            conn.execute(view_sql)
         conn.execute("SET enable_external_access = false")
         yield conn
     finally:
         conn.close()
+
+
+def _sql_string_list(values) -> str:
+    return ", ".join("'" + str(v).replace("'", "''") + "'" for v in values)
+
+
+def _filtered_events_view_sql(fp: dict) -> str | None:
+    """``CREATE TEMP VIEW events`` statement restricted to the filter, or None.
+
+    DuckDB resolves unqualified names (and ``main.<name>``) in the temp
+    catalog before the attached log, so the view shadows ``log.main.events``
+    for every query on the connection: plain SELECTs, ``WITH RECURSIVE``,
+    stored-query CTEs and the user's own CTEs alike. Views cannot take bound
+    parameters, so values are inlined as escaped string literals or ints.
+    """
+    conditions = []
+    if fp.get("activities"):
+        conditions.append(f"activity IN ({_sql_string_list(fp['activities'])})")
+    if "after" in fp:
+        conditions.append(f"timestamp_unix >= {int(fp['after'])}")
+    if "before" in fp:
+        conditions.append(f"timestamp_unix <= {int(fp['before'])}")
+    if fp.get("object_types"):
+        conditions.append(
+            "event_id IN ("
+            "SELECT eo.event_id FROM log.main.event_object eo "
+            "JOIN log.main.objects o ON eo.obj_id = o.obj_id "
+            f"WHERE o.obj_type IN ({_sql_string_list(fp['object_types'])})"
+            ")"
+        )
+    if not conditions:
+        return None
+    return (
+        "CREATE TEMP VIEW events AS SELECT * FROM log.main.events "
+        f"WHERE {' AND '.join(conditions)}"
+    )
 
 
 # Upper bound on sampled points for the dotted chart endpoint.
@@ -183,7 +267,79 @@ def _project_file_paths(project):
     return paths
 
 
-class EventLogViewSet(viewsets.ModelViewSet):
+def _claim_storage_name(storage, name, max_length=None):
+    """Reserve a free name in ``storage`` by creating an empty file under it.
+
+    ``get_available_name`` only says a name was free when it looked, so two
+    uploads converting at once could be handed the same one. Creating the
+    file with O_EXCL settles who owns it, and the loser asks again — the same
+    dance ``FileSystemStorage._save`` does for the upload itself.
+    """
+    while True:
+        candidate = storage.get_available_name(name, max_length=max_length)
+        path = storage.path(candidate)
+        try:
+            os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL))
+        except FileExistsError:
+            continue
+        return candidate, path
+
+
+def _convert_upload_to_duckdb(upload, progress=None):
+    """Convert an uploaded OCEL file to DuckDB beside it; return the new name.
+
+    ``progress`` is handed to ``import_ocel_db`` (a ``callback(fraction,
+    message)``), so the client can follow — and cancel — the conversion.
+
+    The target must not simply be the upload's name with a `.duckdb`
+    extension: Django de-duplicated the upload's name only against files
+    that exist, and the `.duckdb` an earlier upload of the same file was
+    converted to usually does. Converting into that failed, and the cleanup
+    then deleted the other project's log. So the conversion runs in a private
+    scratch directory and is moved into storage under a name claimed for it.
+    """
+    work_dir = tempfile.mkdtemp(prefix=".convert-", dir=os.path.dirname(upload.path))
+    try:
+        work_path = os.path.join(work_dir, "log.duckdb")
+        import_ocel_db(
+            upload.path, db_path=work_path, strict_mode=False, progress=progress
+        ).close()
+        root, _ = os.path.splitext(upload.name)
+        name, path = _claim_storage_name(
+            upload.storage, root + ".duckdb", max_length=upload.field.max_length
+        )
+        try:
+            os.replace(work_path, path)
+        except OSError:
+            _remove_file(path)
+            raise
+        return name
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def _discard_upload(event_log):
+    """Undo an upload that failed after its row was saved.
+
+    Deletes the row, its project and the file it points at. A row that is
+    already gone (``delete()`` clears ``pk``) was cleaned up where it failed;
+    its file name may since have been given to a newer upload, so it is left
+    alone.
+    """
+    if event_log is None or event_log.pk is None:
+        return
+    file_path = event_log.file.path if event_log.file else None
+    project = event_log.project
+    _close_ocel_db(int(event_log.pk))
+    for record in (event_log, project):
+        try:
+            record.delete()
+        except Exception:
+            pass
+    _remove_file(file_path)
+
+
+class EventLogViewSet(OCAlignmentActionsMixin, viewsets.ModelViewSet):
     serializer_class = EventLogSerializer
     permission_classes = [IsAuthenticated]
     # PATCH is allowed only so the `rename` action below can be reached;
@@ -271,131 +427,250 @@ class EventLogViewSet(viewsets.ModelViewSet):
         file_name = serializer.validated_data["file"].name
         project_name = _project_name_for_upload(file_name, user.username if user else "anonymous")
 
-        project = Project.objects.create(name=project_name)
-        if user:
-            project.users.add(user)
-            project.save()
+        project = create_project(project_name, user)
         event_log = serializer.save(project=project)
-        
-        # Check if the file needs DuckDB conversion
-        file_path = event_log.file.path
-        if not file_path.lower().endswith('.duckdb'):
-            # Generate the new .duckdb path
-            base_name, _ = os.path.splitext(file_path)
-            new_path = base_name + ".duckdb"
-            
-            db = None
-            try:
-                try:
-                    # Import and convert the file into the new DuckDB database with strict validation
-                    db = import_ocel_db(file_path, db_path=new_path, strict_mode=True)
-                finally:
-                    if db is not None:
-                        try:
-                            db.close()
-                        except Exception:
-                            pass
-                
-                # Remove the original uploaded file from disk
-                try:
-                    os.remove(file_path)
-                except OSError:
-                    pass
-                
-                # Update the event_log to point to the new file
-                original_name, _ = os.path.splitext(event_log.file.name)
-                event_log.file.name = original_name + ".duckdb"
-                event_log.save(update_fields=['file'])
-            except Exception as e:
-                # Clean up half-written .duckdb file if it exists
-                if os.path.exists(new_path):
-                    try:
-                        os.remove(new_path)
-                    except OSError:
-                        pass
-                
-                # Clean up original uploaded file if it still exists
-                try:
-                    if event_log.file and os.path.exists(event_log.file.path):
-                        os.remove(event_log.file.path)
-                except OSError:
-                    pass
 
-                # Delete event_log and project records
-                try:
-                    event_log.delete()
-                except Exception:
-                    pass
-                try:
-                    project.delete()
-                except Exception:
-                    pass
-
-                if isinstance(e, OCELValidationException):
-                    raise
-                raise serializers.ValidationError(
-                    {"error": f"Failed to convert file to DuckDB format: {str(e)}"}
-                )
+        # Anything that is not DuckDB already is converted, with graceful
+        # sanitization of dangling relations, and replaces the upload.
+        upload_path = event_log.file.path
+        if upload_path.lower().endswith(".duckdb"):
+            return
+        try:
+            converted_name = _convert_upload_to_duckdb(
+                event_log.file, progress=getattr(self, "_import_progress", None)
+            )
+        except JobCancelled:
+            _discard_upload(event_log)
+            raise
+        except Exception as e:
+            _discard_upload(event_log)
+            if isinstance(e, OCELValidationException):
+                raise
+            raise serializers.ValidationError(
+                {"error": f"Failed to convert file to DuckDB format: {str(e)}"}
+            )
+        _remove_file(upload_path)
+        event_log.file.name = converted_name
+        event_log.save(update_fields=["file"])
 
     def create(self, request, *args, **kwargs):
+        # Before request.data, so a user at the limit does not upload for nothing.
+        check_project_limit(request.user)
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
         try:
-            self.perform_create(serializer)
-            user_file = serializer.instance
-            
-            db = _build_ocel_db_from_path(user_file.file.path, strict_mode=True)
-            with _OCEL_DB_REGISTRY_LOCK:
-                pk = int(user_file.pk)
-                _OCEL_DB_REGISTRY[pk] = db
-                _OCEL_OBJECT_TYPES_REGISTRY[pk] = tuple(
-                    (row["name"], row["count"])
-                    for row in _object_types_with_counts(db)
-                )
+            with job_scope(request, "Importing event log") as job:
+                job.report(0.0, "Converting to DuckDB")
+                self._import_progress = job.report
+                try:
+                    self.perform_create(serializer)
+                finally:
+                    self._import_progress = None
+                user_file = serializer.instance
+
+                job.report(None, "Opening database")
+                db = _build_ocel_db_from_path(user_file.file.path, strict_mode=False)
+                with _OCEL_DB_REGISTRY_LOCK:
+                    pk = int(user_file.pk)
+                    _OCEL_DB_REGISTRY[pk] = db
+                    _OCEL_OBJECT_TYPES_REGISTRY[pk] = tuple(
+                        (row["name"], row["count"])
+                        for row in _object_types_with_counts(db)
+                    )
+                    _OCEL_TIME_WINDOW_REGISTRY[pk] = _log_time_window(db, LARGE_LOG_EVENT_LIMIT)
+        except JobCancelled:
+            _discard_upload(serializer.instance)
+            return cancelled_response()
+        except ProjectLimitReached:
+            raise
         except serializers.ValidationError as e:
             return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
         except OCELValidationException as e:
-            if hasattr(serializer, 'instance') and serializer.instance:
-                user_file = serializer.instance
-                if hasattr(user_file, 'file') and user_file.file and os.path.exists(user_file.file.path):
-                    try:
-                        os.remove(user_file.file.path)
-                    except OSError:
-                        pass
-                if hasattr(user_file, 'project') and user_file.project:
-                    try:
-                        user_file.project.delete()
-                    except Exception:
-                        pass
-                if user_file.pk:
-                    try:
-                        user_file.delete()
-                    except Exception:
-                        pass
+            _discard_upload(serializer.instance)
             return Response({"errors": e.errors}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
-            if hasattr(serializer, 'instance') and serializer.instance:
-                user_file = serializer.instance
-                if hasattr(user_file, 'file') and user_file.file and os.path.exists(user_file.file.path):
-                    try:
-                        os.remove(user_file.file.path)
-                    except OSError:
-                        pass
-                if hasattr(user_file, 'project') and user_file.project:
-                    try:
-                        user_file.project.delete()
-                    except Exception:
-                        pass
-                if user_file.pk:
-                    try:
-                        user_file.delete()
-                    except Exception:
-                        pass
+            _discard_upload(serializer.instance)
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    @action(detail=True, methods=["get"], url_path="export-project")
+    def export_project(self, request, pk=None):
+        """Download this log's whole project as one `.totem` file.
+
+        Reached through the event log because that is how the frontend
+        addresses a project everywhere else. Authorization comes from
+        `get_object()` against the membership-scoped queryset, so somebody
+        else's project is a 404.
+        """
+        project = self.get_object().project
+
+        # Built into a scratch file and streamed: the event log alone can be
+        # hundreds of megabytes, and `FileResponse` removes the file once the
+        # response has gone out (`_DeleteOnCloseFile`, views_ocel_editor.py).
+        handle, path = tempfile.mkstemp(prefix="totem-export-", suffix=".totem")
+        os.close(handle)
+        try:
+            with job_scope(request, "Exporting project") as job:
+                build_project_bundle(
+                    project,
+                    path,
+                    totem_version=totem_version(),
+                    progress=job.report,
+                )
+        except JobCancelled:
+            _remove_file(path)
+            return cancelled_response()
+        except Exception:
+            _remove_file(path)
+            raise
+
+        response = FileResponse(
+            _DeleteOnCloseFile(path),
+            as_attachment=True,
+            filename=bundle_filename(project),
+            content_type="application/zip",
+        )
+        return response
+
+    @action(detail=False, methods=["post"], url_path="import-project")
+    def import_project(self, request):
+        """Create a whole project from a `.totem` file.
+
+        Always creates; never merges into an existing project. Everything the
+        dashboards reference travels in the same file, so unlike a dashboard
+        import this one normally has nothing to report.
+        """
+        # Before the body is read, so a user at their limit does not upload a
+        # large file for nothing. `MaxSizeUploadHandler` caps the body itself.
+        check_project_limit(request.user)
+
+        upload = request.FILES.get("file")
+        if upload is None:
+            return Response(
+                {"error": "No file was uploaded."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        work_dir = tempfile.mkdtemp(prefix="totem-import-")
+        try:
+            with job_scope(request, "Importing project") as job:
+                return self._import_project_bundle(request, upload, work_dir, job)
+        except ProjectBundleError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except zipfile.BadZipFile:
+            return Response(
+                {"error": "That file is not a TOTeM project (it is not a valid archive)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except JobCancelled:
+            return cancelled_response()
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+    def _import_project_bundle(self, request, upload, work_dir, job):
+        """The body of `import_project`, so its error handling stays readable."""
+        user = request.user
+
+        with zipfile.ZipFile(upload) as zf:
+            job.report(0.05, "Reading the file")
+            # Everything is validated before a row or a file is written, so a
+            # rejected bundle leaves nothing behind to clean up.
+            bundle = read_bundle(zf)
+
+            job.report(0.2, "Creating the project")
+            display_name = (bundle["project"].get("display_name") or "").strip()
+            desired = display_name or os.path.splitext(upload.name or "project")[0]
+
+            warnings = []
+            with transaction.atomic():
+                project = create_project(unique_project_name(desired), user)
+                if display_name:
+                    # Suffixed when the user already has a project by that
+                    # name, so the switcher does not show two identical rows.
+                    project.display_name = unique_display_name(user, display_name)
+                # Not stored verbatim: the blob carries the project's global
+                # filter, which decides which events every view shows.
+                view_settings, settings_warnings = clean_view_settings(
+                    bundle["project"].get("view_settings")
+                )
+                warnings.extend(settings_warnings)
+                project.view_settings = view_settings
+                project.save(update_fields=["display_name", "view_settings"])
+
+                event_log = None
+                if bundle["event_log"]:
+                    job.report(0.35, "Restoring the event log")
+                    event_log = self._restore_event_log(
+                        project, zf, bundle["event_log"], work_dir
+                    )
+                event_log_id = event_log.pk if event_log else None
+
+                job.report(0.6, "Restoring saved models and images")
+                _, skipped_models = restore_model_assets(project, bundle["models"], user)
+                _, skipped_images = restore_images(project, bundle["images"], zf, user)
+                for skipped in skipped_models + skipped_images:
+                    warnings.append(
+                        {
+                            "code": "asset_skipped",
+                            "component_name": None,
+                            "detail": f"Could not import {skipped}.",
+                        }
+                    )
+
+                job.report(0.8, "Restoring dashboards")
+                warnings.extend(
+                    restore_dashboards(
+                        project,
+                        bundle["dashboards"],
+                        zf,
+                        user=user,
+                        event_log_id=event_log_id,
+                        replace_components=lambda dashboard, layout: (
+                            DashboardViewSet._replace_components(
+                                dashboard, layout, request
+                            )
+                        ),
+                    )
+                )
+
+        job.report(1.0, "Done")
+        return Response(
+            {
+                "project": {
+                    "id": project.pk,
+                    "name": project.name,
+                    "display_name": project.display_name,
+                },
+                "event_log": event_log_id,
+                # Serialized exactly as the upload and the project list return
+                # it, so the client can select the restored project directly.
+                "file": (
+                    self.get_serializer(event_log).data if event_log else None
+                ),
+                "warnings": warnings,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    def _restore_event_log(self, project, zf, member, work_dir):
+        """Write the bundled log into storage and register it.
+
+        Streamed through a scratch file rather than read whole: a log can be
+        far larger than it is sensible to hold in memory.
+        """
+        scratch = os.path.join(work_dir, "log.duckdb")
+        with zf.open(member) as source, open(scratch, "wb") as target:
+            shutil.copyfileobj(source, target, 1024 * 1024)
+
+        event_log = EventLog(project=project)
+        with open(scratch, "rb") as handle:
+            event_log.file.save(
+                f"{project.name}.duckdb", DjangoFile(handle), save=True
+            )
+        return event_log
 
     @action(detail=True, methods=["get"])
     def NoE(self, request, pk=None):
@@ -420,8 +695,11 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 return Response(cached, status=status.HTTP_200_OK)
 
         try:
-            with _with_ocel_db(user_file) as db:
+            with job_scope(request, "Event count") as job, _with_ocel_db(user_file, job) as db:
+                job.report(None, "Counting events")
                 processed, _ = _filtered_event_counts(fp, db)
+        except JobCancelled:
+            return cancelled_response()
         except Exception as e:
             return Response(
                 {"error": f"Failed to process file: {e}"},
@@ -475,28 +753,71 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["get"])
     def event_distribution(self, request, pk=None):
-        """Returns monthly event counts for the time range histogram."""
+        """Returns event counts bucketed at an auto-selected granularity.
+
+        The granularity is chosen from the log's actual time span so the
+        histogram always has a useful number of bars:
+          < 3 days   → hourly   (period: "YYYY-MM-DDTHH",  ≤ 72 bars)
+          < 90 days  → daily    (period: "YYYY-MM-DD",     ≤ 90 bars)
+          < 5 years  → monthly  (period: "YYYY-MM",        ≤ 60 bars)
+          ≥ 5 years  → yearly   (period: "YYYY",           one bar per year)
+
+        Response: {"distribution": [...], "granularity": "<level>"}
+        """
         try:
             user_file = self.get_queryset().get(pk=pk)
         except EventLog.DoesNotExist:
             return Response({"error": "File not found"}, status=status.HTTP_404_NOT_FOUND)
 
         try:
-            with _with_ocel_db(user_file) as db:
-                rows = db.conn.execute("""
-                    SELECT
-                        CAST(EXTRACT(year  FROM to_timestamp(timestamp_unix)) AS INTEGER) AS yr,
-                        CAST(EXTRACT(month FROM to_timestamp(timestamp_unix)) AS INTEGER) AS mo,
-                        COUNT(*) AS count
+            with job_scope(request, "Event distribution") as job, _with_ocel_db(user_file, job) as db:
+                job.report(None, "Bucketing events")
+                span = db.conn.execute(
+                    "SELECT MIN(timestamp_unix), MAX(timestamp_unix) FROM events"
+                ).fetchone()
+
+                if span is None or span[0] is None:
+                    return Response(
+                        {"distribution": [], "granularity": "month"},
+                        status=status.HTTP_200_OK,
+                    )
+
+                ts_min, ts_max = span
+                span_s = max(ts_max - ts_min, 1)
+
+                if span_s < 3 * 86_400:
+                    granularity = "hour"
+                    fmt = "%Y-%m-%dT%H"
+                elif span_s < 90 * 86_400:
+                    granularity = "day"
+                    fmt = "%Y-%m-%d"
+                elif span_s < 5 * 365 * 86_400:
+                    granularity = "month"
+                    fmt = "%Y-%m"
+                else:
+                    granularity = "year"
+                    fmt = "%Y"
+
+                rows = db.conn.execute(
+                    f"""
+                    SELECT strftime(to_timestamp(timestamp_unix), '{fmt}') AS period,
+                           COUNT(*) AS count
                     FROM events
-                    GROUP BY yr, mo
-                    ORDER BY yr, mo
-                """).fetchall()
-            distribution = [{"period": f"{r[0]:04d}-{r[1]:02d}", "count": r[2]} for r in rows]
+                    GROUP BY period
+                    ORDER BY period
+                    """
+                ).fetchall()
+
+            distribution = [{"period": r[0], "count": r[1]} for r in rows]
+        except JobCancelled:
+            return cancelled_response()
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        return Response(distribution, status=status.HTTP_200_OK)
+        return Response(
+            {"distribution": distribution, "granularity": granularity},
+            status=status.HTTP_200_OK,
+        )
 
     @action(detail=True, methods=["post"])
     def apply_filters(self, request, pk=None):
@@ -514,8 +835,11 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response({"error": f"Invalid filters: {e}"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            with _with_ocel_db(user_file) as db:
+            with job_scope(request, "Applying filter") as job, _with_ocel_db(user_file, job) as db:
+                job.report(None, "Counting filtered events and objects")
                 _, stats = apply_filter_stack(db, filter_stack, stats_only=True)
+        except JobCancelled:
+            return cancelled_response()
         except Exception as e:
             return Response({"error": f"Failed to apply filters: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -547,10 +871,11 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 if cached is not None:
                     return Response(cached, status=status.HTTP_200_OK)
 
-            with _with_ocel_db(user_file) as db:
+            with job_scope(request, "TOTeM discovery") as job, _with_ocel_db(user_file, job) as db:
+                job.report(None, "Applying filters")
                 with _filter_shadow(db, fp):
                     # Run with tau=0.0 so the frontend can filter the full relation set.
-                    totem = totemDiscovery_db(db, tau=0.0)
+                    totem = totemDiscovery_db(db, tau=0.0, progress=job.report)
             serialized = totem_to_dict(totem)
             
             # Augment with relations_stats for frontend tau filtering
@@ -588,6 +913,8 @@ class EventLogViewSet(viewsets.ModelViewSet):
 
             set_cached_result(user_file, "discover_totem", serialized, filter_cache_params)
             return Response(serialized, status=status.HTTP_200_OK)
+        except JobCancelled:
+            return cancelled_response()
         except Exception as e:
             return Response(
                 {"error": f"An error occurred during Totem discovery: {e}"},
@@ -647,9 +974,12 @@ class EventLogViewSet(viewsets.ModelViewSet):
             # Conformance runs against the same view of the log the rest of
             # the tool shows: honor an active global filter.
             fp = _parse_filter_params(request)
-            with _with_ocel_db(user_file) as db:
+            with job_scope(request, "TOTeM conformance") as job, _with_ocel_db(user_file, job) as db:
+                job.report(None, "Applying filters")
                 with _filter_shadow(db, fp):
-                    result = conformance_of_totem(totem, db)
+                    result = conformance_of_totem(totem, db, progress=job.report)
+        except JobCancelled:
+            return cancelled_response()
         except Exception as exc:
             return Response(
                 {"error": f"Failed to calculate TOTeM conformance: {exc}"},
@@ -660,6 +990,84 @@ class EventLogViewSet(viewsets.ModelViewSet):
             {
                 "file_id": user_file.pk,
                 "asset_id": asset.pk,
+                **result.to_dict(),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"])
+    def ocpn_flattened_replay(self, request, pk=None):
+        """Flattened token-based replay of one stored OCPN asset on this log.
+
+        Every object type of the net is replayed separately (each object is a
+        case on the projection of the net onto its type); the token counts are
+        returned per object type and per place of the combined net.
+        """
+        request_serializer = OCPNFlattenedReplayRequestSerializer(data=request.data)
+        if not request_serializer.is_valid():
+            return Response(
+                request_serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response(
+                {"error": "File not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        asset_id = request_serializer.validated_data["asset_id"]
+        try:
+            asset = ProjectAsset.objects.get(
+                pk=asset_id,
+                project__users=request.user,
+            )
+        except ProjectAsset.DoesNotExist:
+            return Response(
+                {"asset_id": "Model asset not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        if asset.project_id != user_file.project_id:
+            return Response(
+                {"asset_id": "Model asset must belong to the event log project."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if asset.asset_type != ProjectAsset.AssetType.OCPN:
+            return Response(
+                {"asset_id": "Model asset must have type OCPN."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        model = asset.content_json
+        try:
+            fp = _parse_filter_params(request)
+            with job_scope(request, "OCPN flattened replay") as job, _with_ocel_db(user_file, job) as db:
+                job.report(None, "Applying filters")
+                with _filter_shadow(db, fp):
+                    result = flattened_token_based_replay_db(
+                        model, db, progress=job.report
+                    )
+        except JobCancelled:
+            return cancelled_response()
+        except (DuplicateTransitionLabelError, InvalidOCPNError) as exc:
+            return Response(
+                {"error": str(exc), "asset_id": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except Exception as exc:
+            return Response(
+                {"error": f"Failed to calculate the OCPN flattened replay: {exc}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(
+            {
+                "file_id": user_file.pk,
+                "asset_id": asset.pk,
+                "asset_name": asset.name,
+                "model": model,
                 **result.to_dict(),
             },
             status=status.HTTP_200_OK,
@@ -768,30 +1176,40 @@ class EventLogViewSet(viewsets.ModelViewSet):
         execution_column = validated.get("execution_column")
         max_states = validated["max_states"]
         try:
-            fp = _parse_filter_params(request)
-            with _with_ocel_db(user_file) as db:
-                with _filter_shadow(db, fp):
-                    error = self._replay_unit_request_error(db, validated)
-                    if error is not None:
-                        return error
-                    replay_units = self._extract_replay_units(db, validated, occn)
-        except Exception as exc:
-            return Response(
-                {"error": f"Failed to extract OCCN replay units: {exc}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+            with job_scope(request, "OCCN conformance") as job:
+                try:
+                    fp = _parse_filter_params(request)
+                    with _with_ocel_db(user_file, job) as db:
+                        job.report(None, "Extracting replay units")
+                        with _filter_shadow(db, fp):
+                            error = self._replay_unit_request_error(db, validated)
+                            if error is not None:
+                                return error
+                            replay_units = self._extract_replay_units(db, validated, occn)
+                except JobCancelled:
+                    raise
+                except Exception as exc:
+                    return Response(
+                        {"error": f"Failed to extract OCCN replay units: {exc}"},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
 
-        try:
-            result = occn_replay_fitness(
-                occn,
-                replay_units,
-                max_states=max_states,
-            )
-        except Exception as exc:
-            return Response(
-                {"error": f"Failed to calculate OCCN conformance: {exc}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+                try:
+                    job.report(None, "Replaying executions")
+                    result = occn_replay_fitness(
+                        occn,
+                        replay_units,
+                        max_states=max_states,
+                    )
+                except JobCancelled:
+                    raise
+                except Exception as exc:
+                    return Response(
+                        {"error": f"Failed to calculate OCCN conformance: {exc}"},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
+        except JobCancelled:
+            return cancelled_response()
 
         return Response(
             {
@@ -931,20 +1349,27 @@ class EventLogViewSet(viewsets.ModelViewSet):
             # or stores unfiltered results under that key.
             if not is_filtered and _should_use_cache(request):
                 cached = get_cached_result(user_file, "discover_mlpa")
-                if cached is not None:
+                # Older entries predate the per-arc hover statistics.
+                if cached is not None and "relation_stats" in cached:
                     return Response(cached, status=status.HTTP_200_OK)
 
-            with _with_ocel_db(user_file) as db:
-                with _filter_shadow(db, fp):
-                    totem = totemDiscovery_db(db)
-            # mlpaDiscovery operates on the Totem object (no DB access),
-            # so it can run outside the per-file lock.
-            process_view = mlpaDiscovery(totem)
-            serialized = _serialize_mlpa(process_view, totem)
+            with job_scope(request, "Process areas (MLPA)") as job:
+                progress = Progress(job.report)
+                with _with_ocel_db(user_file, job) as db:
+                    job.report(None, "Applying filters")
+                    with _filter_shadow(db, fp):
+                        totem = totemDiscovery_db(db, progress=progress.sub(0.0, 0.85))
+                # mlpaDiscovery operates on the Totem object (no DB access),
+                # so it can run outside the per-file lock.
+                progress.report(0.9, "Layering object types")
+                process_view = mlpaDiscovery(totem)
+                serialized = _serialize_mlpa(process_view, totem)
 
             if not is_filtered:
                 set_cached_result(user_file, "discover_mlpa", serialized)
             return Response(serialized, status=status.HTTP_200_OK)
+        except JobCancelled:
+            return cancelled_response()
         except Exception as e:
             return Response(
                 {"error": f"An error occurred during Totem and MLPA discovery: {e}"},
@@ -990,7 +1415,8 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 cached = get_cached_result(
                     user_file, "discover_process_areas", cache_params
                 )
-                if cached is not None:
+                # Older entries predate the per-arc hover statistics.
+                if cached is not None and "relation_stats" in cached:
                     return Response(cached, status=status.HTTP_200_OK)
 
             # Two-tier cache. Preparation reads the log and depends only on it;
@@ -1005,27 +1431,43 @@ class EventLogViewSet(viewsets.ModelViewSet):
             totem_data = (
                 get_cached_result(user_file, "discover_totem_raw") if use_tier_cache else None
             )
+            # Entries cached before the hover statistics existed lack them;
+            # rediscover once rather than serve arcs without their numbers.
+            if totem_data is not None and "relation_stats" not in totem_data:
+                totem_data = None
 
-            if aggregates is None or totem_data is None:
-                with _with_ocel_db(user_file) as db:
-                    with _filter_shadow(db, fp):
-                        if aggregates is None:
-                            aggregates = prepare_db(db)
-                            if use_tier_cache:
-                                set_cached_result(user_file, "process_area_prep", aggregates)
-                        if totem_data is None:
-                            totem_data = totem_to_dict(totemDiscovery_db(db))
-                            if use_tier_cache:
-                                set_cached_result(
-                                    user_file, "discover_totem_raw", totem_data
+            with job_scope(request, "Process areas") as job:
+                progress = Progress(job.report)
+                if aggregates is None or totem_data is None:
+                    with _with_ocel_db(user_file, job) as db:
+                        job.report(None, "Applying filters")
+                        with _filter_shadow(db, fp):
+                            if aggregates is None:
+                                aggregates = prepare_db(db, progress=progress.sub(0.0, 0.4))
+                                if use_tier_cache:
+                                    set_cached_result(user_file, "process_area_prep", aggregates)
+                            if totem_data is None:
+                                discovered = totemDiscovery_db(
+                                    db, progress=progress.sub(0.4, 0.8)
                                 )
+                                totem_data = {
+                                    **totem_to_dict(discovered),
+                                    "relation_stats": _serialize_relation_stats(
+                                        discovered
+                                    ),
+                                }
+                                if use_tier_cache:
+                                    set_cached_result(
+                                        user_file, "discover_totem_raw", totem_data
+                                    )
 
-            process_view = process_areas_from_aggregates(
-                aggregates,
-                weights=params["weights"],
-                alpha=params["alpha"],
-                beta=params["beta"],
-            )
+                progress.report(0.85, "Solving the layering")
+                process_view = process_areas_from_aggregates(
+                    aggregates,
+                    weights=params["weights"],
+                    alpha=params["alpha"],
+                    beta=params["beta"],
+                )
 
             serialized = {
                 "layers": _serialize_process_layers(process_view),
@@ -1033,12 +1475,15 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 "type_relations": totem_data["type_relations"],
                 "all_event_types": totem_data["all_event_types"],
                 "object_type_to_event_types": totem_data["object_type_to_event_types"],
+                "relation_stats": totem_data.get("relation_stats", []),
             }
 
             set_cached_result(
                 user_file, "discover_process_areas", serialized, cache_params
             )
             return Response(serialized, status=status.HTTP_200_OK)
+        except JobCancelled:
+            return cancelled_response()
         except Exception as e:
             return Response(
                 {"error": f"An error occurred during process area discovery: {e}"},
@@ -1095,14 +1540,18 @@ class EventLogViewSet(viewsets.ModelViewSet):
             return Response(cached_result, status=status.HTTP_200_OK)
 
         try:
-            with _with_ocel_db(user_file) as db:
+            with job_scope(request, "Petri net discovery") as job, _with_ocel_db(user_file, job) as db:
+                job.report(None, "Applying filters")
                 with _filter_shadow(db, fp):
                     model = discover_ocpn_db(
                         db,
                         object_types=object_type_filter,
                         timeout_s=timeout_s,
                         name=os.path.splitext(os.path.basename(user_file.file.name))[0],
+                        progress=job.report,
                     )
+        except JobCancelled:
+            return cancelled_response()
         except TimeoutError as e:
             return Response(
                 {
@@ -1128,33 +1577,11 @@ class EventLogViewSet(viewsets.ModelViewSet):
     def _occn_content_json(occn):
         """Canonical asset JSON for a (possibly discovered) OCCN.
 
-        Discovered nets may carry markers with ``marker_key == 0`` ("no
-        constraint / assign automatically"), which the canonical schema
-        rejects. Mirror the factory / editor behavior and give those markers
-        fresh unique keys — on a deep copy, because the net may live in the
-        shared discovery cache.
+        ``occn_to_dict`` maps non-positive marker keys (older discovered nets
+        numbered key groups from 0) to positive ones group-wise, preserving
+        which markers share a key. It does not mutate the net, which may live
+        in the shared discovery cache.
         """
-        occn = copy.deepcopy(occn)
-        all_groups = [
-            group
-            for groups in (occn.input_marker_groups, occn.output_marker_groups)
-            for group_list in groups.values()
-            for group in group_list
-        ]
-        next_key = 1 + max(
-            (
-                int(marker.marker_key)
-                for group in all_groups
-                for marker in group.markers
-                if isinstance(marker.marker_key, (int, float)) and marker.marker_key > 0
-            ),
-            default=0,
-        )
-        for group in all_groups:
-            for marker in group.markers:
-                if not marker.marker_key or marker.marker_key <= 0:
-                    marker.marker_key = next_key
-                    next_key += 1
         return occn_to_dict(occn)
 
     @action(detail=True, methods=["post"])
@@ -1255,9 +1682,9 @@ class EventLogViewSet(viewsets.ModelViewSet):
                     )
                     with _with_ocel_db(user_file) as db:
                         with _filter_shadow(db, fp_non_types):
-                            ocel_pm4py = convert_ocel_duckdb_to_pm4py(db)
+                            occn_input = extract_occn_input(db)
                     base_occn = discover_occn(
-                        ocel_pm4py,
+                        occn_input,
                         relativeOccuranceThreshold=0.0,
                         parameters=parameters,
                     )
@@ -1412,7 +1839,8 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 if cached is not None:
                     return Response(cached, status=status.HTTP_200_OK)
 
-            with _with_ocel_db(user_file) as db:
+            with job_scope(request, "Log statistics") as job, _with_ocel_db(user_file, job) as db:
+                job.report(None, "Counting events and objects")
                 num_events, num_unique_activities = _filtered_event_counts(fp, db)
                 num_objects, num_object_types = _filtered_object_counts(fp, db)
                 earliest_timestamp, newest_timestamp = _filtered_timestamp_range(fp, db)
@@ -1427,11 +1855,57 @@ class EventLogViewSet(viewsets.ModelViewSet):
             }
             set_cached_result(user_file, "statistics", result, filter_cache_params)
             return Response(result, status=status.HTTP_200_OK)
+        except JobCancelled:
+            return cancelled_response()
         except Exception as e:
             return Response(
                 {"error": f"Failed to compute statistics: {e}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+    @action(detail=True, methods=["get"])
+    def suggested_time_window(self, request, pk=None):
+        """Time range covering the first ``max_events`` events of the log.
+
+        The frontend uses it to pre-select a global time-range filter for
+        logs too large to analyse at once (default limit:
+        ``LARGE_LOG_EVENT_LIMIT``). ``needed`` is false when the whole log
+        already fits; ``before`` is inclusive, so ``selected_events`` can
+        exceed ``max_events`` when several events share the boundary second.
+        """
+        try:
+            user_file = self.get_queryset().get(pk=pk)
+        except EventLog.DoesNotExist:
+            return Response(
+                {"error": "File not found"}, status=status.HTTP_404_NOT_FOUND
+            )
+
+        try:
+            max_events = int(request.query_params.get("max_events", LARGE_LOG_EVENT_LIMIT))
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "max_events must be an integer"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        max_events = max(1, min(max_events, 10_000_000))
+
+        try:
+            if max_events == LARGE_LOG_EVENT_LIMIT:
+                # Computed when the log was loaded: answers immediately even
+                # while an algorithm holds the per-file lock.
+                result = _get_ocel_time_window(user_file)
+            else:
+                with job_scope(request, "Choosing time window") as job, _with_ocel_db(user_file, job) as db:
+                    result = _log_time_window(db, max_events)
+        except JobCancelled:
+            return cancelled_response()
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to compute time window: {e}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(result, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])
     def oc_dotted_chart(self, request, pk=None):
@@ -1469,7 +1943,8 @@ class EventLogViewSet(viewsets.ModelViewSet):
         fp_non_time = {k: v for k, v in fp.items() if k not in ("after", "before")}
 
         try:
-            with _with_ocel_db(user_file) as db:
+            with job_scope(request, "Dotted chart") as job, _with_ocel_db(user_file, job) as db:
+                job.report(None, "Sampling events")
                 with _filter_shadow(db, fp_non_time):
                     result = get_oc_dotted_chart_data(
                         db,
@@ -1486,6 +1961,8 @@ class EventLogViewSet(viewsets.ModelViewSet):
                         max_points=max_points,
                         sample_seed=sample_seed,
                     )
+        except JobCancelled:
+            return cancelled_response()
         except Exception as e:
             return Response(
                 {"error": f"Failed to load OC dotted chart data: {e}"},
@@ -1604,7 +2081,9 @@ class EventLogViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
-            with _sandboxed_query_connection(log_path) as conn:
+            # Global/local filter params shadow `events` with a filtered view.
+            filter_params = _parse_filter_params(request)
+            with _sandboxed_query_connection(log_path, filter_params) as conn:
                 cursor = conn.execute(wrapped)
                 columns = [d[0] for d in cursor.description]
                 rows = cursor.fetchall()

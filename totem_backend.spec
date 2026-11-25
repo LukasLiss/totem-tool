@@ -1,18 +1,37 @@
 # -*- mode: python ; coding: utf-8 -*-
+import sys
+
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 simplejwt_hidden_imports = collect_submodules('rest_framework_simplejwt')
+# settings.py only imports the top-level package; the middleware and storage
+# classes are referenced by dotted-path strings, which PyInstaller cannot see.
+whitenoise_hidden_imports = collect_submodules('whitenoise')
 
 # PuLP ships its CBC solver as a platform binary under pulp/solverdir/; without
 # it mlpaDiscovery / process areas fail in the frozen app with "solver not found".
-pulp_solver_files = collect_data_files('pulp', includes=['solverdir/**'])
+# It ships CBC for every OS; keep only the current platform's. Foreign ELF / PE
+# executables inside the macOS bundle break code signing and notarization.
+_cbc_platform = {'darwin': 'osx', 'win32': 'win'}.get(sys.platform, 'linux')
+pulp_solver_files = [
+    (src, dest)
+    for src, dest in collect_data_files('pulp', includes=['solverdir/**'])
+    if '/cbc/' not in dest.replace('\\', '/') + '/'
+    or f'/cbc/{_cbc_platform}/' in dest.replace('\\', '/') + '/'
+]
 
 a = Analysis(
     ['backend/manage.py'],
     pathex=[],
     binaries=[],
-    datas=[('backend/initial_user.json', '.')] + pulp_solver_files,
-    hiddenimports=simplejwt_hidden_imports,
+    datas=[
+        ('backend/initial_user.json', '.'),
+        # The first-launch sample event log (api/sample_project.py). Resolved at
+        # runtime relative to sys._MEIPASS, which is what this destination is
+        # relative to as well.
+        ('backend/sample_data/container_logistics.duckdb', 'sample_data'),
+    ] + pulp_solver_files,
+    hiddenimports=simplejwt_hidden_imports + whitenoise_hidden_imports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

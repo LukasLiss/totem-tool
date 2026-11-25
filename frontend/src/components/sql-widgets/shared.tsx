@@ -32,6 +32,10 @@ export function QuerySection({
   expectedResult,
   editorTitle,
   discovery,
+  growQuery = false,
+  className,
+  rowLimit,
+  onRowLimitChange,
 }: {
   widgetId: number;
   query: string;
@@ -40,12 +44,19 @@ export function QuerySection({
   onLinkChange: (l: LinkedQuery | null) => void;
   fileId?: number;
   projectId?: number;
-  expectedResult: ExpectedResult;
+  /** What the widget reads from the result; omit when any result is fine. */
+  expectedResult?: ExpectedResult | null;
   editorTitle: string;
   discovery: ColumnDiscovery;
+  /** let the query box grow to the whole query (see SqlQueryField `grow`) */
+  growQuery?: boolean;
+  className?: string;
+  /** rows per page for the SQL editor's page selector (see SqlQueryField) */
+  rowLimit?: number;
+  onRowLimitChange?: (rowLimit: number) => void;
 }) {
   return (
-    <div className="grid gap-2">
+    <div className={cn("grid gap-2", className)}>
       <div className="flex items-center justify-between">
         <Label htmlFor={`sql-widget-query-${widgetId}`}>SQL query</Label>
         <Button
@@ -68,10 +79,15 @@ export function QuerySection({
         onLinkChange={onLinkChange}
         fileId={fileId}
         projectId={projectId}
-        expectedResult={expectedResult}
+        expectedResult={expectedResult ?? null}
         editorTitle={editorTitle}
+        grow={growQuery}
+        // A result run in the SQL editor fills in the columns without querying again.
+        onRunResult={(result, q, link) => discovery.accept(result, q, link?.id)}
+        rowLimit={rowLimit}
+        onRowLimitChange={onRowLimitChange}
       />
-      {expectedResult.description && (
+      {expectedResult?.description && (
         <p className="text-xs text-muted-foreground">{expectedResult.description}</p>
       )}
       {discovery.error && (
@@ -129,9 +145,54 @@ export function ColumnInput({
   );
 }
 
+/** A row of mutually exclusive options drawn as one connected strip. */
+export function SegmentedControl<T extends string>({
+  value,
+  options,
+  onChange,
+  disabled = false,
+  ariaLabel,
+}: {
+  value: T;
+  options: readonly { value: T; label: string }[];
+  onChange: (value: T) => void;
+  disabled?: boolean;
+  ariaLabel?: string;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label={ariaLabel}
+      className={cn("inline-flex rounded-md border bg-muted/40 p-0.5", disabled && "opacity-50")}
+    >
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          role="radio"
+          aria-checked={value === option.value}
+          disabled={disabled}
+          onClick={() => onChange(option.value)}
+          className={cn(
+            "rounded-[5px] px-2.5 py-1 text-xs font-medium transition-colors",
+            value === option.value
+              ? "bg-background text-foreground shadow-xs"
+              : "text-muted-foreground hover:text-foreground disabled:hover:text-muted-foreground"
+          )}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ */
-/* View-mode placeholders                                              */
+/* View-mode pieces                                                    */
 /* ------------------------------------------------------------------ */
+
+// The header row of the chart widgets: WidgetHeader (components/ui/WidgetTitle),
+// always shown, also without a title, so the filters stay reachable.
 
 export function WidgetMessage({
   children,

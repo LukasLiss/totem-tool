@@ -27,6 +27,13 @@ import {
 } from "@/components/ui/popover";
 import { ChevronsUpDownIcon, CheckIcon } from "lucide-react";
 import { TOUR_IDS } from "@/tour/tourIds";
+import { prepareLargeLogFilter } from "@/store/applyGlobalFilter";
+
+/** What the user named the project, falling back to the event log's file name.
+ * Mirrors projectLabel in components/team-switcher.tsx so a project reads the
+ * same here as it does in the sidebar switcher. */
+const projectLabel = (file: { display_name?: string; file?: string } | null) =>
+  file?.display_name || file?.file?.split("/").pop() || "Untitled project";
 
 
 function UserFileSelect() {
@@ -48,7 +55,7 @@ function UserFileSelect() {
         fetchFiles();
         }, [selectedFile]);
 
-    const handleSubmit = () => {
+    const handleSubmit = async () => {
         if (!selectedFile) {
             toast.warning("Please select an event log first.");
             return;
@@ -56,6 +63,9 @@ function UserFileSelect() {
         const file = files.find((f) => f.id === Number(selectedFile.id));
         if (file) {
             setSelectedFile(file);
+            // Large logs get their time-range filter before the overview
+            // mounts, so no view starts computing over the whole log.
+            await prepareLargeLogFilter(Number(file.id));
             navigate("/overview");
         } else {
             toast.error("The selected event log is no longer available.");
@@ -63,10 +73,11 @@ function UserFileSelect() {
     };
 
     return(
-    <Card className="flex-col w-full max-w-sm m-6">
+    <div className="w-full max-w-sm p-4 pt-0 md:p-6">
+    <Card className="flex-col w-full">
       <CardHeader>
         <CardTitle>
-          Select File to work on
+          Select a file to work on
         </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col justify-end">
@@ -77,15 +88,15 @@ function UserFileSelect() {
               variant="outline"
               role="combobox"
               aria-expanded={open}
-              className="w-[300px] justify-between"
+              className="max-md:w-full md:w-[300px] justify-between"
             >
-              {selectedFile?.file
-                ? selectedFile.file.split("/").pop()
-                : "Select OCEL File"}
+              <span className="min-w-0 truncate">
+                {selectedFile ? projectLabel(selectedFile) : "Select OCEL File"}
+              </span>
               <ChevronsUpDownIcon className="ml-2 h-4 w-4 shrink-0 opacity-50" />
             </Button>
           </PopoverTrigger>
-          <PopoverContent className="w-[300px] p-0">
+          <PopoverContent className="w-(--radix-popover-trigger-width) p-0">
             <Command>
               <CommandInput placeholder="Search files..." />
               <CommandList>
@@ -94,7 +105,7 @@ function UserFileSelect() {
                   {files.map((file) => (
                     <CommandItem
                       key={file.id}
-                      value={file.file}
+                      value={`${projectLabel(file)} ${file.file}`}
                       onSelect={() => {
                         setSelectedFile(file)
                         setOpen(false);
@@ -102,13 +113,13 @@ function UserFileSelect() {
                     >
                       <CheckIcon
                         className={cn(
-                          "mr-2 h-4 w-4",
+                          "mr-2 h-4 w-4 shrink-0",
                           selectedFile?.id === file.id
                             ? "opacity-100"
                             : "opacity-0"
                         )}
                       />
-                      {file.file.split("/").pop()}
+                      <span className="min-w-0 truncate">{projectLabel(file)}</span>
                     </CommandItem>
                   ))}
                 </CommandGroup>
@@ -124,6 +135,7 @@ function UserFileSelect() {
         </CardFooter>
       </CardContent>
     </Card>
+    </div>
     )
 }
 

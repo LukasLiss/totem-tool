@@ -128,7 +128,9 @@ survive a round trip.
 Markers are drawn on the arcs (circle = exactly one object, square =
 multiple); markers of the same group are joined by a thin line (AND), while
 separate groups are XOR alternatives. Markers sharing a key within one group
-bind disjoint objects. Clicking a marker opens its group in the side panel;
+bind disjoint objects; key `0` means "no key constraint" (the marker gets a
+fresh unique key on save). Saved canonical JSON only holds positive keys, and
+discovered nets number their keys from 1. Clicking a marker opens its group in the side panel;
 **dragging a marker onto another marker** of the same activity side merges
 the two groups into one AND group.
 

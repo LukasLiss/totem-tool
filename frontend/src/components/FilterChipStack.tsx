@@ -19,8 +19,17 @@ import { useFilterStack } from "@/contexts/filterStackHooks";
 import { SelectedFileContext } from "@/contexts/SelectedFileContext";
 import { FilterConfigDialog } from "./FilterConfigDialog";
 import { useFilterStore, type FilterStats } from "@/store/filterStore";
-import { applyGlobalFilterRules } from "@/store/applyGlobalFilter";
+import {
+  applyGlobalFilterRules,
+  LARGE_LOG_EVENT_LIMIT,
+  proposeLargeLogFilter,
+} from "@/store/applyGlobalFilter";
 import { toast } from "sonner";
+import {
+  GLOBAL_FILTER_KEY,
+  getProjectViewSetting,
+  putProjectViewSetting,
+} from "@/api/projectApi";
 
 
 const PIPE_BG = "var(--secondary)";
@@ -384,9 +393,10 @@ const DEFAULT_STATS: FilterStats = {
 };
 
 export default function FilterChipStack() {
-  const { filters, addFilter, removeFilter } = useFilterStack();
+  const { filters, addFilter, removeFilter, replaceFilters } = useFilterStack();
   const { selectedFile } = useContext(SelectedFileContext);
   const fileId: number | undefined = selectedFile?.id;
+  const projectId: number | undefined = selectedFile?.project as number | undefined;
 
   const [expanded,      setExpanded]      = useState(false);
   const [dialogOpen,    setDialogOpen]    = useState(false);
@@ -411,9 +421,92 @@ export default function FilterChipStack() {
 
 
   useEffect(() => {
-    useFilterStore.getState().clear();
-    useFilterStore.getState().setStats(null);
-    if (!fileId) { setObjectTypes([]); setActivities([]); return; }
+    if (!fileId) {
+      useFilterStore.getState().clear();
+      useFilterStore.getState().setStats(null);
+      setObjectTypes([]);
+      setActivities([]);
+      return;
+    }
+
+    const sessionKey = `totem_filters_${fileId}`;
+    let stale = false;
+    // Set once the restore has decided, so the statistics request below knows
+    // whether it is allowed to publish unfiltered counts.
+    let restoredRules: FilterRule[] | null = null;
+
+    /** The filter saved with the project, or null. */
+    const savedProjectFilter = async (): Promise<FilterRule[] | null> => {
+      if (projectId == null) return null;
+      try {
+        const value = await getProjectViewSetting(projectId, GLOBAL_FILTER_KEY);
+        const rules = (value as { rules?: unknown } | null)?.rules;
+        return Array.isArray(rules) && rules.length > 0 ? (rules as FilterRule[]) : null;
+      } catch {
+        // Never block opening a project on this: fall back to the tab cache.
+        return null;
+      }
+    };
+
+    /** The per-tab cache, which predates the project-level filter. */
+    const cachedFilter = (): FilterRule[] | null => {
+      try {
+        const stored = sessionStorage.getItem(sessionKey);
+        const rules = stored ? JSON.parse(stored) : null;
+        return Array.isArray(rules) && rules.length > 0 ? rules : null;
+      } catch {
+        return null;
+      }
+    };
+
+    void (async () => {
+      // The project's own filter wins over the tab cache: it is what an
+      // exported project carries, and what a colleague opening the same
+      // project should see.
+      const rules = (await savedProjectFilter()) ?? cachedFilter();
+      if (stale) return;
+      restoredRules = rules;
+
+      if (rules) {
+        replaceFilters(["time_range", "object_types", "activity"], rules);
+        applyGlobalFilterRules(fileId, rules).catch(() => {});
+        // Active rules are shown, not hidden behind the collapsed header: a
+        // filter the user did not add by hand (the large-log time window) must
+        // be visible to be understood.
+        setExpanded(true);
+        return;
+      }
+
+      // `clear()` bumps the filter version, which makes every component abort
+      // and resend its request — for nothing when no filter is applied.
+      if (useFilterStore.getState().isApplied) useFilterStore.getState().clear();
+      useFilterStore.getState().setStats(null);
+      // A large log gets a time-range filter straight away: the analyses on
+      // the overview page would otherwise run over the whole log, which can
+      // take minutes. The user sees the rule in the chip stack and can
+      // change or remove it like any other filter. Only reached when the
+      // project saved no filter of its own — otherwise this would silently
+      // discard the one an exported project was published with.
+      const rule = await proposeLargeLogFilter(fileId).catch(() => null);
+      if (!rule || stale) return;
+      const proposed = replaceFilters(["time_range"], [rule]);
+      try {
+        await applyGlobalFilterRules(fileId, proposed);
+        sessionStorage.setItem(sessionKey, JSON.stringify(proposed));
+      } catch {
+        return;
+      }
+      if (stale) return;
+      restoredRules = proposed;
+      setExpanded(true);
+      toast.info("Large event log: showing the first events only", {
+        description:
+          `This log has more than ${LARGE_LOG_EVENT_LIMIT.toLocaleString()} events, so a global time-range ` +
+          "filter was applied to keep the analyses responsive. Adjust or remove it in the filter bar.",
+        duration: 10000,
+      });
+    })();
+
     axios.get<{ name: string; count: number }[]>(`/api/files/${fileId}/object_types/`, { _skipGlobalFilter: true })
       .then(({ data }) => setObjectTypes(Array.isArray(data) ? data : []))
       .catch(() => { toast.error("Object types could not be loaded"); setObjectTypes([]); });
@@ -424,16 +517,19 @@ export default function FilterChipStack() {
     axios.get<{ num_objects: number; num_events: number }>(
       `/api/files/${fileId}/statistics/`, { _skipGlobalFilter: true }
     ).then(({ data }) => {
-      useFilterStore.getState().setStats({
-        objectPct:    1,
-        eventPct:     1,
-        objectBefore: data.num_objects,
-        objectAfter:  data.num_objects,
-        eventBefore:  data.num_events,
-        eventAfter:   data.num_events,
-      });
+      if ((!restoredRules || restoredRules.length === 0) && !useFilterStore.getState().isApplied) {
+        useFilterStore.getState().setStats({
+          objectPct:    1,
+          eventPct:     1,
+          objectBefore: data.num_objects,
+          objectAfter:  data.num_objects,
+          eventBefore:  data.num_events,
+          eventAfter:   data.num_events,
+        });
+      }
     }).catch(() => {});
-  }, [fileId]);
+    return () => { stale = true; };
+  }, [fileId, projectId]);
 
   const currentKey = JSON.stringify(filters);
   const dirty = currentKey !== appliedKey;
@@ -473,7 +569,12 @@ export default function FilterChipStack() {
 
   function handleSubmit(params: FilterRule["params"]) {
     if (editingRule) removeFilter(editingRule.id);
-    addFilter({ type: activeType, enabled: true, params });
+    const emptyInclude =
+      (activeType === "object_types" || activeType === "activity") &&
+      (params as { include: string[] }).include.length === 0;
+    if (!emptyInclude) {
+      addFilter({ type: activeType, enabled: true, params });
+    }
   }
 
   async function applyFilters() {
@@ -481,6 +582,28 @@ export default function FilterChipStack() {
     setApplying(true);
     try {
       await applyGlobalFilterRules(fileId, filters);
+      try {
+        if (filters.length > 0) {
+          sessionStorage.setItem(`totem_filters_${fileId}`, JSON.stringify(filters));
+        } else {
+          sessionStorage.removeItem(`totem_filters_${fileId}`);
+        }
+      } catch {
+        /* ignore storage quota or serialization errors */
+      }
+      // Saved on the project as well as in the tab: this is what survives a
+      // new tab, another machine, and an export. `null` removes the entry, so
+      // clearing the stack really clears it rather than storing an empty one.
+      if (projectId != null) {
+        putProjectViewSetting(
+          projectId,
+          GLOBAL_FILTER_KEY,
+          filters.length > 0 ? { rules: filters } : null,
+        ).catch(() => {
+          // The filter is applied either way; only its persistence failed.
+          toast.error("The filter was applied but could not be saved to the project");
+        });
+      }
     } catch {
       toast.error("Filter could not be applied");
     } finally {

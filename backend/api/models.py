@@ -45,6 +45,11 @@ class Project(models.Model):
     # existed.
     display_name = models.CharField(max_length=120, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
+    # Per-project preferences of analysis views, keyed by view (e.g. the
+    # OC-DFG layout under "ocdfg-variants"). Written through
+    # /api/projects/<id>/view-settings/<key>/; the frontend validates what it
+    # reads and falls back to its defaults when an entry is unusable.
+    view_settings = models.JSONField(default=dict, blank=True)
 
     def __str__(self):
         return f"{self.display_name or self.name}"
@@ -99,6 +104,11 @@ class ProjectAsset(models.Model):
         # "query": "...", "description": "..."}). Dashboard components can link
         # one so that editing the stored query updates every consumer.
         QUERY = "QUERY", "SQL Query"
+        # A named composition of process areas (content_json: {"schema":
+        # "process-areas", "version": 1, "levels": [...]}), discovered and/or
+        # adjusted by hand in the Process Area view. Variants and alignment
+        # components can pick its areas by name.
+        PROCESS_AREAS = "PROCESS_AREAS", "Process Areas"
 
     project = models.ForeignKey(
         Project,
@@ -200,6 +210,10 @@ class DashboardComponent(models.Model):
 
     order = models.IntegerField(default=0)  # for z-order or stable sorting
 
+    # Per-widget local filter params (activity/date/object-type selections).
+    # Stored as a flat string→string dict matching the axios `params` shape.
+    local_filter_params = models.JSONField(null=True, blank=True, default=None)
+
     class Meta:
         verbose_name = "Dashboard Component"
         verbose_name_plural = "Dashboard Components"
@@ -210,8 +224,69 @@ class NumberofEventsComponent(DashboardComponent):
 
 
 class TextBoxComponent(DashboardComponent):
+    # Box-level formatting. For a plain box (no `rich_text`) every option
+    # applies to the whole text; once a box has a document, only
+    # background_color and vertical_align stay box-level and the document
+    # carries the rest per run and per paragraph (#373). The defaults below
+    # reproduce the unformatted look the widget had before formatting
+    # existed, so dashboards saved earlier render unchanged.
+    FONT_FAMILY_CHOICES = [
+        ('sans', 'Sans serif'),
+        ('serif', 'Serif'),
+        ('mono', 'Monospace'),
+    ]
+    FONT_WEIGHT_CHOICES = [
+        ('normal', 'Normal'),
+        ('bold', 'Bold'),
+    ]
+    TEXT_ALIGN_CHOICES = [
+        ('left', 'Left'),
+        ('center', 'Center'),
+        ('right', 'Right'),
+        ('justify', 'Justify'),
+    ]
+    VERTICAL_ALIGN_CHOICES = [
+        ('top', 'Top'),
+        ('middle', 'Middle'),
+        ('bottom', 'Bottom'),
+    ]
+
     text = models.TextField()
     font_size = models.IntegerField(default=14)
+    # Choice keys, not CSS values: the frontend maps them onto the design
+    # system's system-font stacks. No webfonts — the packaged desktop app
+    # has no network, so a remote font would silently fail there only.
+    font_family = models.CharField(
+        max_length=16, choices=FONT_FAMILY_CHOICES, default='sans'
+    )
+    font_weight = models.CharField(
+        max_length=16, choices=FONT_WEIGHT_CHOICES, default='normal'
+    )
+    italic = models.BooleanField(default=False)
+    underline = models.BooleanField(default=False)
+    # CSS keywords, as on ImageComponent.image_fit.
+    text_align = models.CharField(
+        max_length=16, choices=TEXT_ALIGN_CHOICES, default='left'
+    )
+    vertical_align = models.CharField(
+        max_length=16, choices=VERTICAL_ALIGN_CHOICES, default='top'
+    )
+    # "#rgb" or "#rrggbb" hex literals, validated in the save_layout view.
+    text_color = models.CharField(max_length=20, default='#1e293b')
+    background_color = models.CharField(max_length=20, default='#ffffff')
+    line_height = models.FloatField(default=1.5)
+
+    # Per-selection formatting (#373 follow-up): a TipTap/ProseMirror document.
+    # Null means "no rich text yet" — the box renders `text` with the block
+    # fields above, which is exactly how every box saved before this change
+    # behaves. The fields above stay meaningful either way: they are the
+    # document's base style, which individual runs and paragraphs override.
+    #
+    # Stored as structured JSON, never HTML, and rendered by walking the tree
+    # into React elements — so there is no markup to sanitise and no
+    # dangerouslySetInnerHTML anywhere in the path. `validated_rich_text` in
+    # api/rich_text.py rebuilds it from a whitelist on the way in.
+    rich_text = models.JSONField(null=True, blank=True)
 
 class ImageComponent(DashboardComponent):
     # Legacy per-component upload, kept so old dashboards still render.
@@ -243,6 +318,25 @@ class VariantsComponent(DashboardComponent):
     # lists mean "not chosen yet".
     business_object_types = models.JSONField(default=list, blank=True)
     business_activities = models.JSONField(default=list, blank=True)
+    # "process_areas" (default: connected components per process area,
+    # stored in the two columns below) or "custom" (the settings above).
+    variants_mode = models.CharField(max_length=32, default="process_areas", blank=True)
+    area_execution_column = models.CharField(
+        max_length=64, default="process-executions-cc-process-areas", blank=True
+    )
+    area_variant_column = models.CharField(
+        max_length=64, default="variant-cc-process-areas", blank=True
+    )
+    # Stored process-area composition the "process_areas" mode runs on.
+    # Null: the areas currently shown by the Process Area component (or a
+    # default discovery). Deleting the asset falls back to that (SET_NULL).
+    process_area_asset = models.ForeignKey(
+        "ProjectAsset",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
 
 
 class ProcessAreaComponent(DashboardComponent):
@@ -265,8 +359,18 @@ class ProcessAreaComponent(DashboardComponent):
     w_temporal = models.FloatField(default=1.0, validators=[MinValueValidator(0.0)])
     w_cardinality = models.FloatField(default=1.0, validators=[MinValueValidator(0.0)])
     w_divergence = models.FloatField(default=1.0, validators=[MinValueValidator(0.0)])
-    alpha = models.FloatField(default=1.0, validators=[MinValueValidator(0.0)])
+    alpha = models.FloatField(default=2.0, validators=[MinValueValidator(0.0)])
     beta = models.FloatField(default=1.0, validators=[MinValueValidator(0.0)])
+
+    # Stored process-area composition to show instead of the discovered one
+    # (a ProjectAsset of type PROCESS_AREAS). Null shows the discovery.
+    composition_asset = models.ForeignKey(
+        "ProjectAsset",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
 
 
 class TotemMinerComponent(DashboardComponent):
@@ -322,6 +426,7 @@ class OCDottedChartComponent(DashboardComponent):
     color_by = models.CharField(max_length=255, default="activity")
     shape_by = models.CharField(max_length=255, default="none")
     row_order = models.CharField(max_length=32, default="first_occurrence")
+    row_order_direction = models.CharField(max_length=4, default="asc")
     max_points = models.PositiveIntegerField(default=10000)
     show_minimap = models.BooleanField(default=True)
     show_controls = models.BooleanField(default=True)
@@ -335,6 +440,9 @@ class NewOCDFGComponent(DashboardComponent):
         choices=[('TB', 'Top to Bottom'), ('LR', 'Left to Right')],
         default='TB',
     )
+    # Layout preferences chosen in the widget's layout panel
+    # ({"version": 1, "options": {...}}); null means the defaults.
+    layout_options = models.JSONField(null=True, blank=True, default=None)
 
 
 # Backward compatibility alias for the old OCDFG component
@@ -350,6 +458,10 @@ class PieChartComponent(DashboardComponent):
     value_column = models.CharField(max_length=100, blank=True, default="")
     show_legend = models.BooleanField(default=True)
     show_tooltip = models.BooleanField(default=True)
+    # Display options edited in the frontend's settings popup: legend style
+    # and values, category count footer, max categories, colors. Validated
+    # on save (see _validated_chart_style in views/dashboards.py).
+    chart_style = models.JSONField(default=dict, blank=True)
 
 
 class KpiComponent(DashboardComponent):
@@ -378,6 +490,10 @@ class BarChartComponent(DashboardComponent):
     value_column = models.CharField(max_length=100, blank=True, default="")
     horizontal = models.BooleanField(default=False)
     show_values = models.BooleanField(default=False)
+    # Display options edited in the frontend's settings popup: max categories
+    # and colors. Validated on save (see _validated_chart_style in
+    # views/dashboards.py).
+    chart_style = models.JSONField(default=dict, blank=True)
 
 
 class ScatterPlotComponent(DashboardComponent):
@@ -393,6 +509,10 @@ class ScatterPlotComponent(DashboardComponent):
     series_column = models.CharField(max_length=100, blank=True, default="")
     x_label = models.CharField(max_length=100, blank=True, default="")
     y_label = models.CharField(max_length=100, blank=True, default="")
+    # Display options edited in the frontend's settings popup: legend, max
+    # series and colors. Validated on save (see _validated_chart_style in
+    # views/dashboards.py).
+    chart_style = models.JSONField(default=dict, blank=True)
 
 
 class OCPNComponent(DashboardComponent):
@@ -400,6 +520,17 @@ class OCPNComponent(DashboardComponent):
     automatic_loading = models.BooleanField(default=False, null=True, blank=True)
     # Discovery budget in seconds (<= 0 disables the timeout).
     timeout_s = models.FloatField(default=30.0, null=True, blank=True)
+
+
+class OCPNFlattenedReplayComponent(DashboardComponent):
+    """Dashboard widget for the OCPN flattened (per object type) token-based replay."""
+
+    # Stored OCPN asset (ProjectAsset of type OCPN) the log is replayed on;
+    # null = none selected yet. Kept as a plain id like OCDottedChart's
+    # file_id: a deleted asset simply shows the selector again.
+    ocpn_asset_id = models.PositiveIntegerField(null=True, blank=True)
+    # Run the replay as soon as the dashboard opens.
+    automatic_loading = models.BooleanField(default=False)
 
 
 class OCCNComponent(DashboardComponent):
@@ -416,3 +547,157 @@ class OCCNComponent(DashboardComponent):
     )
     # Comma-separated object type filter; empty = discover on all types.
     object_types = models.TextField(default="", blank=True)
+
+
+class OCHandoverComponent(DashboardComponent):
+    """Dashboard widget for the object-centric handover-of-work explorer.
+
+    The fields preselect the settings the explorer opens with; they are not
+    editable from the dashboard's view mode. Object types are stored as JSON
+    lists of type names.
+
+    ``show_controls``, ``method``, ``case_type`` and ``flat_resource_type``
+    are retained so older saved layouts still load, but nothing reads or
+    writes them. The view mode has no settings panel, and the flattened
+    (single case type) method was removed — the explorer is object-centric
+    only. They are left exactly as they were, columns and choices included,
+    so that removing the feature needs no migration against existing
+    dashboards.
+    """
+    show_controls = models.BooleanField(default=True)
+    # Start the computation as soon as the dashboard opens.
+    automatic_loading = models.BooleanField(default=False)
+    method = models.CharField(
+        max_length=16,
+        choices=[("oc", "Object-centric"), ("flattened", "Flattened")],
+        default="oc",
+    )
+    resource_types = models.JSONField(default=list, blank=True)
+    businessobject_types = models.JSONField(default=list, blank=True)
+    case_type = models.CharField(max_length=100, blank=True, default="")
+    flat_resource_type = models.CharField(max_length=100, blank=True, default="")
+    # Maximum number of non-resource events between two handover events; null = unlimited.
+    max_gap = models.PositiveIntegerField(null=True, blank=True)
+    normalization = models.CharField(max_length=32, default="by_arcs_in_eog")
+    normalization_scope = models.CharField(max_length=16, default="global")
+    parallel_filter_enabled = models.BooleanField(default=False)
+    parallel_threshold = models.FloatField(
+        default=0.5,
+        validators=[MinValueValidator(0.0), MaxValueValidator(1.0)],
+    )
+    min_parallel_observations = models.PositiveIntegerField(default=1)
+    cluster_by_ot = models.BooleanField(default=False)
+    view_mode = models.CharField(
+        max_length=8,
+        choices=[("graph", "Graph"), ("table", "Table"), ("log", "Log")],
+        default="graph",
+    )
+
+
+class ResourceProfilingComponent(DashboardComponent):
+    """Dashboard widget for the resource profiling (organizational mining) explorer.
+
+    The fields preselect the settings the explorer opens with; they are not
+    editable from the dashboard's view mode. Type and feature-group
+    selections are JSON lists.
+
+    ``show_controls`` is retained so older saved layouts still load, but
+    nothing reads it: the view mode has no settings panel to show.
+    """
+    show_controls = models.BooleanField(default=True)
+    automatic_loading = models.BooleanField(default=False)
+    resource_types = models.JSONField(default=list, blank=True)
+    business_object_types = models.JSONField(default=list, blank=True)
+    # Feature groups that enter distance/MDS/clustering; empty = activity fractions.
+    feature_groups = models.JSONField(default=list, blank=True)
+    # Feature groups computed for tooltips only.
+    tooltip_feature_groups = models.JSONField(default=list, blank=True)
+    compute_clusters = models.BooleanField(default=True)
+    cluster_method = models.CharField(
+        max_length=16,
+        choices=[("kmeans", "K-Means"), ("agglomerative", "Agglomerative"), ("hdbscan", "HDBSCAN")],
+        default="hdbscan",
+    )
+    n_clusters = models.PositiveIntegerField(default=3)
+    min_cluster_size = models.PositiveIntegerField(default=2)
+    distance_metric = models.CharField(
+        max_length=16,
+        choices=[("euclidean", "Euclidean"), ("hellinger", "Hellinger")],
+        default="euclidean",
+    )
+    view_mode = models.CharField(
+        max_length=8,
+        choices=[("graph", "Graph"), ("table", "Table")],
+        default="graph",
+    )
+    # Look of the resources in the graph (style settings of the dashboard widget).
+    point_size = models.CharField(
+        max_length=8,
+        choices=[("small", "Small"), ("medium", "Medium"), ("large", "Large")],
+        default="medium",
+    )
+    transparent_points = models.BooleanField(default=False)
+
+
+class ProjectComponentFilter(models.Model):
+    """Per-user, per-project, per-component local filter params."""
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="component_filters")
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="component_filters")
+    component_key = models.CharField(max_length=100)
+    local_filter_params = models.JSONField(default=dict)
+
+    class Meta:
+        unique_together = [("user", "project", "component_key")]
+
+class SeedState(models.Model):
+    """Records one-off provisioning that must never run twice.
+
+    ``migrate`` runs on every desktop-app launch (electron/main.js), so a seed
+    that only checked "does this row exist?" would resurrect itself the moment
+    the user deleted what it created. A row here means that seed has happened;
+    it is written in the same transaction as the objects it describes, and it
+    is deliberately never cleaned up when those objects are deleted.
+
+    Wiping the local database (a full reset) clears this table too, which is
+    the intended way to get a seed to run again. See api/sample_project.py.
+    """
+    key = models.CharField(max_length=64, unique=True)
+    completed_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.key
+
+
+class OCAlignmentComponent(DashboardComponent):
+    """Dashboard widget for object-centric alignments (Liss, 2023).
+
+    Aligns one process execution against a stored OCPN asset. The execution
+    comes either from execution ids stored in an events column
+    (``execution_source="stored"``) or from the connected components of a set
+    of business object types and activities (``"area"``, e.g. a process
+    area). All fields preselect what the view mode opens with.
+    """
+
+    # Show the source / execution picker in the dashboard's view mode.
+    show_controls = models.BooleanField(default=True)
+    # Compute the alignment as soon as the dashboard opens.
+    automatic_loading = models.BooleanField(default=False)
+    model_asset = models.ForeignKey(
+        ProjectAsset,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    execution_source = models.CharField(
+        max_length=8,
+        choices=[("area", "Process area / manual"), ("stored", "Stored executions")],
+        default="area",
+    )
+    execution_column = models.CharField(max_length=200, blank=True, default="")
+    business_object_types = models.JSONField(default=list, blank=True)
+    business_activities = models.JSONField(default=list, blank=True)
+    execution_id = models.CharField(max_length=500, blank=True, default="")
+    max_states = models.PositiveIntegerField(default=200_000)
+    timeout_s = models.FloatField(default=60.0)
+    show_silent_moves = models.BooleanField(default=False)

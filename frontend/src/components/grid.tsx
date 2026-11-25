@@ -31,6 +31,7 @@ import {
 import { toast } from "sonner"
 import { TOUR_IDS } from "@/tour/tourIds"
 import FilterChipStack from "@/components/FilterChipStack";
+import { useIsMobile } from "@/hooks/use-mobile";
 // Type-safe layout items
 // Removed initialWidgets - grid starts empty now
 
@@ -71,9 +72,19 @@ const layoutFingerprint = (layout: LayoutFingerprintItem[]): string =>
 
 const GridContent: React.FC = () => {
   const { getLayout: getGridLayout, loadLayout, resetGrid } = useGrid();
-  const { viewMode, setViewMode, registerNavigationGuard } =
-    useContext(DashboardContext);
+  const {
+    viewMode,
+    setViewMode,
+    registerNavigationGuard,
+    registerUnsavedChangesProbe,
+  } = useContext(DashboardContext);
   const { isEditMode, setIsEditMode } = useGridMode();
+  // A phone shows the dashboard as one stacked column. Editing there would
+  // save that column as the dashboard's layout, so it is view-only.
+  const isMobile = useIsMobile();
+  useEffect(() => {
+    if (isMobile) setIsEditMode(false);
+  }, [isMobile, setIsEditMode]);
 
   // Extract dashboard ID when in dashboard mode
   const selectedDashboard = viewMode.type === 'dashboard' ? viewMode.id : null;
@@ -119,6 +130,14 @@ const GridContent: React.FC = () => {
     });
     return () => registerNavigationGuard(null);
   }, [isEditMode, registerNavigationGuard, hasUnsavedChanges]);
+
+  // Lets the sidebar's Export say when it is about to write the last saved
+  // layout rather than what is on screen.
+  useEffect(() => {
+    if (!isEditMode || !registerUnsavedChangesProbe) return;
+    registerUnsavedChangesProbe(hasUnsavedChanges);
+    return () => registerUnsavedChangesProbe(null);
+  }, [isEditMode, registerUnsavedChangesProbe, hasUnsavedChanges]);
 
   useEffect(() => {
 
@@ -223,7 +242,10 @@ const GridContent: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-screen  overflow-hidden">
+    // Fills the page's content area (as tall as the window, see
+    // ProcessOverview) as its flex child: the top bar stays, only the grid
+    // below it scrolls.
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="flex items-center gap-3 px-4 p-2 border-b bg-background" style={{ minHeight: 60 }}>
         <SidebarTrigger className="shrink-0" style={{ width: 36, height: 36 }} />
         <div className="w-px h-7 bg-border shrink-0" />
@@ -251,7 +273,7 @@ const GridContent: React.FC = () => {
               <span className="sr-only">Leave edit mode</span>
             </Button>
           </>
-        ) : (
+        ) : isMobile ? null : (
           <Button
             variant="ghost"
             size="icon"
@@ -265,9 +287,8 @@ const GridContent: React.FC = () => {
         )}
 
       </div>
-      <div className="flex flex-row flex-grow overflow-hidden" data-tour-id={TOUR_IDS.DASHBOARD_GRID}>
-        
-        <div className="flex-grow overflow-auto">
+      <div className="flex min-h-0 flex-row flex-grow overflow-hidden" data-tour-id={TOUR_IDS.DASHBOARD_GRID}>
+        <div className="min-h-0 flex-grow overflow-auto">
           <GridContainer>
             <DashboardGrid />
           </GridContainer>
@@ -308,7 +329,10 @@ const Grid: React.FC = () => {
   const { viewMode } = useContext(DashboardContext);
   const dashboardId = viewMode.type === 'dashboard' ? viewMode.id : null;
   return (
-  <SidebarInset>
+  // Limited to the page's content area (min-h-0): by default a flex child
+  // grows to its content, and the whole dashboard would be taller than the
+  // window — then the bar scrolls away with it instead of the grid scrolling.
+  <SidebarInset className="min-h-0 overflow-hidden">
     <GridProvider selectedFile={selectedFile} dashboardId={dashboardId}>
       <GridContent />
     </GridProvider>

@@ -26,14 +26,20 @@ from .event_log import EventLogViewSet
 from .misc import (
     cache_clear,
     cache_stats,
+    component_filters,
     delete_user_data,
     greeting,
     health_check,
+    job_cancel,
+    jobs_status,
+    upload_limits,
     user_settings,
 )
-from .ocdfg import NewOCDFGViewSet
+from .ocdfg import NewOCDFGFlowsView, NewOCDFGViewSet, OCDFGBlockStructureView
 from .occn import OCCNViewSet, _occn_base_cache
+from .ochandover import event_log_table, ochandover, profile_matrix
 from .playout import playout, playout_export_ocel
+from .project_settings import project_view_settings
 from .variants import _layout_shim, variants
 
 __all__ = [
@@ -42,16 +48,26 @@ __all__ = [
     "ImageAssetViewSet",
     "DashboardViewSet",
     "NewOCDFGViewSet",
+    "NewOCDFGFlowsView",
+    "OCDFGBlockStructureView",
     "OCCNViewSet",
     "variants",
+    "ochandover",
+    "profile_matrix",
+    "event_log_table",
     "playout",
     "playout_export_ocel",
+    "project_view_settings",
     "greeting",
     "health_check",
     "delete_user_data",
     "cache_stats",
     "cache_clear",
+    "upload_limits",
     "user_settings",
+    "jobs_status",
+    "job_cancel",
+    "component_filters",
     # Private helpers re-exported for tests and signals that reference
     # ``api.views.<name>`` directly.
     "_OCEL_DB_REGISTRY",

@@ -7,10 +7,20 @@ totem_lib/src/totem_lib/ocvariantsFromCCvariants.py
 frontend/src/react_component/oldVariantsExplorer.tsx
 .gitignore
 *.md
+!.claude/**/*.md
+!totem_lib/evaluation/results/*.md
+totem_lib/evaluation/results/*.json
+!docs/RELEASING.md
 !docs/MODEL_ASSETS.md
 !docs/OCCN_REPLAY_FITNESS.md
 !docs/RESOURCE_AWARE_VARIANTS.md
+!docs/LARGE_LOGS.md
+!docs/DOCKER.md
 !docs/EDGE_CASE_TAXONOMY.md
+!docs/ORGANIZATIONAL_MINING.md
+!docs/OC_ALIGNMENTS.md
+!docs/Quality_Assurance_Report.md
+!docs/user-guide/*.md
 !totem_lib/test_data/edge_cases/README.md
 !.claude/**/*.md
 !backend/assistant/knowledge/*.md
@@ -266,6 +276,9 @@ totem_lib/test_data/large/*
 
 backend/cache/*
 
+# DuckDB scratch directories, created next to a .duckdb file while it is open
+*.duckdb.tmp/
+
 # ====================
 # Claude Code
 # ====================
@@ -274,3 +287,6 @@ Claude_design
 
 # Locally generated Django/JWT signing key (settings._local_secret_key)
 .secret_key
+
+# Benchmark run folders - copy a run elsewhere (or git add -f) to keep it in git
+totem_lib/evaluation/results/runs/

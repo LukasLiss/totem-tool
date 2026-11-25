@@ -938,15 +938,18 @@ function OcdfgEditorInner() {
     }
   }, [applyModel, record, modelName]);
 
-  const handleExport = useCallback(() => {
+  const handleExport = useCallback(async () => {
     // Save in the canonical OC-DFG model format (the backend's spelling of
     // activities and typed edges); the editor's positions, colors and bend
     // points travel in the optional `layout` block.
     try {
       const asset = ocdfgModelToAsset(serializeRef.current());
       const filename = toFilename(modelName, 'ocdfg-model');
-      downloadJson(filename, asset);
-      toast.success(`Saved ${filename}.json`);
+      const outcome = await downloadJson(filename, asset);
+      if (outcome === 'cancelled') return;
+      toast.success(
+        outcome === 'saved' ? `Saved ${filename}.json` : `Downloading ${filename}.json`,
+      );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not save the model.');
     }

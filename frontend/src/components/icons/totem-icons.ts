@@ -135,3 +135,20 @@ export const CausalNetAlert = totemIcon(
   ],
   1.8,
 );
+
+/**
+ * Lucide's CircleDot — the OC Petri Net mark in Analysis — badged. The ring
+ * reaches into the top-right corner, so it is scaled about the bottom-left
+ * corner, like the causal net, to leave room for the badge.
+ */
+const shrinkCircleToCorner = 'translate(0 24) scale(0.75) translate(0 -24)';
+
+export const CircleDotAlert = totemIcon(
+  'circle-dot-alert',
+  [
+    ['circle', { cx: '12', cy: '12', r: '10', transform: shrinkCircleToCorner, key: 'place' }],
+    ['circle', { cx: '12', cy: '12', r: '1', transform: shrinkCircleToCorner, key: 'token' }],
+    ...alertBadge,
+  ],
+  1.8,
+);

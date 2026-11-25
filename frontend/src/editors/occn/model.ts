@@ -1,4 +1,4 @@
-import ELK from 'elkjs/lib/elk.bundled.js';
+import { elkLayout } from '@/utils/elk';
 
 import {
   OCCN_FORMAT,
@@ -263,8 +263,6 @@ export function activityKind(
 // ELK auto layout
 // ---------------------------------------------------------------------------
 
-const elk = new ELK();
-
 export async function elkLayeredPositions(
   items: Array<{ id: string; kind: OccnNodeKind }>,
   links: Array<{ source: string; target: string }>,
@@ -300,7 +298,7 @@ export async function elkLayeredPositions(
         targets: [link.target],
       })),
   };
-  const layouted = await elk.layout(graph);
+  const layouted = await elkLayout(graph);
   // Null prototype: keys are activity names (user data, e.g. "__proto__").
   const positions: Record<string, XY> = Object.create(null);
   for (const child of layouted.children ?? []) {

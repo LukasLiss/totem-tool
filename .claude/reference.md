@@ -10,7 +10,7 @@ Auto-generated reference for the `backend/api` Django app. Read this before writ
 
 | Model | Purpose | Key Fields | Notes |
 |---|---|---|---|
-| `Project` | Top-level container; users share access via M2M | `users` (M2M→User), `name` (≤30 chars), `created_at` | All queries are scoped through `project__users=request.user` for data isolation |
+| `Project` | Top-level container; users share access via M2M | `users` (M2M→User), `name` (≤30 chars), `created_at`, `view_settings` (JSON object, per-view preferences keyed by view) | All queries are scoped through `project__users=request.user` for data isolation |
 | `EventLog` | An uploaded OCEL file | `project` (FK→Project), `file` (FileField), `uploaded_at` | A `post_delete` signal (`signals.py`) removes the file from disk when the row is deleted. Creating an EventLog via the API auto-creates a Project named `{slugify(filename)}_{username}` |
 | `ProjectAsset` | Stored model assets (TOTeM / OCCN JSON) | `project` (FK), `name` (≤100 chars), `asset_type` (TextChoices: `TOTEM`, `OCCN`), `content_json` (JSONField), `metadata` (JSONField, default `{}`), `created_by` (FK→User, SET_NULL), `created_at`, `updated_at` | `UniqueConstraint(project, name)` named `unique_project_asset_name`; index on `(project, asset_type)` |
 | `Dashboard` | A named dashboard inside a project | `project` (FK), `name` (≤30), `order_in_project` (int), `created_at` | `order_in_project` is auto-assigned as `max+1` in `DashboardSerializer.create()` when omitted |
@@ -39,7 +39,8 @@ Subclasses (each adds component-specific config fields):
 | `LogStatisticsComponent` | `show_num_events`, `show_num_activities`, `show_num_objects`, `show_num_object_types` (all default True), `show_earliest_timestamp`, `show_newest_timestamp`, `show_duration` (default False) | `"LogStatisticsComponent"` |
 | `OCDFGComponent` | `show_controls` (True), `initial_interaction_locked` (True) | `"OCDFGComponent"` |
 | `OCDottedChartComponent` | `file_id`, `x_axis` ("time"), `y_axis` ("activity"), `color_by` ("activity"), `shape_by` ("none"), `row_order` ("first_occurrence"), `max_points` (10000), `show_minimap` (True), `show_controls` (True) | `"OCDottedChartComponent"` |
-| `NewOCDFGComponent` | `show_controls` (True), `initial_interaction_locked` (True), `layout_direction` (choices `TB`/`LR`, default `TB`) | `"NewOCDFGComponent"` (also matches `"NewOCDFGVariantsComponent"`) |
+| `NewOCDFGComponent` | `show_controls` (True), `initial_interaction_locked` (True), `layout_direction` (choices `TB`/`LR`, default `TB`; default flow direction of the layout), `layout_options` (JSON, null = default layout) | `"NewOCDFGComponent"` (also matches `"NewOCDFGVariantsComponent"`) |
+| `OCAlignmentComponent` | `show_controls`, `automatic_loading`, `model_asset` (FK→ProjectAsset OCPN, SET_NULL), `execution_source` (`area`/`stored`), `execution_column`, `business_object_types` / `business_activities` (JSON lists), `execution_id`, `max_states`, `timeout_s`, `show_silent_moves` | `"OCAlignmentComponent"` |
 | `OCCNComponent` | `relative_occurrence_threshold` (FloatField 0..1, validators MinValueValidator(0.0)/MaxValueValidator(1.0)), `show_controls` (True), `initial_interaction_locked` (True), `layout_direction` (default `LR`), `object_types` (TextField, comma-separated) | `"OCCNComponent"` |
 
 ### Upload path helpers
@@ -100,13 +101,22 @@ Subclasses (each adds component-specific config fields):
 | `GET /api/greeting/` | `greeting` | `IsAuthenticated` |
 | `GET /api/ocdfg/?file_id=` | `OCDFGViewSet` | `IsAuthenticated` |
 | `GET /api/new-ocdfg/?file_id=` | `NewOCDFGViewSet` | `IsAuthenticated` |
+| `GET /api/ocdfg-block-structure/?file_id=` | `OCDFGBlockStructureView` | `IsAuthenticated` — inductive-miner process tree per object type (OC-DFG layout option "Inductive miner (log)") |
+| `GET/PUT /api/projects/<project_id>/view-settings/<key>/` | `project_view_settings` | `IsAuthenticated` — one entry of `Project.view_settings` (e.g. the analysis OC-DFG layout under `ocdfg-variants`) |
+| `PATCH /api/dashboard/<pk>/ocdfg_layout/` | `DashboardViewSet.ocdfg_layout` | `IsAuthenticated` — layout options of the OC-DFG widget at grid position `{x, y}` while viewing |
 | `GET /api/occn/?file_id=` | `OCCNViewSet` | `IsAuthenticated` |
 | `GET /api/variants/?file_id=` | `variants` | `IsAuthenticated` |
 | `GET /api/files/<pk>/event_columns/` | `views_process_executions.event_columns` | `IsAuthenticated` |
 | `POST /api/files/<pk>/process_executions/` | `views_process_executions.process_executions` | `IsAuthenticated` |
+| `POST /api/files/<pk>/oc_alignment_executions/` | `EventLogViewSet` action (mixin in `views/oc_alignment.py`) | `IsAuthenticated` |
+| `POST /api/files/<pk>/oc_alignment/` | `EventLogViewSet` action (mixin in `views/oc_alignment.py`) | `IsAuthenticated` |
+| `POST /api/files/<pk>/oc_alignment_batch/` | `EventLogViewSet` action (mixin in `views/oc_alignment.py`) | `IsAuthenticated` |
 | `POST /api/playout/` | `playout` | `IsAuthenticated` |
 | `POST /api/playout/export-ocel/` | `playout_export_ocel` | `IsAuthenticated` |
 | `DELETE /api/delete-data/` | `delete_user_data` | `IsAuthenticated` |
+| `GET /api/jobs/?ids=a,b` | `jobs_status` | `IsAuthenticated` — progress of cancellable computations (see §5) |
+| `POST /api/jobs/<job_id>/cancel/` | `job_cancel` | `IsAuthenticated` |
+| `GET /api/files/<pk>/suggested_time_window/?max_events=` | `EventLogViewSet.suggested_time_window` | `IsAuthenticated` — time range of the first N events (large-log auto filter) |
 
 ---
 
@@ -174,6 +184,8 @@ with _with_ocel_db(user_file) as db:
 - `_get_or_load_ocel_db` uses double-checked locking for first load.
 - The lock `_with_ocel_db` takes first is the per-file `_OCEL_DB_LOCKS[pk]` (an RLock that outlives the connection object); `db.lock` is taken inside it. `_rewrite_ocel_db_file(user_file, mutate)` uses that to close the read-only registry connection, let `mutate(path)` write to the DuckDB file (e.g. `write_event_columns_to_file`) and reopen — DuckDB refuses a read-write open while a read-only handle exists in the process.
 - Helpers: `_object_types(db)` (sorted distinct types), `_optional_int(value)`, `_layout_shim(db)` (SimpleNamespace with `obj_type_map` for `calculate_layout`).
+- **Cancellable computations** (`api/jobs.py`): wrap the algorithm in `with job_scope(request, "Label") as job:` and pass the job on — `_with_ocel_db(user_file, job)` interrupts the DuckDB statement when the client cancels, and `job.report` is the `progress=` callback of the totem_lib algorithms (`totem_lib.progress`). Catch `JobCancelled` before the generic `except Exception` and return `cancelled_response()` (HTTP 499, `{"code": "cancelled"}`). The client sends the job id in `X-Totem-Job-Id` (allowed in `CORS_ALLOW_HEADERS`); `GET /api/jobs/?ids=` and `POST /api/jobs/<id>/cancel/` read and stop it. Full description: `docs/LARGE_LOGS.md`.
+- Load-time metadata that must never wait for the lock lives beside the connection: `_OCEL_OBJECT_TYPES_REGISTRY` (object types with counts) and `_OCEL_TIME_WINDOW_REGISTRY` (first `LARGE_LOG_EVENT_LIMIT` events' time range, served by `suggested_time_window`).
 
 ### OCCN caching
 - `discover_occn` is expensive; cache threshold-0 base nets keyed `(file_id, object_types_tuple)` in `_occn_base_cache` (OrderedDict, max 4 entries, LRU via `move_to_end`), guarded by `_occn_cache_lock`. Apply `apply_relative_occurrence_threshold(t)` per request.
@@ -190,6 +202,8 @@ with _with_ocel_db(user_file) as db:
 - `occn_conformance` / `occn_replay_unit_detail` additionally accept `replay_unit_strategy="stored_column"` + `execution_column`, and `restrict_to_model_object_types` (detail needs `asset_id` then).
 - `ocdfg` → `{"dfg": <networkx node_link_data serialized with edges=\"links\">, "all_nodes": [...], optional "filter_error", "trace_variants"}`
 - `new-ocdfg` → `{"dfg": {...}, "all_nodes": [...], "variant_counts": {...}}`
+- `view-settings` → `{"key", "value"}`; `value` is a JSON object (≤16 KB) or null, stored opaquely — the frontend validates it on read (`ocdfg-layout/preferences.ts`, `{version: 1, options}`) and falls back to its defaults. `ocdfg_layout` takes `{x, y, layout_options}` (404 when no OC-DFG widget is at that position; component ids change with every `save_layout`, positions do not).
+- `ocdfg-block-structure` → `{"trees": {object_type: {"operator": "sequence"|"xor"|"parallel"|"loop"|null, "label", "children": [...]}}}` (from `totem_lib.discover_process_trees_db`; optional `object_types`, `timeout_s` 1..300 → 408 `code: "timeout"`; cached per file/types/filter)
 - `occn` → serialized OCCN dict from `totem_lib.serialize_occn`
 - `statistics` → `{"num_events", "num_unique_activities", "num_objects", "num_object_types", "earliest_timestamp", "newest_timestamp"}`
 - `playout` → camelCase `PlayoutResult` + `effectiveActivityLimits`: `{"variants": [{"events": [{"activity", "visible", "objects": {type: [ids]}}], "objectCounts": {type: n}}], "variantCount", "completedRuns", "statesExplored", "elapsedMs", "exhaustive", "timedOut", "stateCapHit", "approximateDedup", "warnings": [...], "effectiveActivityLimits": {key: n}}`. Hitting the timeout or state cap is a normal **200** (count is then a lower bound, communicated via the flags), only invalid input is a 400. For OCCNs, `START_<type>` / `END_<type>` pseudo-activities are auto-limited to the object count of that type (see `effectiveActivityLimits` in the response). OCPN silent transitions use budget key `τ:<transition id>`.
@@ -209,6 +223,7 @@ Custom function-based views in the `api/views/` package format error responses w
 | 400 | Missing/invalid query params (`Missing ?file_id`), validation failure, bad enums, malformed body, ambiguous input |
 | 404 | Object not found **or access denied** (never leak existence) |
 | 408 | Variant computation `TimeoutError` (includes `code: "timeout"`, `timeout_s`, `hint`) |
+| 499 | Computation cancelled by the client through `/api/jobs/<id>/cancel/` (`code: "cancelled"`) |
 | 500 | Unexpected computation failure (`f"...: {e}"`); caught broadly around `totem_lib` calls |
 | 204 | Successful DELETE (DRF default) |
 | 201 | Successful POST create |
@@ -279,6 +294,7 @@ return Response({"error": f"Invalid iso '{iso}'. Allowed: {sorted(_VALID_ISOS)}"
 
 - `docs/MODEL_ASSETS.md` — canonical TOTeM v1 / OCCN v1 model-asset JSON formats, `/api/assets/` behavior, and the 7-step checklist for adding a new asset type.
 - `docs/MODEL_EDITORS.md` — the three visual editors (TOTeM, OCCN, OCPN) and their **editor-side** JSON formats (`format: "totem-model" | "occn" | "ocpn"`) — these are what `/api/playout/` receives in `model`, distinct from the canonical asset-store format.
+- `docs/OC_ALIGNMENTS.md` — object-centric alignments (Liß 2023): search, heuristics, limits, endpoints, dashboard widget.
 - `docs/RESOURCE_AWARE_VARIANTS.md` — resource-aware extraction, stored process-execution columns, OCCN conformance on stored columns, process-area filter action.
 - `docs/PLAYOUT.md` — playout semantics (canonical ordering, exact vs. lower/upper-bound counts, silent-transition budgets), backend request/response contract, and where the engine lives in `totem_lib/playout/`.
 - `docs/OCCN_PRECISION.md` — math behind the OCCN context-based precision metric.

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
+import { getEffectiveFilterConfig } from "@/store/filterStore";
 
 import {
   axisOptionToParam,
@@ -22,6 +23,7 @@ interface UseDottedChartDataArgs {
   debounceMs?: number;
   filterEnabled?: boolean;
   effectiveFilterVersion?: number;
+  localFilterParams?: Record<string, string>;
 }
 
 export function useDottedChartData({
@@ -37,6 +39,7 @@ export function useDottedChartData({
   debounceMs = 300,
   filterEnabled = true,
   effectiveFilterVersion = 0,
+  localFilterParams,
 }: UseDottedChartDataArgs) {
   const [data, setData] = useState<DottedChartResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -55,8 +58,9 @@ export function useDottedChartData({
         viewport,
         sampleSeed,
         effectiveFilterVersion,
+        localFilterParams,
       }),
-    [fileId, xAxis, yAxis, colorBy, shapeBy, rowOrder, maxPoints, viewport, sampleSeed, effectiveFilterVersion]
+    [fileId, xAxis, yAxis, colorBy, shapeBy, rowOrder, maxPoints, viewport, sampleSeed, effectiveFilterVersion, localFilterParams]
   );
 
   useEffect(() => {
@@ -86,9 +90,14 @@ export function useDottedChartData({
         addParam(params, "row_max", viewport?.row_max);
         addParam(params, "sample_seed", sampleSeed);
 
+        const filterConfig = getEffectiveFilterConfig(localFilterParams, filterEnabled);
+        if (filterConfig._noResults) { setData(null); return; }
+        if (filterConfig.params) {
+          Object.entries(filterConfig.params).forEach(([k, v]) => params.set(k, v));
+        }
         const response = await axios.get<DottedChartResponse>(
           `/api/files/${fileId}/oc_dotted_chart/?${params.toString()}`,
-          { signal: controller.signal, _skipGlobalFilter: !filterEnabled }
+          { signal: controller.signal, _skipGlobalFilter: filterConfig._skipGlobalFilter }
         );
         setData(response.data);
       } catch (err) {

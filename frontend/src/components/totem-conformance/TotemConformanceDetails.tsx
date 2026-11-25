@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type KeyboardEvent } from "react";
 import { ArrowRight, CircleX, GitBranch, Workflow } from "lucide-react";
 
 import type {
@@ -149,6 +149,15 @@ function RelationDetails({
   activeDimension: ConformanceDimension;
 }) {
   const [direction, setDirection] = useState<"forward" | "reverse">("forward");
+  // The row picked in the metric table decides which distribution is shown
+  // below it. It starts at, and keeps following, the dimension chosen above
+  // the canvas, but can be changed here without touching that choice.
+  const [detailDimension, setDetailDimension] = useState(activeDimension);
+  const [followedDimension, setFollowedDimension] = useState(activeDimension);
+  if (followedDimension !== activeDimension) {
+    setFollowedDimension(activeDimension);
+    setDetailDimension(activeDimension);
+  }
   const directional = getDirectionalTypePairMetrics(
     lookup,
     selection.source,
@@ -177,7 +186,8 @@ function RelationDetails({
       {metrics ? (
         <MetricTable
           rows={relationMetricRows(metrics)}
-          activeDimension={activeDimension}
+          activeDimension={detailDimension}
+          onSelectDimension={setDetailDimension}
           showModelRelation
         />
       ) : (
@@ -188,9 +198,9 @@ function RelationDetails({
 
       <Separator />
       <HistogramDetails
-        key={`${activeDimension}:${source}:${target}`}
+        key={`${detailDimension}:${source}:${target}`}
         lookup={lookup}
-        activeDimension={activeDimension}
+        activeDimension={detailDimension}
         source={source}
         target={target}
       />
@@ -255,10 +265,13 @@ interface MetricRow {
 function MetricTable({
   rows,
   activeDimension,
+  onSelectDimension,
   showModelRelation = false,
 }: {
   rows: MetricRow[];
   activeDimension: ConformanceDimension;
+  /** Makes the rows selectable, e.g. to pick the distribution shown below. */
+  onSelectDimension?: (dimension: ConformanceDimension) => void;
   showModelRelation?: boolean;
 }) {
   return (
@@ -280,8 +293,22 @@ function MetricTable({
               key={row.dimension}
               className={cn(
                 "border-t",
-                row.dimension === activeDimension && "bg-accent/60"
+                row.dimension === activeDimension && "bg-accent/60",
+                onSelectDimension &&
+                  "cursor-pointer hover:bg-accent/40 focus-visible:outline-2 focus-visible:outline-ring"
               )}
+              {...(onSelectDimension && {
+                tabIndex: 0,
+                "aria-selected": row.dimension === activeDimension,
+                title: `Show the ${row.label.toLowerCase()} distribution`,
+                onClick: () => onSelectDimension(row.dimension),
+                onKeyDown: (event: KeyboardEvent) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onSelectDimension(row.dimension);
+                  }
+                },
+              })}
             >
               <td className="truncate px-2 py-2 font-medium" title={row.label}>
                 {getDimensionDefinition(row.dimension).shortLabel}

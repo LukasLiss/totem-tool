@@ -34,11 +34,28 @@ export function linkedQueryOf(node: SqlWidgetNodeFields): LinkedQuery | null {
     : null;
 }
 
+/** A query result to hand to column discovery, e.g. from a run in the SQL editor. */
+export interface QueryResultSample {
+  columns: string[];
+  rows: Record<string, unknown>[];
+}
+
 export interface ColumnDiscovery {
   columns: string[];
+  /** The first row(s) of the last result, e.g. for a KPI preview. */
+  rows: Record<string, unknown>[];
+  /** Which query (see discoveryKey) `columns` and `rows` came from; null before any result. */
+  resultFor: string | null;
   loading: boolean;
   error: string | null;
   discover: () => Promise<void>;
+  /** Takes a result the user already ran elsewhere instead of querying again. */
+  accept: (result: QueryResultSample, query: string, queryAssetId?: number | null) => void;
+}
+
+/** Identifies a query (local text or linked stored query) for ColumnDiscovery.resultFor. */
+export function discoveryKey(query: string, queryAssetId?: number | null): string {
+  return queryAssetId ? `asset:${queryAssetId}` : `sql:${query}`;
 }
 
 /** column discovery: run the (local or linked) query once with LIMIT 1 */
@@ -48,6 +65,8 @@ export function useColumnDiscovery(
   queryAssetId: number | null | undefined
 ): ColumnDiscovery {
   const [columns, setColumns] = useState<string[]>([]);
+  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
+  const [resultFor, setResultFor] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -66,19 +85,35 @@ export function useColumnDiscovery(
       if (!sql.trim()) {
         setError("Enter a query first.");
         setColumns([]);
+        setRows([]);
+        setResultFor(null);
         return;
       }
       const page = await executeQuery(fileId, sql, { offset: 0, limit: 1 });
       setColumns(page.columns);
+      setRows(page.data);
+      setResultFor(discoveryKey(query, queryAssetId));
     } catch (err) {
       setColumns([]);
+      setRows([]);
+      setResultFor(null);
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
   }, [fileId, query, queryAssetId]);
 
-  return { columns, loading, error, discover };
+  const accept = useCallback(
+    (result: QueryResultSample, resultQuery: string, resultAssetId?: number | null) => {
+      setColumns(result.columns);
+      setRows(result.rows);
+      setResultFor(discoveryKey(resultQuery, resultAssetId));
+      setError(null);
+    },
+    []
+  );
+
+  return { columns, rows, resultFor, loading, error, discover, accept };
 }
 
 /** first column whose values are all numeric (or null); "" when none */

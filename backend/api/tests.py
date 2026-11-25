@@ -1,10 +1,12 @@
 import copy
 import json
 import os
+import re
 import shutil
 import tempfile
 import time
 from contextlib import nullcontext
+from pathlib import Path
 from unittest.mock import patch
 
 import polars as pl
@@ -13,9 +15,20 @@ from django.contrib.auth.models import User
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 from rest_framework import status
 from rest_framework.test import APIClient, APIRequestFactory, force_authenticate
+
+from api.dashboard_bundle import (
+    DASHBOARD_BUNDLE_SCHEMA,
+    DASHBOARD_BUNDLE_VERSION,
+    KNOWN_COMPONENT_NAMES,
+    MAX_BUNDLE_COMPONENTS,
+    links_to_ids,
+    links_to_names,
+    unique_dashboard_name,
+    validate_dashboard_bundle_dict,
+)
 from totem_lib import (
     CONNECTED_COMPONENTS_REPLAY_STRATEGY,
     LEADING_OBJECT_REPLAY_STRATEGY,
@@ -42,11 +55,32 @@ from totem_lib.process_areas import (
 )
 
 from .cache_utils import RESULTS_CACHE, get_cached_result, make_cache_key
+from .limits import ProjectLimitReached, create_project
 from .lru_filecache import LRUFileBasedCache
-from .models import Dashboard, EventLog, ProcessAreaComponent, Project, ProjectAsset
+from .models import (
+    Dashboard,
+    EventLog,
+    ImageAsset,
+    ImageComponent,
+    KpiComponent,
+    NumberofEventsComponent,
+    OCAlignmentComponent,
+    OCDottedChartComponent,
+    OCPNFlattenedReplayComponent,
+    ProcessAreaComponent,
+    Project,
+    ProjectAsset,
+    SqlQueryComponent,
+    TextBoxComponent,
+)
 from .serializers import ProjectAssetSerializer
 from .views import _parse_process_area_params, _process_area_cache_params, EventLogViewSet
-from .views._ocel_db import _OCEL_DB_REGISTRY, _OCEL_DB_REGISTRY_LOCK
+from .views._ocel_db import (
+    _OCEL_DB_REGISTRY,
+    _OCEL_DB_REGISTRY_LOCK,
+    _close_ocel_db,
+    _with_ocel_db,
+)
 
 
 def valid_totem_content_json():
@@ -2972,6 +3006,106 @@ class EventLogConversionErrorTests(TestCase):
         self.assertEqual(EventLog.objects.count(), 0)
 
 
+EXAMPLE_LOGS = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "totem_lib", "test_data", "small"
+)
+
+
+class EventLogDuplicateUploadTests(TestCase):
+    """Uploading a file whose converted name is already taken.
+
+    Django only de-duplicates the uploaded `.sqlite`/`.json` name, and that
+    file is gone once converted, so a second upload of the same file used to
+    convert into the first log's `.duckdb`, fail, and then delete it.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="dup-user")
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+        self.media = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.media, ignore_errors=True)
+        media_override = self.settings(MEDIA_ROOT=self.media)
+        media_override.enable()
+        self.addCleanup(media_override.disable)
+
+    def _upload(self, name, content=None):
+        if content is None:
+            with open(os.path.join(EXAMPLE_LOGS, name), "rb") as handle:
+                content = handle.read()
+        response = self.client.post(
+            "/api/files/", {"file": SimpleUploadedFile(name, content)}, format="multipart"
+        )
+        if response.status_code == status.HTTP_201_CREATED:
+            # Registered on upload; it holds the file open until closed.
+            self.addCleanup(_close_ocel_db, int(response.data["id"]))
+        return response
+
+    def _assert_loads(self, event_log):
+        path = event_log.file.path
+        self.assertTrue(os.path.exists(path), path)
+        db = OcelDuckDB.load(path, read_only=True)
+        try:
+            return db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+        finally:
+            db.close()
+
+    def test_uploading_the_same_file_twice_keeps_both_logs(self):
+        first = self._upload("container_logistics.sqlite")
+        second = self._upload("container_logistics.sqlite")
+
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED, first.data)
+        self.assertEqual(second.status_code, status.HTTP_201_CREATED, second.data)
+        first_log = EventLog.objects.get(pk=first.data["id"])
+        second_log = EventLog.objects.get(pk=second.data["id"])
+        self.assertEqual(first_log.file.name, "container_logistics.duckdb")
+        self.assertNotEqual(first_log.file.name, second_log.file.name)
+        self.assertTrue(second_log.file.name.endswith(".duckdb"))
+        events = self._assert_loads(first_log)
+        self.assertGreater(events, 0)
+        self.assertEqual(self._assert_loads(second_log), events)
+        # Each upload's registered connection serves its own log.
+        for event_log in (first_log, second_log):
+            with _with_ocel_db(event_log) as db:
+                count = db.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+            self.assertEqual(count, events)
+        # Only the two converted logs are left behind: no uploaded originals
+        # and no conversion scratch space.
+        self.assertCountEqual(
+            os.listdir(self.media), [first_log.file.name, second_log.file.name]
+        )
+
+    def test_a_failed_upload_leaves_the_log_it_collides_with_alone(self):
+        first = self._upload("resource_aware_orders.json")
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED, first.data)
+        first_log = EventLog.objects.get(pk=first.data["id"])
+
+        broken = self._upload("resource_aware_orders.json", b"{not json")
+
+        self.assertEqual(broken.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(list(EventLog.objects.all()), [first_log])
+        self.assertEqual(Project.objects.count(), 1)
+        self.assertGreater(self._assert_loads(first_log), 0)
+        self.assertEqual(os.listdir(self.media), [first_log.file.name])
+
+    def test_a_name_taken_after_it_was_checked_is_not_reused(self):
+        from django.core.files.storage import default_storage
+
+        from .views.event_log import _claim_storage_name
+
+        open(os.path.join(self.media, "log.duckdb"), "wb").close()
+        # As if another upload claimed the name between the check and ours.
+        answers = iter(["log.duckdb", "log_2.duckdb"])
+        with patch.object(
+            default_storage, "get_available_name", side_effect=lambda *a, **k: next(answers)
+        ):
+            name, path = _claim_storage_name(default_storage, "log.duckdb")
+
+        self.assertEqual(name, "log_2.duckdb")
+        self.assertEqual(path, os.path.join(self.media, "log_2.duckdb"))
+        self.assertTrue(os.path.exists(path))
+
+
 class ProcessAreaDiscoveryApiTests(TestCase):
     """
     `discover_process_areas` — the advanced (thesis section 4.1) layering
@@ -3077,6 +3211,7 @@ class ProcessAreaDiscoveryApiTests(TestCase):
                 "type_relations",
                 "all_event_types",
                 "object_type_to_event_types",
+                "relation_stats",
             },
         )
         layers = response.data["layers"]
@@ -3086,6 +3221,49 @@ class ProcessAreaDiscoveryApiTests(TestCase):
             for area in layer["areas"]:
                 self.assertIn("objectTypes", area)
                 self.assertIn("eventTypes", area)
+
+    def test_relation_stats_cover_both_directions_of_every_pair(self):
+        totem = self._totem()
+        totem.h_temporal_relations = {
+            ("Item", "Order"): {"total": 4, "D": 4, "P": 4},
+            ("Order", "Item"): {"total": 4, "Di": 4, "P": 4},
+        }
+        totem.h_event_cardinalities = {
+            ("Item", "Order"): {"total": 5, "1": 5, "0...1": 5, "0...*": 5},
+        }
+        totem.h_log_cardinalities = {
+            ("Order", "Item"): {"total": 2, "1": 1, "1..*": 2, "0...*": 2},
+        }
+        url = f"/api/files/{self.event_log.pk}/discover_process_areas/"
+        with (
+            patch("api.views.event_log._with_ocel_db", return_value=nullcontext(object())),
+            patch("api.views.event_log.totemDiscovery_db", return_value=totem),
+            patch("api.views.event_log.prepare_db", return_value=self._aggregates()),
+        ):
+            response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        stats = {
+            (entry["from"], entry["to"]): entry
+            for entry in response.data["relation_stats"]
+        }
+        self.assertEqual(
+            set(stats),
+            {
+                ("Item", "Order"),
+                ("Order", "Item"),
+                ("Order", "Worker"),
+                ("Worker", "Order"),
+            },
+        )
+        item_order = stats[("Item", "Order")]
+        self.assertEqual(item_order["counts"]["temporal"], {"total": 4, "D": 4, "P": 4})
+        self.assertEqual(item_order["strict"]["temporal"], "D")
+        self.assertEqual(item_order["strict"]["event_cardinality"], "1")
+        self.assertEqual(stats[("Order", "Item")]["strict"]["temporal"], "Di")
+        # Only half of the orders have exactly one item, so tau = 1 needs 1..*.
+        self.assertEqual(stats[("Order", "Item")]["strict"]["log_cardinality"], "1..*")
+        self.assertEqual(stats[("Order", "Worker")]["counts"]["temporal"], {})
 
     def test_resources_land_on_the_higher_layers(self):
         # alpha weights the resource force. Turning it up is exactly how a user
@@ -3119,7 +3297,7 @@ class ProcessAreaDiscoveryApiTests(TestCase):
             ("w_temporal", "0.5"),
             ("w_cardinality", "0.5"),
             ("w_divergence", "0.5"),
-            ("alpha", "2"),
+            ("alpha", "4"),
             ("beta", "3"),
         ]:
             changed = _parse_process_area_params({query: value})
@@ -3247,6 +3425,784 @@ class DashboardAuthorizationAndLayoutTests(TestCase):
         self.assertEqual(layout.status_code, 200)
         self.assertEqual(layout.data[0]["component_name"], "FilterStackComponent")
         self.assertEqual(layout.data[0]["filter_stack_json"], rules)
+
+
+class TextBoxComponentFormattingTests(TestCase):
+    """Block-level formatting on the Text Box widget (#373): it must survive a
+    save/load round-trip, and every value must be validated down to something
+    renderable rather than trusted or rejected."""
+
+    FORMAT = {
+        "font_size": 32,
+        "font_family": "serif",
+        "font_weight": "bold",
+        "italic": True,
+        "underline": True,
+        "text_align": "center",
+        "vertical_align": "middle",
+        "text_color": "#ffffff",
+        "background_color": "#1e293b",
+        "line_height": 2.0,
+    }
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="text-box-owner")
+        self.project = Project.objects.create(name="TextBoxes")
+        self.project.users.add(self.user)
+        self.dashboard = Dashboard.objects.create(
+            project=self.project, name="D", order_in_project=0
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def _save(self, **props):
+        item = {
+            "x": 0,
+            "y": 0,
+            "w": 2,
+            "h": 2,
+            "component_name": "TextBoxComponent",
+            "text": "Quarterly notes",
+        }
+        item.update(props)
+        return self.client.post(
+            f"/api/dashboard/{self.dashboard.pk}/save_layout/",
+            {"layout": [item]},
+            format="json",
+        )
+
+    def _layout(self):
+        response = self.client.get(f"/api/dashboard/{self.dashboard.pk}/get_layout/")
+        self.assertEqual(response.status_code, 200)
+        return response.data[0]
+
+    def test_every_formatting_option_round_trips(self):
+        self.assertEqual(self._save(**self.FORMAT).status_code, 200)
+        item = self._layout()
+        for key, expected in self.FORMAT.items():
+            self.assertEqual(item[key], expected, key)
+
+    def test_get_layout_exposes_the_new_fields(self):
+        self.assertEqual(self._save().status_code, 200)
+        item = self._layout()
+        for key in self.FORMAT:
+            self.assertIn(key, item)
+
+    def test_defaults_reproduce_the_unformatted_look(self):
+        """A payload from a client that knows nothing about formatting — i.e.
+        every dashboard saved before #373 — must come back unstyled."""
+        self.assertEqual(self._save().status_code, 200)
+        item = self._layout()
+        self.assertEqual(item["font_size"], 14)
+        self.assertEqual(item["font_family"], "sans")
+        self.assertEqual(item["font_weight"], "normal")
+        self.assertFalse(item["italic"])
+        self.assertFalse(item["underline"])
+        self.assertEqual(item["text_align"], "left")
+        self.assertEqual(item["vertical_align"], "top")
+        self.assertEqual(item["text_color"], "#1e293b")
+        self.assertEqual(item["background_color"], "#ffffff")
+        self.assertEqual(item["line_height"], 1.5)
+
+    def test_a_component_created_before_the_migration_still_loads(self):
+        """The model defaults are what backfill existing rows, so a component
+        created without any formatting must render and serialize."""
+        TextBoxComponent.objects.create(
+            dashboard=self.dashboard,
+            x=0,
+            y=0,
+            w=2,
+            h=2,
+            component_name="TextBoxComponent",
+            text="legacy",
+        )
+        item = self._layout()
+        self.assertEqual(item["text"], "legacy")
+        self.assertEqual(item["font_size"], 14)
+        self.assertEqual(item["text_color"], "#1e293b")
+
+    def test_unknown_choices_fall_back_to_the_default(self):
+        response = self._save(
+            font_family="Comic Sans",
+            font_weight="900",
+            text_align="middle",
+            vertical_align="centre",
+        )
+        self.assertEqual(response.status_code, 200)
+        item = self._layout()
+        self.assertEqual(item["font_family"], "sans")
+        self.assertEqual(item["font_weight"], "normal")
+        self.assertEqual(item["text_align"], "left")
+        self.assertEqual(item["vertical_align"], "top")
+
+    def test_a_colour_that_is_not_a_hex_literal_is_replaced(self):
+        """These land in an inline style on every dashboard that shows the
+        component, so nothing but #rgb / #rrggbb is stored."""
+        for bad in [
+            "red",
+            "rgb(0,0,0)",
+            "#12345",
+            "red; background: url(https://example.com/x)",
+            "javascript:alert(1)",
+            "",
+            None,
+            42,
+            {"hex": "#fff"},
+        ]:
+            response = self._save(text_color=bad, background_color=bad)
+            self.assertEqual(response.status_code, 200, bad)
+            item = self._layout()
+            self.assertEqual(item["text_color"], "#1e293b", bad)
+            self.assertEqual(item["background_color"], "#ffffff", bad)
+
+    def test_a_short_hex_colour_is_accepted(self):
+        self.assertEqual(self._save(text_color="#fff").status_code, 200)
+        self.assertEqual(self._layout()["text_color"], "#fff")
+
+    def test_out_of_range_numbers_are_clamped_not_rejected(self):
+        self.assertEqual(self._save(font_size=0, line_height=0).status_code, 200)
+        item = self._layout()
+        self.assertEqual(item["font_size"], 8)
+        self.assertEqual(item["line_height"], 0.5)
+
+        self.assertEqual(self._save(font_size=10000, line_height=99).status_code, 200)
+        item = self._layout()
+        self.assertEqual(item["font_size"], 200)
+        self.assertEqual(item["line_height"], 5.0)
+
+    def test_non_numeric_sizes_fall_back_to_the_default(self):
+        # NaN / Infinity are absent on purpose: DRF's STRICT_JSON parser
+        # rejects them with a 400 before any of this runs. They are covered
+        # directly in TextBoxValidationHelperTests below.
+        for bad in ["abc", None, True, [], {}]:
+            response = self._save(font_size=bad, line_height=bad)
+            self.assertEqual(response.status_code, 200, bad)
+            item = self._layout()
+            self.assertEqual(item["font_size"], 14, bad)
+            self.assertEqual(item["line_height"], 1.5, bad)
+
+    def test_a_numeric_string_is_accepted(self):
+        """The frontend sends numbers, but a number input can round-trip a
+        string through a hand-written payload."""
+        self.assertEqual(self._save(font_size="20", line_height="2").status_code, 200)
+        item = self._layout()
+        self.assertEqual(item["font_size"], 20)
+        self.assertEqual(item["line_height"], 2.0)
+
+    def test_links_round_trip_through_save_and_load(self):
+        sibling = Dashboard.objects.create(
+            project=self.project, name="Sibling", order_in_project=1
+        )
+        doc = {
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "site",
+                 "marks": [{"type": "link", "attrs": {"href": "https://example.com"}}]},
+                {"type": "text", "text": "mail",
+                 "marks": [{"type": "link", "attrs": {"href": "mailto:a@b.com"}}]},
+                {"type": "text", "text": "board",
+                 "marks": [{"type": "dashboardLink",
+                            "attrs": {"dashboardId": sibling.pk}}]},
+            ]}],
+        }
+        self.assertEqual(self._save(rich_text=doc).status_code, 200)
+        runs = self._layout()["rich_text"]["content"][0]["content"]
+        self.assertEqual(
+            [run["marks"][0] for run in runs],
+            [
+                {"type": "link", "attrs": {"href": "https://example.com"}},
+                {"type": "link", "attrs": {"href": "mailto:a@b.com"}},
+                {"type": "dashboardLink", "attrs": {"dashboardId": sibling.pk}},
+            ],
+        )
+
+    def test_a_link_to_another_projects_dashboard_is_dropped(self):
+        """The id has to be in *this* project."""
+        foreign_project = Project.objects.create(name="Theirs")
+        foreign = Dashboard.objects.create(
+            project=foreign_project, name="Theirs", order_in_project=0
+        )
+        doc = {
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "peek",
+                 "marks": [{"type": "dashboardLink",
+                            "attrs": {"dashboardId": foreign.pk}}]},
+            ]}],
+        }
+        self.assertEqual(self._save(rich_text=doc).status_code, 200)
+        run = self._layout()["rich_text"]["content"][0]["content"][0]
+        self.assertEqual(run["text"], "peek")
+        self.assertNotIn("marks", run)
+
+    def test_a_hostile_href_is_dropped_without_losing_the_text(self):
+        doc = {
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [
+                {"type": "text", "text": "click",
+                 "marks": [{"type": "link",
+                            "attrs": {"href": "javascript:alert(1)"}}]},
+            ]}],
+        }
+        self.assertEqual(self._save(rich_text=doc).status_code, 200)
+        item = self._layout()
+        run = item["rich_text"]["content"][0]["content"][0]
+        self.assertEqual(run["text"], "click")
+        self.assertNotIn("marks", run)
+        self.assertEqual(item["text"], "click")
+
+    def test_rich_text_round_trips_through_save_and_load(self):
+        doc = {"type": "doc", "content": [
+            {"type": "paragraph", "attrs": {"textAlign": "center"},
+             "content": [{"type": "text", "text": "bold bit",
+                          "marks": [{"type": "bold"}]}]},
+            {"type": "paragraph",
+             "content": [{"type": "text", "text": "red italic bit",
+                          "marks": [{"type": "italic"},
+                                    {"type": "textStyle",
+                                     "attrs": {"color": "#f43f5e"}}]}]},
+        ]}
+        self.assertEqual(self._save(rich_text=doc).status_code, 200)
+        item = self._layout()
+        self.assertEqual(item["rich_text"], doc)
+
+    def test_plain_text_is_derived_from_the_rich_document(self):
+        """`text` must keep describing what the box shows, for anything that
+        still reads the plain column."""
+        doc = {"type": "doc", "content": [
+            {"type": "paragraph", "content": [{"type": "text", "text": "line one"}]},
+            {"type": "paragraph", "content": [{"type": "text", "text": "line two"}]},
+        ]}
+        self.assertEqual(self._save(text="ignored", rich_text=doc).status_code, 200)
+        self.assertEqual(self._layout()["text"], "line one\nline two")
+
+    def test_a_box_without_rich_text_stores_null_and_keeps_its_plain_text(self):
+        self.assertEqual(self._save(text="just words").status_code, 200)
+        item = self._layout()
+        self.assertIsNone(item["rich_text"])
+        self.assertEqual(item["text"], "just words")
+
+    def test_a_hostile_document_is_rebuilt_rather_than_stored(self):
+        doc = {"type": "doc", "content": [
+            {"type": "script", "content": [{"type": "text", "text": "boom"}]},
+            {"type": "paragraph", "attrs": {"textAlign": "middle"},
+             "content": [{"type": "text", "text": "kept", "marks": [
+                 {"type": "link", "attrs": {"href": "javascript:alert(1)"}},
+                 {"type": "textStyle", "attrs": {"color": "red; background:url(x)"}},
+             ]}]},
+        ]}
+        self.assertEqual(self._save(rich_text=doc).status_code, 200)
+        stored = self._layout()["rich_text"]
+        self.assertEqual([n["type"] for n in stored["content"]], ["paragraph", "paragraph"])
+        self.assertEqual(stored["content"][0]["content"][0]["text"], "boom")
+        run = stored["content"][1]["content"][0]
+        self.assertEqual(run["text"], "kept")
+        self.assertNotIn("marks", run)
+        self.assertNotIn("attrs", stored["content"][1])
+
+    def test_an_oversized_document_is_refused_with_400_not_silently_stripped(self):
+        """Losing all formatting and still being told "saved" is worse than
+        being refused."""
+        from .rich_text import MAX_NODES
+
+        doc = {"type": "doc", "content": [
+            {"type": "paragraph", "content": [{"type": "text", "text": "x"}]}
+            for _ in range(MAX_NODES)
+        ]}
+        response = self._save(rich_text=doc)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("too large", response.data["error"])
+        self.assertEqual(self.dashboard.components.count(), 0)
+
+    def test_junk_in_rich_text_does_not_500(self):
+        for bad in ("not a doc", [], 42, {"type": "paragraph"}, None):
+            response = self._save(text="fallback", rich_text=bad)
+            self.assertEqual(response.status_code, 200, bad)
+            item = self._layout()
+            self.assertIsNone(item["rich_text"], bad)
+            self.assertEqual(item["text"], "fallback", bad)
+
+    def test_a_string_false_is_not_read_as_true(self):
+        """``bool("false")`` is True; a string falls back to the default."""
+        self.assertEqual(self._save(italic="false", underline="true").status_code, 200)
+        item = self._layout()
+        self.assertIs(item["italic"], False)
+        self.assertIs(item["underline"], False)
+
+    def test_italic_and_underline_accept_only_booleans_out(self):
+        self.assertEqual(self._save(italic=1, underline=0).status_code, 200)
+        item = self._layout()
+        self.assertIs(item["italic"], True)
+        self.assertIs(item["underline"], False)
+
+
+class TextBoxValidationHelperTests(SimpleTestCase):
+    """The value validators behind the Text Box formatting branch (#373).
+
+    These need no database, and they cover the cases the API cannot reach:
+    DRF's STRICT_JSON parser rejects NaN / Infinity outright, so the
+    non-finite guard only ever fires for a direct Python caller.
+    """
+
+    def test_validated_int_rejects_non_finite_values(self):
+        from .views.dashboards import _validated_int
+
+        # int(float("inf")) raises OverflowError, so finiteness has to be
+        # checked before the cast, not after it.
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            self.assertEqual(_validated_int(bad, 14, 8, 200), 14, bad)
+
+    def test_validated_int_clamps_and_falls_back(self):
+        from .views.dashboards import _validated_int
+
+        self.assertEqual(_validated_int(0, 14, 8, 200), 8)
+        self.assertEqual(_validated_int(9999, 14, 8, 200), 200)
+        self.assertEqual(_validated_int("20", 14, 8, 200), 20)
+        self.assertEqual(_validated_int("abc", 14, 8, 200), 14)
+        self.assertEqual(_validated_int(None, 14, 8, 200), 14)
+        # A bool is an int in Python; treating True as 1 would silently
+        # become font-size 8 after clamping.
+        self.assertEqual(_validated_int(True, 14, 8, 200), 14)
+
+    def test_validated_int_rounds_rather_than_truncates(self):
+        from .views.dashboards import _validated_int
+
+        # Must agree with Math.round in resolveTextBoxFormat; int() alone
+        # would give 17 here and disagree with the frontend.
+        self.assertEqual(_validated_int(17.6, 14, 8, 200), 18)
+        self.assertEqual(_validated_int("17.4", 14, 8, 200), 17)
+
+    def test_validated_number_clamps_floats(self):
+        from .views.dashboards import _validated_number
+
+        self.assertEqual(_validated_number(0, 1.5, 0.5, 5.0), 0.5)
+        self.assertEqual(_validated_number(99, 1.5, 0.5, 5.0), 5.0)
+        self.assertEqual(_validated_number("2", 1.5, 0.5, 5.0), 2.0)
+        self.assertEqual(_validated_number("abc", 1.5, 0.5, 5.0), 1.5)
+        self.assertEqual(_validated_number(float("nan"), 1.5, 0.5, 5.0), 1.5)
+
+    def test_validated_hex_color_accepts_only_hex_literals(self):
+        from .views.dashboards import _validated_hex_color
+
+        self.assertEqual(_validated_hex_color("#fff", "#000000"), "#fff")
+        self.assertEqual(_validated_hex_color("#1E293B", "#000000"), "#1E293B")
+        self.assertEqual(_validated_hex_color("  #abc  ", "#000000"), "#abc")
+        for bad in ("red", "#12345", "rgb(0,0,0)", "", None, 42, ["#fff"]):
+            self.assertEqual(_validated_hex_color(bad, "#000000"), "#000000", bad)
+
+    def test_validated_choice_reads_the_models_own_choices(self):
+        from .models import TextBoxComponent
+        from .views.dashboards import _validated_choice
+
+        choices = TextBoxComponent.TEXT_ALIGN_CHOICES
+        self.assertEqual(_validated_choice("center", choices, "left"), "center")
+        self.assertEqual(_validated_choice("Center", choices, "left"), "left")
+        self.assertEqual(_validated_choice("middle", choices, "left"), "left")
+        self.assertEqual(_validated_choice(None, choices, "left"), "left")
+        # The label side of a (value, label) pair must not be accepted.
+        self.assertEqual(_validated_choice("Center", choices, "left"), "left")
+
+
+class TextBoxRichTextValidationTests(SimpleTestCase):
+    """The rich-text whitelist (#373 follow-up).
+
+    The document comes from the browser and is served back to everyone who can
+    open the dashboard, so only known node types, marks and attribute values
+    may survive. It is never rendered as HTML, but it is still untrusted input.
+    """
+
+    def _doc(self, *content):
+        return {"type": "doc", "content": list(content)}
+
+    def _para(self, *content, **attrs):
+        node = {"type": "paragraph", "content": list(content)}
+        if attrs:
+            node["attrs"] = attrs
+        return node
+
+    def _text(self, text, marks=None):
+        node = {"type": "text", "text": text}
+        if marks is not None:
+            node["marks"] = marks
+        return node
+
+    def test_a_plain_document_survives_unchanged(self):
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(self._para(self._text("hello")))
+        self.assertEqual(validated_rich_text(doc), doc)
+
+    def test_known_marks_survive(self):
+        from .rich_text import validated_rich_text
+
+        marks = [{"type": "bold"}, {"type": "italic"}, {"type": "underline"}]
+        doc = self._doc(self._para(self._text("hi", marks)))
+        self.assertEqual(validated_rich_text(doc)["content"][0]["content"][0]["marks"], marks)
+
+    def test_unknown_marks_are_dropped_but_the_text_stays(self):
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(self._para(self._text("hi", [
+            {"type": "bold"},
+            {"type": "evil"},
+        ])))
+        run = validated_rich_text(doc)["content"][0]["content"][0]
+        self.assertEqual(run["text"], "hi")
+        self.assertEqual(run["marks"], [{"type": "bold"}])
+
+    def test_a_known_mark_with_a_hostile_value_is_dropped_but_the_text_stays(self):
+        """`link` is a known mark, so a bad href must fail on the href itself
+        rather than on the mark type being unknown."""
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(self._para(self._text("hi", [
+            {"type": "bold"},
+            {"type": "link", "attrs": {"href": "javascript:alert(1)"}},
+        ])))
+        run = validated_rich_text(doc)["content"][0]["content"][0]
+        self.assertEqual(run["text"], "hi")
+        self.assertEqual(run["marks"], [{"type": "bold"}])
+
+    def test_accepted_link_targets_survive(self):
+        from .rich_text import validated_rich_text
+
+        for href in (
+            "https://example.com",
+            "http://example.com/a/b?c=d#e",
+            "HTTPS://EXAMPLE.COM",
+            "https://example.com:8443/path",
+            "mailto:someone@example.com",
+            "mailto:first.last+tag@sub.example.co.uk",
+        ):
+            doc = self._doc(self._para(self._text("hi", [
+                {"type": "link", "attrs": {"href": href}},
+            ])))
+            marks = validated_rich_text(doc)["content"][0]["content"][0]["marks"]
+            self.assertEqual(marks, [{"type": "link", "attrs": {"href": href}}], href)
+
+    def test_a_padded_href_is_trimmed(self):
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(self._para(self._text("hi", [
+            {"type": "link", "attrs": {"href": "  https://example.com  "}},
+        ])))
+        marks = validated_rich_text(doc)["content"][0]["content"][0]["marks"]
+        self.assertEqual(marks[0]["attrs"]["href"], "https://example.com")
+
+    def test_hostile_hrefs_are_dropped_and_the_text_survives(self):
+        from .rich_text import validated_rich_text
+
+        hostile = (
+            "javascript:alert(1)",
+            "JavaScript:alert(1)",
+            "java\nscript:alert(1)",
+            "java\tscript:alert(1)",
+            "https://example.com\x00.evil.example",
+            "javascript:alert(1)//https://example.com",
+            "data:text/html,<script>alert(1)</script>",
+            "vbscript:msgbox(1)",
+            "file:///etc/passwd",
+            "ftp://example.com/x",
+            "tel:+15551234",
+            "//evil.example/path",
+            "/dashboards/1",
+            "dashboards/1",
+            "https://",
+            # urlsplit and the browser's parser disagree on these two.
+            "https:///path",
+            "https://exa mple.com",
+            "https://ho\"st/",
+            "mailto:a@b.com?cc=victim@evil.example",
+            "mailto:a@b.com?subject=hi",
+            "mailto:a@b.com,c@d.com",
+            "mailto:notanaddress",
+            "mailto:",
+            "",
+            "   ",
+            "https://example.com/" + ("a" * 3000),
+        )
+        for href in hostile:
+            doc = self._doc(self._para(self._text("hi", [
+                {"type": "link", "attrs": {"href": href}},
+            ])))
+            run = validated_rich_text(doc)["content"][0]["content"][0]
+            self.assertEqual(run["text"], "hi", href)
+            self.assertNotIn("marks", run, href)
+
+    def test_a_non_string_href_is_dropped(self):
+        from .rich_text import validated_rich_text
+
+        for href in ({"a": 1}, ["https://example.com"], 5, True, None):
+            doc = self._doc(self._para(self._text("hi", [
+                {"type": "link", "attrs": {"href": href}},
+            ])))
+            run = validated_rich_text(doc)["content"][0]["content"][0]
+            self.assertNotIn("marks", run, repr(href))
+
+    def test_a_link_stores_its_href_and_nothing_else(self):
+        """The renderer sets target and rel itself, so a stored value could
+        only override what it decided."""
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(self._para(self._text("hi", [
+            {"type": "link", "attrs": {
+                "href": "https://example.com",
+                "target": "_self",
+                "rel": "opener",
+                "class": "evil",
+                "title": "x",
+                "onclick": "alert(1)",
+            }},
+        ])))
+        marks = validated_rich_text(doc)["content"][0]["content"][0]["marks"]
+        self.assertEqual(marks, [{"type": "link", "attrs": {"href": "https://example.com"}}])
+
+    def test_a_dashboard_link_survives_only_for_an_allowed_id(self):
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(self._para(self._text("hi", [
+            {"type": "dashboardLink", "attrs": {"dashboardId": 7}},
+        ])))
+        marks = validated_rich_text(doc, {7, 8})["content"][0]["content"][0]["marks"]
+        self.assertEqual(
+            marks, [{"type": "dashboardLink", "attrs": {"dashboardId": 7}}]
+        )
+
+        # Another project's dashboard, and one that no longer exists, look
+        # exactly the same from here: an id that is not on the list.
+        run = validated_rich_text(doc, {8, 9})["content"][0]["content"][0]
+        self.assertEqual(run["text"], "hi")
+        self.assertNotIn("marks", run)
+
+    def test_a_dashboard_link_is_dropped_when_no_project_is_known(self):
+        """The default trusts nothing."""
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(self._para(self._text("hi", [
+            {"type": "dashboardLink", "attrs": {"dashboardId": 7}},
+        ])))
+        run = validated_rich_text(doc)["content"][0]["content"][0]
+        self.assertNotIn("marks", run)
+
+    def test_a_malformed_dashboard_id_is_dropped(self):
+        from .rich_text import validated_rich_text
+
+        for dashboard_id in (True, 0, -1, "7", 1.5, None, {"id": 7}):
+            doc = self._doc(self._para(self._text("hi", [
+                {"type": "dashboardLink", "attrs": {"dashboardId": dashboard_id}},
+            ])))
+            run = validated_rich_text(doc, {0, 1, 7})["content"][0]["content"][0]
+            self.assertNotIn("marks", run, repr(dashboard_id))
+
+    def test_hrefs_count_against_the_document_size_limit(self):
+        """Otherwise thousands of maximal hrefs are megabytes of payload
+        while the visible text stays tiny."""
+        from .rich_text import validated_rich_text
+
+        from .rich_text import RichTextTooLarge
+
+        href = "https://example.com/" + ("a" * 2000)
+        paragraphs = [
+            self._para(self._text("x", [{"type": "link", "attrs": {"href": href}}]))
+            for _ in range(60)
+        ]
+        with self.assertRaises(RichTextTooLarge):
+            validated_rich_text(self._doc(*paragraphs))
+
+    def test_text_style_keeps_only_valid_attributes(self):
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(self._para(self._text("hi", [
+            {"type": "textStyle", "attrs": {
+                "color": "#F43F5E",
+                "fontSize": "24px",
+                "fontFamily": "var(--font-serif)",
+            }},
+        ])))
+        attrs = validated_rich_text(doc)["content"][0]["content"][0]["marks"][0]["attrs"]
+        self.assertEqual(
+            attrs,
+            {"color": "#f43f5e", "fontSize": "24px", "fontFamily": "var(--font-serif)"},
+        )
+
+    def test_text_style_rejects_hostile_or_unknown_attribute_values(self):
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(self._para(self._text("hi", [
+            {"type": "textStyle", "attrs": {
+                "color": "red; background: url(https://evil.example/x)",
+                "fontSize": "24px; position: fixed",
+                "fontFamily": "Comic Sans",
+                "onclick": "alert(1)",
+            }},
+        ])))
+        # Nothing valid is left on the mark, so the mark itself goes.
+        run = validated_rich_text(doc)["content"][0]["content"][0]
+        self.assertEqual(run["text"], "hi")
+        self.assertNotIn("marks", run)
+
+    def test_font_size_is_clamped(self):
+        from .rich_text import validated_rich_text
+
+        for sent, expected in (("2px", "8px"), ("999px", "200px"), ("24px", "24px")):
+            doc = self._doc(self._para(self._text("hi", [
+                {"type": "textStyle", "attrs": {"fontSize": sent}},
+            ])))
+            attrs = validated_rich_text(doc)["content"][0]["content"][0]["marks"][0]["attrs"]
+            self.assertEqual(attrs["fontSize"], expected, sent)
+
+    def test_paragraph_alignment_and_line_height(self):
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(self._para(self._text("hi"), textAlign="center", lineHeight="2"))
+        attrs = validated_rich_text(doc)["content"][0]["attrs"]
+        self.assertEqual(attrs["textAlign"], "center")
+        self.assertEqual(attrs["lineHeight"], "2.0")
+
+    def test_unknown_alignment_is_dropped(self):
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(self._para(self._text("hi"), textAlign="middle"))
+        self.assertNotIn("attrs", validated_rich_text(doc)["content"][0])
+
+    def test_heading_level_is_restricted(self):
+        from .rich_text import validated_rich_text
+
+        for sent in (9, 0, "2", True, None):
+            doc = self._doc({"type": "heading", "attrs": {"level": sent},
+                             "content": [self._text("h")]})
+            self.assertEqual(validated_rich_text(doc)["content"][0]["attrs"]["level"], 1, sent)
+        doc = self._doc({"type": "heading", "attrs": {"level": 3},
+                         "content": [self._text("h")]})
+        self.assertEqual(validated_rich_text(doc)["content"][0]["attrs"]["level"], 3)
+
+    def test_deeper_headings_become_the_smallest_rather_than_the_largest(self):
+        from .rich_text import validated_rich_text
+
+        for sent in (4, 5, 6):
+            doc = self._doc({"type": "heading", "attrs": {"level": sent},
+                             "content": [self._text("h")]})
+            self.assertEqual(validated_rich_text(doc)["content"][0]["attrs"]["level"], 3, sent)
+
+    def test_an_ordered_list_keeps_its_start_number(self):
+        from .rich_text import validated_rich_text
+
+        def start_of(sent):
+            doc = self._doc({"type": "orderedList", "attrs": {"start": sent}, "content": [
+                {"type": "listItem", "content": [self._para(self._text("x"))]},
+            ]})
+            return validated_rich_text(doc)["content"][0].get("attrs", {}).get("start")
+
+        self.assertEqual(start_of(5), 5)
+        for bad in (1, 0, -3, "5", 2.5, True, None, 10**9):
+            self.assertIsNone(start_of(bad), bad)
+
+    def test_an_unknown_inline_wrapper_does_not_nest_a_paragraph(self):
+        """Inside a paragraph, the wrapper's words are spliced in as runs."""
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(self._para(
+            self._text("a "),
+            {"type": "mention", "content": [self._text("@b")]},
+            {"type": "widget", "content": [self._para(self._text(" c"))]},
+        ))
+        para = validated_rich_text(doc)["content"][0]
+        self.assertEqual([n["type"] for n in para["content"]], ["text", "text", "text"])
+        self.assertEqual("".join(n["text"] for n in para["content"]), "a @b c")
+
+    def test_bare_text_under_a_block_container_is_wrapped(self):
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(self._text("loose"), {"type": "blockquote", "content": [self._text("q")]})
+        content = validated_rich_text(doc)["content"]
+        self.assertEqual(content[0]["type"], "paragraph")
+        self.assertEqual(content[1]["content"][0]["type"], "paragraph")
+
+    def test_plain_text_gives_each_list_item_its_own_line(self):
+        from .rich_text import plain_text_from_doc
+
+        item = lambda text: {"type": "listItem", "content": [self._para(self._text(text))]}
+        doc = self._doc(
+            {"type": "bulletList", "content": [item("Revenue"), item("Costs")]},
+            self._para(),
+            self._para(self._text("end")),
+        )
+        self.assertEqual(plain_text_from_doc(doc), "Revenue\nCosts\n\nend")
+
+    def test_unknown_node_types_are_dropped_but_their_text_is_kept(self):
+        """The wrapper goes; the words it held do not. Bare inline content
+        gets a paragraph, or the editor's schema would reject the result."""
+        from .rich_text import validated_rich_text
+
+        doc = self._doc(
+            {"type": "script", "content": [self._text("boom")]},
+            {"type": "image", "attrs": {"src": "javascript:alert(1)"}},
+            self._para(self._text("kept")),
+        )
+        content = validated_rich_text(doc)["content"]
+        self.assertEqual([node["type"] for node in content], ["paragraph", "paragraph"])
+        self.assertEqual(content[0]["content"][0]["text"], "boom")
+        self.assertEqual(content[1]["content"][0]["text"], "kept")
+        self.assertNotIn("attrs", content[0])
+
+    def test_lists_and_blockquotes_survive(self):
+        from .rich_text import validated_rich_text
+
+        doc = self._doc({"type": "bulletList", "content": [
+            {"type": "listItem", "content": [self._para(self._text("one"))]},
+        ]})
+        result = validated_rich_text(doc)
+        self.assertEqual(result["content"][0]["type"], "bulletList")
+        self.assertEqual(
+            result["content"][0]["content"][0]["content"][0]["content"][0]["text"], "one"
+        )
+
+    def test_anything_that_is_not_a_document_stores_nothing(self):
+        from .rich_text import validated_rich_text
+
+        for bad in (None, "", [], 42, {"type": "paragraph"}, {"content": []},
+                    self._doc(), {"type": "doc", "content": "nope"}):
+            self.assertIsNone(validated_rich_text(bad), bad)
+
+    def test_an_oversized_document_raises_rather_than_storing_nothing(self):
+        """Too big is not "no rich text": the caller has to tell them apart,
+        or a user loses all their formatting to a 200 response."""
+        from .rich_text import MAX_NODES, RichTextTooLarge, validated_rich_text
+
+        doc = self._doc(*[self._para(self._text("x")) for _ in range(MAX_NODES)])
+        with self.assertRaises(RichTextTooLarge):
+            validated_rich_text(doc)
+
+    def test_a_deeply_nested_document_raises(self):
+        from .rich_text import MAX_DEPTH, RichTextTooLarge, validated_rich_text
+
+        node = self._para(self._text("deep"))
+        for _ in range(MAX_DEPTH + 5):
+            node = {"type": "blockquote", "content": [node]}
+        with self.assertRaises(RichTextTooLarge):
+            validated_rich_text(self._doc(node))
+
+    def test_an_unknown_wrapper_is_dropped_but_its_text_survives(self):
+        """A newer client's table or task list would otherwise have every
+        word inside it deleted at save time."""
+        from .rich_text import validated_rich_text
+
+        doc = self._doc({
+            "type": "table",
+            "content": [self._para(self._text("inside a table"))],
+        })
+        cleaned = validated_rich_text(doc)
+        self.assertEqual(cleaned["content"][0]["type"], "paragraph")
+        self.assertEqual(cleaned["content"][0]["content"][0]["text"], "inside a table")
+
+    def test_plain_text_is_derived_one_line_per_block(self):
+        from .rich_text import plain_text_from_doc
+
+        doc = self._doc(
+            self._para(self._text("first "), self._text("line", [{"type": "bold"}])),
+            self._para(self._text("second")),
+        )
+        self.assertEqual(plain_text_from_doc(doc), "first line\nsecond")
 
 
 class SqlDashboardComponentsLayoutTests(TestCase):
@@ -3447,7 +4403,7 @@ class ProcessAreaComponentPersistenceTests(TestCase):
         self.assertEqual(component["w_temporal"], 1.0)
         self.assertEqual(component["w_cardinality"], 1.0)
         self.assertEqual(component["w_divergence"], 1.0)
-        self.assertEqual(component["alpha"], 1.0)
+        self.assertEqual(component["alpha"], 2.0)
         self.assertEqual(component["beta"], 1.0)
 
     def test_existing_rows_are_backfilled_by_the_migration_defaults(self):
@@ -3461,7 +4417,7 @@ class ProcessAreaComponentPersistenceTests(TestCase):
         )
         component.refresh_from_db()
         self.assertEqual(component.algorithm, "advanced")
-        self.assertEqual(component.alpha, 1.0)
+        self.assertEqual(component.alpha, 2.0)
         self.assertEqual(component.beta, 1.0)
 
     def test_get_layout_exposes_the_new_fields(self):
@@ -3590,6 +4546,66 @@ class DiscoverOcpnEndpointTests(APITestCase):
         response = self.client.get(
             f"/api/files/{self.log.pk}/discover_ocpn/",
             {"timeout_s": "not-a-number"},
+        )
+        self.assertEqual(response.status_code, 200)
+
+
+@override_settings(MEDIA_ROOT=_MEDIA_ROOT)
+class OcdfgBlockStructureEndpointTests(APITestCase):
+    """GET /api/ocdfg-block-structure/ — inductive-miner trees per object type."""
+
+    def setUp(self):
+        cache.clear()
+        views._OCEL_DB_REGISTRY.clear()
+        views._OCEL_OBJECT_TYPES_REGISTRY.clear()
+
+        self.user = User.objects.create_user("tester", password="pw")
+        self.project = Project.objects.create(name="test-project")
+        self.project.users.add(self.user)
+
+        filename = f"block-structure-{self._testMethodName}.duckdb"
+        _write_paper_example_duckdb(f"{_MEDIA_ROOT}/{filename}")
+        self.log = EventLog.objects.create(project=self.project, file=filename)
+
+        self.client.force_authenticate(self.user)
+
+    def test_returns_a_tree_per_object_type(self):
+        response = self.client.get("/api/ocdfg-block-structure/", {"file_id": self.log.pk})
+        self.assertEqual(response.status_code, 200)
+        trees = response.json()["trees"]
+        self.assertEqual(sorted(trees), ["item", "order"])
+        self.assertEqual(trees["order"]["operator"], "sequence")
+        self.assertEqual(
+            [c["label"] for c in trees["order"]["children"]],
+            ["place order", "complete order"],
+        )
+
+    def test_object_types_param(self):
+        response = self.client.get(
+            "/api/ocdfg-block-structure/",
+            {"file_id": self.log.pk, "object_types": "item"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list(response.json()["trees"]), ["item"])
+
+    def test_requires_file_id(self):
+        response = self.client.get("/api/ocdfg-block-structure/")
+        self.assertEqual(response.status_code, 400)
+
+    def test_requires_project_membership(self):
+        outsider = User.objects.create_user("outsider", password="pw")
+        self.client.force_authenticate(outsider)
+        response = self.client.get("/api/ocdfg-block-structure/", {"file_id": self.log.pk})
+        self.assertEqual(response.status_code, 404)
+
+    def test_non_numeric_file_id_is_404(self):
+        response = self.client.get("/api/ocdfg-block-structure/", {"file_id": "abc"})
+        self.assertEqual(response.status_code, 404)
+
+    def test_invalid_timeout_falls_back_to_default(self):
+        response = self.client.get(
+            "/api/ocdfg-block-structure/",
+            {"file_id": self.log.pk, "timeout_s": "nan"},
         )
         self.assertEqual(response.status_code, 200)
 
@@ -3759,6 +4775,38 @@ class ExecuteQuerySandboxTests(APITestCase):
         self.assertEqual(response.data["limit"], views.event_log.EXECUTE_QUERY_MAX_ROWS)
 
 
+    def _run_filtered(self, query, params):
+        return self.client.post(
+            f"/api/files/{self.log.pk}/execute_query/?{params}", {"query": query}, format="json"
+        )
+
+    def test_filter_params_restrict_the_events_table(self):
+        response = self._run_filtered(
+            "SELECT activity FROM events ORDER BY activity", "activities=ship%20order"
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual([r["activity"] for r in response.data["data"]], ["ship order"])
+
+    def test_filter_works_with_recursive_and_user_ctes(self):
+        recursive = (
+            "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 2) "
+            "SELECT count(*) AS c FROM events, r"
+        )
+        response = self._run_filtered(recursive, "activities=ship%20order")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["data"], [{"c": 2}])
+        own_cte = "WITH x AS (SELECT activity FROM events) SELECT count(*) AS c FROM x"
+        response = self._run_filtered(own_cte, "activities=ship%20order")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["data"], [{"c": 1}])
+
+    def test_impossible_time_window_returns_no_rows_with_columns(self):
+        response = self._run_filtered("SELECT activity FROM events", "after=1&before=0")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["data"], [])
+        self.assertEqual(response.data["columns"], ["activity"])
+
+
 @override_settings(MEDIA_ROOT=_MEDIA_ROOT)
 class QueryColumnsEndpointTests(APITestCase):
     """The SQL editor's schema browser."""
@@ -3857,9 +4905,9 @@ class OcelDbConcurrencyTests(TestCase):
         self.assertEqual(held_elsewhere, [False])
 
     def test_occn_view_reads_the_shared_connection_only_under_the_lock(self):
-        """The OCCN endpoint touches the shared DuckDB only for the pm4py
-        conversion, which must run under the per-file lock; the discovery
-        itself then works on the converted data, off the shared connection."""
+        """The OCCN endpoint touches the shared DuckDB only to extract the
+        discovery input, which must run under the per-file lock; the discovery
+        itself then works on the extracted tables, off the shared connection."""
         user = User.objects.create_user(username="occn-lock-user")
         project = Project.objects.create(name="OCCN Lock Project")
         project.users.add(user)
@@ -3887,13 +4935,13 @@ class OcelDbConcurrencyTests(TestCase):
 
         discover_inputs = []
 
-        def fake_discover(ocel, relativeOccuranceThreshold, parameters):
+        def fake_discover(ocel, relativeOccuranceThreshold, parameters, progress=None):
             discover_inputs.append(ocel)
             return object()
 
         with (
             patch("api.views._ocel_db._get_or_load_ocel_db", return_value=fake_db),
-            patch("api.views.occn.convert_ocel_duckdb_to_pm4py", side_effect=fake_convert),
+            patch("api.views.occn.extract_occn_input", side_effect=fake_convert),
             patch("api.views.occn.discover_occn", side_effect=fake_discover),
             patch("api.views.occn.serialize_occn", return_value={"ok": True}),
         ):
@@ -3903,7 +4951,7 @@ class OcelDbConcurrencyTests(TestCase):
 
         self.assertEqual(response.status_code, 200, response.data)
         self.assertEqual(lock_was_held, [True])
-        # discovery ran on the converted data, not the shared connection
+        # discovery ran on the extracted tables, not the shared connection
         self.assertEqual(discover_inputs, [converted])
 
 
@@ -4023,6 +5071,45 @@ class FilterShadowTests(SimpleTestCase):
         with views._filter_shadow(self.db, {}):
             self.assertEqual(self._types(), ["item", "order", "worker"])
             self.assertEqual(self._events(), ["e1", "e2", "e3", "e4"])
+
+    def _flaky_db(self, fail_on: str, times: int = 1):
+        """A db whose connection raises (like a DuckDB interrupt) the first
+        ``times`` statements containing ``fail_on``."""
+        conn = self.conn
+        state = {"left": times}
+
+        class _FlakyConn:
+            def execute(self, sql, *args):
+                if fail_on in sql and state["left"] > 0:
+                    state["left"] -= 1
+                    raise RuntimeError("INTERRUPT Error: Interrupted!")
+                return conn.execute(sql, *args)
+
+        db = type("_DbShim", (), {})()
+        db.conn = _FlakyConn()
+        return db
+
+    def _temp_tables(self):
+        return self.conn.execute(
+            "SELECT table_name FROM duckdb_tables() WHERE temporary"
+        ).fetchall()
+
+    def test_shadow_is_torn_down_when_setup_is_interrupted(self):
+        # `objects` is already shadowed when building `event_object` fails.
+        db = self._flaky_db("TEMP TABLE event_object")
+        with self.assertRaises(RuntimeError):
+            with views._filter_shadow(db, {"object_types": ["order"], "after": 1}):
+                pass
+        self.assertEqual(self._temp_tables(), [])
+        self.assertEqual(self._types(), ["item", "order", "worker"])
+        self.assertEqual(self._events(), ["e1", "e2", "e3", "e4"])
+
+    def test_teardown_retries_an_interrupted_drop(self):
+        db = self._flaky_db("DROP TABLE IF EXISTS temp.main.events")
+        with views._filter_shadow(db, {"object_types": ["order"]}):
+            self.assertEqual(self._types(), ["order"])
+        self.assertEqual(self._temp_tables(), [])
+        self.assertEqual(self._events(), ["e1", "e2", "e3", "e4"])
 
 
 @override_settings(MEDIA_ROOT=_MEDIA_ROOT)
@@ -4753,3 +5840,1798 @@ class CacheClearPermissionTests(TestCase):
             response = self.client.post("/api/cache/clear/")
         self.assertEqual(response.status_code, 200)
         clear.assert_called_once()
+
+
+# --- First-launch sample project (issue #368) --------------------------------
+
+from pathlib import Path
+
+from django.conf import settings
+
+from .models import ImageAsset as _ImageAsset, SeedState
+from .asset_formats import (
+    SQL_QUERY_ASSET_SCHEMA as _SQL_SCHEMA,
+    validate_sql_query_asset_dict,
+)
+from .query_refs import resolve_query_references
+from .sample_project import (
+    LINKED_QUERY_BY_TITLE,
+    SAMPLE_DASHBOARD_NAME,
+    SAMPLE_LOGO_ASSET_NAME,
+    SAMPLE_PROJECT_DISPLAY_NAME,
+    SAMPLE_PROJECT_NAME,
+    SAMPLE_QUERIES,
+    SAMPLE_SEED_KEY,
+    _bundled_sample_log_path,
+    sample_dashboard_layout,
+    seed_sample_project,
+)
+
+# The floors the frontend enforces on each widget (MIN_SIZES in
+# frontend/src/gridstack/lib/gridstackprovider.tsx). Seeding writes geometry
+# straight to the DB, which bypasses that check entirely.
+_FRONTEND_MIN_SIZES = {
+    "TextBoxComponent": (2, 2),
+    "ImageComponent": (2, 2),
+    "KpiComponent": (2, 2),
+    "BarChartComponent": (3, 3),
+    "PieChartComponent": (2, 6),
+    "ProcessAreaComponent": (4, 4),
+}
+
+
+class SampleProjectSeedTests(TestCase):
+    """The sample project seeded on first launch (issue #368).
+
+    SEED_SAMPLE_PROJECT is deliberately false under the test runner, so every
+    test here turns it back on explicitly and points MEDIA_ROOT at a throwaway
+    directory -- the seed copies a 2.3 MB event log.
+    """
+
+    def setUp(self):
+        self.media = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.media, ignore_errors=True)
+
+    def _seed(self):
+        with self.settings(MEDIA_ROOT=self.media, SEED_SAMPLE_PROJECT=True):
+            seed_sample_project(sender=None)
+
+    def test_seeds_the_project_log_logo_and_dashboard(self):
+        self._seed()
+
+        project = Project.objects.get()
+        self.assertEqual(project.name, SAMPLE_PROJECT_NAME)
+        self.assertEqual(project.display_name, SAMPLE_PROJECT_DISPLAY_NAME)
+        self.assertEqual(
+            [u.username for u in project.users.all()],
+            [settings.LOCAL_GUEST_USERNAME],
+        )
+
+        self.assertTrue(EventLog.objects.get().file.name.endswith(".duckdb"))
+
+        logo = _ImageAsset.objects.get()
+        self.assertEqual(logo.name, SAMPLE_LOGO_ASSET_NAME)
+        self.assertEqual(logo.content_type, "image/svg+xml")
+
+        dashboard = Dashboard.objects.get()
+        self.assertEqual(dashboard.name, SAMPLE_DASHBOARD_NAME)
+        self.assertEqual(dashboard.project_id, project.pk)
+
+    def test_components_match_the_declared_layout(self):
+        self._seed()
+
+        expected = [
+            (component_name, geometry)
+            for _model, component_name, geometry, _fields in sample_dashboard_layout()
+        ]
+        actual = [
+            (component.component_name, (component.x, component.y, component.w, component.h))
+            for component in Dashboard.objects.get().components.order_by("order")
+        ]
+        self.assertEqual(actual, expected)
+
+    def test_text_boxes_are_seeded_as_rich_text(self):
+        self._seed()
+
+        from .models import TextBoxComponent
+        from .rich_text import plain_text_from_doc, validated_rich_text
+
+        boxes = TextBoxComponent.objects.order_by("order")
+        self.assertEqual(boxes.count(), 2)
+        for box in boxes:
+            with self.subTest(order=box.order):
+                self.assertIsNotNone(box.rich_text)
+                # What is in the database is what the API would have accepted.
+                self.assertEqual(validated_rich_text(box.rich_text), box.rich_text)
+                self.assertEqual(box.text, plain_text_from_doc(box.rich_text))
+
+    def test_image_component_points_at_the_seeded_logo(self):
+        self._seed()
+
+        from .models import ImageComponent
+
+        image = ImageComponent.objects.get()
+        self.assertEqual(image.image_asset_id, _ImageAsset.objects.get().pk)
+        # The legacy per-component upload stays unused.
+        self.assertFalse(image.image)
+
+    def test_widget_geometry_clears_the_frontend_minimums(self):
+        self._seed()
+
+        for component in Dashboard.objects.get().components.all():
+            min_w, min_h = _FRONTEND_MIN_SIZES[component.component_name]
+            with self.subTest(component=component.component_name):
+                self.assertGreaterEqual(component.w, min_w)
+                self.assertGreaterEqual(component.h, min_h)
+
+    def test_event_log_is_copied_into_media_root(self):
+        self._seed()
+
+        source = _bundled_sample_log_path()
+        # FieldFile.path resolves against MEDIA_ROOT at access time, so it has
+        # to be read back under the same override the seed ran with.
+        with self.settings(MEDIA_ROOT=self.media):
+            copied = EventLog.objects.get().file.path
+
+        self.assertTrue(
+            os.path.realpath(copied).startswith(os.path.realpath(self.media))
+        )
+        self.assertNotEqual(os.path.realpath(copied), os.path.realpath(source))
+        self.assertEqual(os.path.getsize(copied), os.path.getsize(source))
+
+    def test_seeding_twice_creates_one_project(self):
+        self._seed()
+        self._seed()
+
+        self.assertEqual(Project.objects.count(), 1)
+        self.assertEqual(Dashboard.objects.count(), 1)
+        self.assertEqual(SeedState.objects.filter(key=SAMPLE_SEED_KEY).count(), 1)
+
+    def test_does_nothing_when_the_flag_is_off(self):
+        with self.settings(MEDIA_ROOT=self.media, SEED_SAMPLE_PROJECT=False):
+            seed_sample_project(sender=None)
+
+        self.assertFalse(Project.objects.exists())
+        self.assertFalse(SeedState.objects.exists())
+
+    def test_deleted_sample_is_not_recreated(self):
+        self._seed()
+        event_log = EventLog.objects.get()
+
+        client = APIClient()
+        client.force_authenticate(user=User.objects.get(username=settings.LOCAL_GUEST_USERNAME))
+        with self.settings(MEDIA_ROOT=self.media):
+            response = client.delete(f"/api/files/{event_log.pk}/")
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Project.objects.exists())
+
+        self._seed()
+        self.assertFalse(Project.objects.exists())
+
+    def test_rename_survives_a_later_seed(self):
+        self._seed()
+        event_log = EventLog.objects.get()
+
+        client = APIClient()
+        client.force_authenticate(user=User.objects.get(username=settings.LOCAL_GUEST_USERNAME))
+        response = client.patch(
+            f"/api/files/{event_log.pk}/rename/",
+            {"name": "Q3 container review"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self._seed()
+        self.assertEqual(Project.objects.count(), 1)
+        self.assertEqual(Project.objects.get().display_name, "Q3 container review")
+
+    def test_missing_bundled_log_fails_soft_and_stays_retryable(self):
+        missing = Path(self.media) / "nope" / "container_logistics.duckdb"
+        with patch("api.sample_project._bundled_sample_log_path", return_value=missing):
+            with self.assertLogs("api.sample_project", level="ERROR"):
+                self._seed()
+
+        self.assertFalse(Project.objects.exists())
+        # No tombstone: a build that ships the file correctly must still seed.
+        self.assertFalse(SeedState.objects.exists())
+
+        self._seed()
+        self.assertEqual(Project.objects.count(), 1)
+
+    def test_failed_seed_removes_the_files_it_copied(self):
+        with patch(
+            "api.sample_project.sample_dashboard_layout",
+            side_effect=RuntimeError("boom"),
+        ):
+            with self.assertLogs("api.sample_project", level="ERROR"):
+                self._seed()
+
+        self.assertFalse(Project.objects.exists())
+        self.assertFalse(SeedState.objects.exists())
+        # The rollback took the rows; the log and logo must not outlive them,
+        # or every retrying launch would leave another 2.3 MB copy behind.
+        leftover = [
+            os.path.join(root, name)
+            for root, _dirs, names in os.walk(self.media)
+            for name in names
+        ]
+        self.assertEqual(leftover, [])
+
+        self._seed()
+        self.assertEqual(Project.objects.count(), 1)
+
+    def test_skipped_when_the_seed_table_is_missing(self):
+        # post_migrate also fires after `migrate api <earlier>` has unapplied
+        # the migration that creates SeedState.
+        from django.db import connection
+
+        with patch.object(connection.introspection, "table_names", return_value=[]):
+            self._seed()
+
+        self.assertFalse(Project.objects.exists())
+
+    def test_upgraded_install_with_projects_is_not_seeded(self):
+        existing = Project.objects.create(name="my-own-log")
+
+        self._seed()
+
+        self.assertEqual(list(Project.objects.all()), [existing])
+        self.assertTrue(SeedState.objects.filter(key=SAMPLE_SEED_KEY).exists())
+
+        # Marked as done, so it stays out even once the user's projects are gone.
+        existing.delete()
+        self._seed()
+        self.assertFalse(Project.objects.exists())
+
+    def test_seeds_the_stored_query_library(self):
+        self._seed()
+
+        project = Project.objects.get()
+        assets = ProjectAsset.objects.filter(
+            project=project, asset_type=ProjectAsset.AssetType.QUERY
+        )
+        self.assertEqual(
+            sorted(assets.values_list("name", flat=True)),
+            sorted(name for name, _d, _s in SAMPLE_QUERIES),
+        )
+        for asset in assets:
+            with self.subTest(query=asset.name):
+                # Exactly what POST /api/assets/ would enforce on an upload.
+                validate_sql_query_asset_dict(asset.content_json)
+                self.assertEqual(asset.content_json["schema"], _SQL_SCHEMA)
+                self.assertTrue(asset.content_json["description"].strip())
+                self.assertEqual(asset.created_by_id, project.users.get().pk)
+
+    def test_stored_query_references_resolve(self):
+        """A seeded query may build on another by name; all must resolve."""
+        self._seed()
+
+        stored = {
+            asset.name: asset.content_json["query"]
+            for asset in ProjectAsset.objects.filter(
+                asset_type=ProjectAsset.AssetType.QUERY
+            )
+        }
+        composed = 0
+        for name, sql in stored.items():
+            with self.subTest(query=name):
+                resolved = resolve_query_references(sql, stored)
+                if resolved != sql:
+                    composed += 1
+        # The library is meant to demonstrate composition, not just contain it
+        # by accident -- if this drops to zero the demo value is gone.
+        self.assertGreaterEqual(composed, 1)
+
+    def test_linked_widgets_share_the_stored_query(self):
+        self._seed()
+
+        from .models import BarChartComponent, PieChartComponent
+
+        for model in (BarChartComponent, PieChartComponent):
+            widget = model.objects.get()
+            with self.subTest(widget=widget.component_name):
+                expected = LINKED_QUERY_BY_TITLE[widget.title]
+                self.assertIsNotNone(widget.query_asset_id)
+                self.assertEqual(widget.query_asset.name, expected)
+                # The widget keeps the same SQL inline, so deleting the asset
+                # (which nulls the FK) leaves it rendering exactly as before.
+                self.assertEqual(
+                    widget.query.strip(),
+                    widget.query_asset.content_json["query"].strip(),
+                )
+
+    def test_deleting_a_linked_query_leaves_the_widget_working(self):
+        self._seed()
+
+        from .models import BarChartComponent
+
+        widget = BarChartComponent.objects.get()
+        sql_before = widget.query
+        widget.query_asset.delete()
+
+        widget.refresh_from_db()
+        self.assertIsNone(widget.query_asset_id)
+        self.assertEqual(widget.query, sql_before)
+
+
+class SampleProjectRichTextTests(SimpleTestCase):
+    """The dashboard's two text panels (#373 rich text in the #368 sample).
+
+    The seeder writes straight through the ORM, so nothing makes these
+    documents pass the whitelist that every browser save goes through. These
+    tests are what does.
+    """
+
+    def _docs(self):
+        from .sample_project import sample_guide_doc, sample_headline_doc
+
+        return {"headline": sample_headline_doc(), "guide": sample_guide_doc()}
+
+    def test_documents_survive_the_whitelist_unchanged(self):
+        from .rich_text import validated_rich_text
+
+        for name, doc in self._docs().items():
+            with self.subTest(document=name):
+                # Not merely "valid": identical. A colour in the wrong case or
+                # a bare font size would be dropped here and nowhere else.
+                self.assertEqual(validated_rich_text(doc), doc)
+
+    def test_documents_carry_no_links(self):
+        from .rich_text import validated_rich_text
+
+        def marks(node):
+            yield from (mark.get("type") for mark in node.get("marks") or [])
+            for child in node.get("content") or []:
+                yield from marks(child)
+
+        for name, doc in self._docs().items():
+            with self.subTest(document=name):
+                found = set(marks(doc))
+                self.assertNotIn("link", found)
+                self.assertNotIn("dashboardLink", found)
+                # A dashboard link needs the project's ids to validate, so a
+                # document holding one could not round-trip above.
+                self.assertEqual(validated_rich_text(doc, None), doc)
+
+    def test_every_block_with_text_declares_its_alignment(self):
+        """A rich box inherits text-align from its card, which is `center`.
+
+        Only the plain-text path writes alignment explicitly, so a block that
+        leaves it unset picks that up -- which renders an ordered list with a
+        ragged left edge and the numbers stranded.
+        """
+        def blocks(node):
+            if node.get("type") in ("paragraph", "heading"):
+                yield node
+            for child in node.get("content") or []:
+                yield from blocks(child)
+
+        for name, doc in self._docs().items():
+            for block in blocks(doc):
+                if not block.get("content"):
+                    continue  # a spacer has no text to align
+                with self.subTest(document=name, block=block["type"]):
+                    self.assertIn(
+                        (block.get("attrs") or {}).get("textAlign"),
+                        ("left", "center", "right", "justify"),
+                    )
+
+    def test_documents_use_no_headings(self):
+        """A title here is bold plus a font size, not a heading node.
+
+        The toolbar has no heading control -- one needs a markdown "## " while
+        typing -- so a heading in the sample would be formatting the user can
+        see but not reproduce.
+        """
+        def types(node):
+            yield node.get("type")
+            for child in node.get("content") or []:
+                yield from types(child)
+
+        for name, doc in self._docs().items():
+            with self.subTest(document=name):
+                self.assertNotIn("heading", set(types(doc)))
+
+    def test_text_boxes_keep_text_in_step_with_their_document(self):
+        from .rich_text import plain_text_from_doc
+        from .sample_project import sample_dashboard_layout
+
+        for _model, name, _geometry, fields in sample_dashboard_layout():
+            if name != "TextBoxComponent":
+                continue
+            with self.subTest(text=fields["text"][:30]):
+                self.assertEqual(
+                    fields["text"], plain_text_from_doc(fields["rich_text"])
+                )
+                self.assertTrue(fields["text"].strip())
+
+    def test_text_boxes_leave_text_formatting_to_the_document(self):
+        """A box with a document ignores its own text-level fields.
+
+        componentMap.tsx renders a rich box against the plain defaults, so
+        setting these here would be dead configuration that reads as live.
+        """
+        from .sample_project import sample_dashboard_layout
+
+        dead = {
+            "font_size", "font_family", "font_weight", "italic",
+            "underline", "text_align", "text_color", "line_height",
+        }
+        for _model, name, _geometry, fields in sample_dashboard_layout():
+            if name != "TextBoxComponent":
+                continue
+            with self.subTest(text=fields["text"][:30]):
+                self.assertEqual(dead & set(fields), set())
+
+
+class DashboardBundleFormatTests(SimpleTestCase):
+    """The bundle format itself: what it accepts, and what it refuses."""
+
+    def _bundle(self, **overrides):
+        bundle = {
+            "schema": DASHBOARD_BUNDLE_SCHEMA,
+            "version": DASHBOARD_BUNDLE_VERSION,
+            "dashboard": {"name": "D"},
+            "components": [
+                {
+                    "component_name": "TotemMinerComponent",
+                    "x": 0,
+                    "y": 0,
+                    "w": 4,
+                    "h": 4,
+                }
+            ],
+        }
+        bundle.update(overrides)
+        return bundle
+
+    def test_accepts_a_well_formed_bundle(self):
+        validate_dashboard_bundle_dict(self._bundle())
+
+    def test_unknown_extra_keys_are_ignored(self):
+        # Forward compatibility: a newer export may carry keys we do not read.
+        validate_dashboard_bundle_dict(self._bundle(exported_by="some future build"))
+
+    def test_known_component_names_match_what_the_writer_accepts(self):
+        """The frozenset must mirror `_replace_components`' if/elif chain.
+
+        A name in one and not the other vanishes silently: the importer would
+        either skip a widget it could have stored, or pass one the writer drops.
+        """
+        source = (
+            Path(__file__).resolve().parent / "views" / "dashboards.py"
+        ).read_text()
+        chain = source.split("def _replace_components", 1)[1]
+        written = set(re.findall(r"component_name == ['\"]([A-Za-z]+)['\"]", chain))
+        written |= set(
+            re.findall(r"component_name in \(\s*['\"]([A-Za-z]+)['\"]", chain)
+        )
+        written |= set(
+            re.findall(
+                r"component_name in \([^)]*?['\"]([A-Za-z]+)['\"]\s*,?\s*\)", chain
+            )
+        )
+        self.assertEqual(written, set(KNOWN_COMPONENT_NAMES))
+
+    def test_rejects_a_non_object_root(self):
+        for root in ([], "x", None, 3):
+            with self.assertRaises(ValueError):
+                validate_dashboard_bundle_dict(root)
+
+    def test_rejects_another_schema(self):
+        with self.assertRaisesMessage(ValueError, "Not a dashboard file"):
+            validate_dashboard_bundle_dict(self._bundle(schema="totem"))
+
+    def test_rejects_a_newer_format_version(self):
+        with self.assertRaisesMessage(ValueError, "newer version of TOTeM"):
+            validate_dashboard_bundle_dict(self._bundle(version=2))
+
+    def test_rejects_a_non_integer_version(self):
+        with self.assertRaises(ValueError):
+            validate_dashboard_bundle_dict(self._bundle(version="1"))
+
+    def test_rejects_a_missing_or_blank_name(self):
+        for dashboard in ({}, {"name": ""}, {"name": "   "}, {"name": 7}):
+            with self.assertRaises(ValueError):
+                validate_dashboard_bundle_dict(self._bundle(dashboard=dashboard))
+
+    def test_rejects_components_that_are_not_a_list(self):
+        with self.assertRaises(ValueError):
+            validate_dashboard_bundle_dict(self._bundle(components={}))
+
+    def test_rejects_geometry_a_grid_cannot_lay_out(self):
+        """A file is less trusted than a grid the user dragged into shape."""
+        for geometry, why in (
+            ({"x": 0, "y": 0, "w": 1000000000, "h": 2}, "absurd width"),
+            ({"x": 0, "y": -5000, "w": 2, "h": 2}, "negative origin"),
+            ({"x": -1, "y": 0, "w": 2, "h": 2}, "negative x"),
+            ({"x": 0, "y": 0, "w": 0, "h": 2}, "zero-width span"),
+        ):
+            with self.subTest(why=why):
+                with self.assertRaises(ValueError):
+                    validate_dashboard_bundle_dict(
+                        self._bundle(
+                            components=[
+                                {"component_name": "TotemMinerComponent", **geometry}
+                            ]
+                        )
+                    )
+
+    def test_accepts_ordinary_geometry(self):
+        validate_dashboard_bundle_dict(
+            self._bundle(
+                components=[
+                    {"component_name": "TotemMinerComponent",
+                     "x": 0, "y": 0, "w": 12, "h": 8}
+                ]
+            )
+        )
+
+    def test_rejects_too_many_components(self):
+        many = [
+            {"component_name": "TotemMinerComponent", "x": 0, "y": 0, "w": 1, "h": 1}
+            for _ in range(MAX_BUNDLE_COMPONENTS + 1)
+        ]
+        with self.assertRaisesMessage(ValueError, "at most"):
+            validate_dashboard_bundle_dict(self._bundle(components=many))
+
+    def test_rejects_non_numeric_geometry(self):
+        """`save_layout` lets this through and 500s in `objects.create`.
+
+        A file is less trusted than a grid the user built, so it is checked.
+        """
+        for bad in ("abc", None, 1.5, True):
+            component = {
+                "component_name": "TotemMinerComponent",
+                "x": bad,
+                "y": 0,
+                "w": 1,
+                "h": 1,
+            }
+            with self.assertRaises(ValueError):
+                validate_dashboard_bundle_dict(self._bundle(components=[component]))
+
+    def test_rejects_a_component_without_a_type(self):
+        with self.assertRaises(ValueError):
+            validate_dashboard_bundle_dict(
+                self._bundle(components=[{"x": 0, "y": 0, "w": 1, "h": 1}])
+            )
+
+    def test_links_round_trip_through_names(self):
+        doc = {
+            "type": "doc",
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "go",
+                            "marks": [
+                                {"type": "bold"},
+                                {
+                                    "type": "dashboardLink",
+                                    "attrs": {"dashboardId": 7},
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+        named = links_to_names(doc, {7: "Sales"})
+        marks = named["content"][0]["content"][0]["marks"]
+        self.assertEqual(
+            marks[1], {"type": "dashboardLink", "attrs": {"dashboardName": "Sales"}}
+        )
+        # Other marks are untouched.
+        self.assertEqual(marks[0], {"type": "bold"})
+
+        back, dropped = links_to_ids(named, {"Sales": 42})
+        self.assertEqual(dropped, 0)
+        self.assertEqual(
+            back["content"][0]["content"][0]["marks"][1],
+            {"type": "dashboardLink", "attrs": {"dashboardId": 42}},
+        )
+
+    def test_a_link_to_a_missing_name_is_dropped_and_counted(self):
+        doc = {
+            "type": "doc",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "go",
+                    "marks": [
+                        {"type": "dashboardLink", "attrs": {"dashboardName": "Gone"}}
+                    ],
+                }
+            ],
+        }
+        back, dropped = links_to_ids(doc, {"Sales": 1})
+        self.assertEqual(dropped, 1)
+        # The words stay, only the link goes.
+        self.assertEqual(back["content"][0].get("marks", []), [])
+        self.assertEqual(back["content"][0]["text"], "go")
+
+    def test_export_drops_a_link_whose_target_is_gone(self):
+        doc = {
+            "type": "text",
+            "text": "go",
+            "marks": [{"type": "dashboardLink", "attrs": {"dashboardId": 99}}],
+        }
+        self.assertEqual(links_to_names(doc, {7: "Sales"}).get("marks", []), [])
+
+
+class DashboardExportImportApiTests(TestCase):
+    """Export and import across projects: what travels, and what degrades."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="bundle-owner")
+        self.other = User.objects.create_user(username="bundle-other")
+
+        self.source = Project.objects.create(name="Source")
+        self.source.users.add(self.user)
+        self.target = Project.objects.create(name="Target")
+        self.target.users.add(self.user)
+        self.foreign = Project.objects.create(name="Foreign")
+        self.foreign.users.add(self.other)
+
+        self.dashboard = Dashboard.objects.create(
+            project=self.source, name="Ops", order_in_project=0
+        )
+        self.client.force_authenticate(user=self.user)
+
+    # -- helpers ---------------------------------------------------------
+
+    def _save(self, layout, dashboard=None):
+        response = self.client.post(
+            f"/api/dashboard/{(dashboard or self.dashboard).pk}/save_layout/",
+            {"layout": layout},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        return response
+
+    def _export(self, dashboard=None):
+        response = self.client.get(
+            f"/api/dashboard/{(dashboard or self.dashboard).pk}/export/"
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        return response.data
+
+    def _import(self, bundle, project=None, event_log=None, expect=201):
+        response = self.client.post(
+            "/api/dashboard/import/",
+            {
+                "project": (project or self.target).pk,
+                "event_log": event_log,
+                "bundle": bundle,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, expect, response.data)
+        return response.data
+
+    def _query_asset(self, project, name, query):
+        return ProjectAsset.objects.create(
+            project=project,
+            name=name,
+            asset_type=ProjectAsset.AssetType.QUERY,
+            content_json={"schema": "sql-query", "version": 1, "query": query},
+            created_by=self.user,
+        )
+
+    def _image_asset(self, project, name):
+        return ImageAsset.objects.create(
+            project=project,
+            name=name,
+            image=SimpleUploadedFile("logo.png", b"\x89PNG\r\n\x1a\n", "image/png"),
+            content_type="image/png",
+            created_by=self.user,
+        )
+
+    def _ocpn_asset(self, project, name):
+        return ProjectAsset.objects.create(
+            project=project,
+            name=name,
+            asset_type=ProjectAsset.AssetType.OCPN,
+            content_json={"schema": "ocpn", "version": 1},
+            created_by=self.user,
+        )
+
+    # -- export ----------------------------------------------------------
+
+    def test_export_is_a_stamped_attachment(self):
+        self._save(
+            [{"component_name": "TotemMinerComponent", "x": 0, "y": 0, "w": 4, "h": 4}]
+        )
+        response = self.client.get(f"/api/dashboard/{self.dashboard.pk}/export/")
+        self.assertEqual(
+            response["Content-Disposition"], 'attachment; filename="ops.json"'
+        )
+        self.assertEqual(response.data["schema"], DASHBOARD_BUNDLE_SCHEMA)
+        self.assertEqual(response.data["version"], DASHBOARD_BUNDLE_VERSION)
+        self.assertEqual(response.data["dashboard"]["name"], "Ops")
+
+    def test_export_carries_no_row_identity_or_log_binding(self):
+        self._save(
+            [
+                {
+                    "component_name": "OCDottedChartComponent",
+                    "x": 0,
+                    "y": 0,
+                    "w": 6,
+                    "h": 6,
+                    "file_id": 4242,
+                    "x_axis": "time",
+                }
+            ]
+        )
+        component = self._export()["components"][0]
+        for key in (
+            "id",
+            "dashboard",
+            "resourcetype",
+            "file_id",
+            "query_asset",
+            "image_asset",
+            "image_asset_url",
+            "image",
+        ):
+            self.assertNotIn(key, component)
+        # What the widget is actually configured to show does travel.
+        self.assertEqual(component["x_axis"], "time")
+
+    def test_export_names_its_asset_references(self):
+        asset = self._query_asset(self.source, "Volumes", "SELECT 1 AS n")
+        image = self._image_asset(self.source, "Logo")
+        self._save(
+            [
+                {
+                    "component_name": "KpiComponent",
+                    "x": 0,
+                    "y": 0,
+                    "w": 3,
+                    "h": 2,
+                    "query": "stale inline copy",
+                    "query_asset": asset.pk,
+                },
+                {
+                    "component_name": "ImageComponent",
+                    "x": 3,
+                    "y": 0,
+                    "w": 3,
+                    "h": 2,
+                    "image_asset": image.pk,
+                },
+            ]
+        )
+        kpi, img = self._export()["components"]
+        self.assertEqual(kpi["query_asset_name"], "Volumes")
+        # The linked asset's SQL wins at render time, so that is what travels —
+        # the inline text it made dead would render blank and silent elsewhere.
+        self.assertEqual(kpi["query"], "SELECT 1 AS n")
+        self.assertEqual(img["image_asset_name"], "Logo")
+
+    def test_export_keeps_number_of_events_colour(self):
+        """Regression: the read map spelled this component name differently
+        from the writer, so the row never downcast and `color` was lost."""
+        self._save(
+            [
+                {
+                    "component_name": "NumberOfEventsComponent",
+                    "x": 0,
+                    "y": 0,
+                    "w": 2,
+                    "h": 2,
+                    "color": "#ff0000",
+                }
+            ]
+        )
+        self.assertEqual(self._export()["components"][0]["color"], "#ff0000")
+
+    def test_cannot_export_a_foreign_dashboard(self):
+        theirs = Dashboard.objects.create(
+            project=self.foreign, name="Theirs", order_in_project=0
+        )
+        response = self.client.get(f"/api/dashboard/{theirs.pk}/export/")
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    # -- import: the happy path -------------------------------------------
+
+    def test_cross_project_round_trip_relinks_by_name(self):
+        self._query_asset(self.source, "Volumes", "SELECT 1 AS n")
+        self._image_asset(self.source, "Logo")
+        target_asset = self._query_asset(self.target, "Volumes", "SELECT 2 AS n")
+        target_image = self._image_asset(self.target, "Logo")
+        self._save(
+            [
+                {
+                    "component_name": "KpiComponent",
+                    "x": 1,
+                    "y": 2,
+                    "w": 3,
+                    "h": 4,
+                    "query_asset": ProjectAsset.objects.get(
+                        project=self.source, name="Volumes"
+                    ).pk,
+                    "value_column": "n",
+                },
+                {
+                    "component_name": "ImageComponent",
+                    "x": 4,
+                    "y": 0,
+                    "w": 2,
+                    "h": 2,
+                    "image_asset": ImageAsset.objects.get(
+                        project=self.source, name="Logo"
+                    ).pk,
+                },
+            ]
+        )
+        result = self._import(self._export())
+
+        self.assertEqual(result["warnings"], [])
+        imported = Dashboard.objects.get(pk=result["dashboard"]["id"])
+        self.assertEqual(imported.project, self.target)
+
+        kpi = KpiComponent.objects.get(dashboard=imported)
+        # Pointed at the TARGET project's asset of the same name, not the source's.
+        self.assertEqual(kpi.query_asset, target_asset)
+        self.assertEqual((kpi.x, kpi.y, kpi.w, kpi.h), (1, 2, 3, 4))
+        self.assertEqual(kpi.value_column, "n")
+        self.assertEqual(
+            ImageComponent.objects.get(dashboard=imported).image_asset, target_image
+        )
+
+    def test_import_leaves_the_source_dashboard_alone(self):
+        self._save(
+            [{"component_name": "TotemMinerComponent", "x": 0, "y": 0, "w": 4, "h": 4}]
+        )
+        self._import(self._export())
+        self.assertEqual(self.dashboard.components.count(), 1)
+        self.assertEqual(Dashboard.objects.filter(project=self.source).count(), 1)
+
+    def test_import_appends_to_the_project_order(self):
+        Dashboard.objects.create(project=self.target, name="First", order_in_project=7)
+        self._save(
+            [{"component_name": "TotemMinerComponent", "x": 0, "y": 0, "w": 4, "h": 4}]
+        )
+        result = self._import(self._export())
+        self.assertEqual(result["dashboard"]["order_in_project"], 8)
+
+    # -- import: the degradation paths ------------------------------------
+
+    def test_an_ocpn_backed_widget_relinks_by_name(self):
+        """The replay and alignment widgets point at an OCPN *asset*.
+
+        Both store it as a bare id (`ocpn_asset_id`, `model_asset`), so the
+        same rule as the dashboard links applies: carried as an id, a file
+        imported elsewhere would silently re-point at whatever asset happens to
+        hold that id in the target project.
+        """
+        source_asset = self._ocpn_asset(self.source, "Order net")
+        self._save(
+            [
+                {
+                    "component_name": "OCPNFlattenedReplayComponent",
+                    "x": 0,
+                    "y": 0,
+                    "w": 6,
+                    "h": 6,
+                    "ocpn_asset_id": source_asset.pk,
+                },
+                {
+                    "component_name": "OCAlignmentComponent",
+                    "x": 0,
+                    "y": 6,
+                    "w": 6,
+                    "h": 6,
+                    "model_asset": source_asset.pk,
+                },
+            ]
+        )
+
+        bundle = self._export()
+        replay, alignment = bundle["components"]
+        self.assertEqual(replay["ocpn_asset_name"], "Order net")
+        self.assertEqual(alignment["model_asset_name"], "Order net")
+        # The ids themselves must not be in the file at all.
+        self.assertNotIn("ocpn_asset_id", replay)
+        self.assertNotIn("model_asset", alignment)
+
+        # A different asset id in the target, so a carried id could not pass
+        # for the right one by luck.
+        self._ocpn_asset(self.target, "Decoy")
+        target_asset = self._ocpn_asset(self.target, "Order net")
+        imported = self._import(bundle)
+        self.assertEqual(imported["warnings"], [])
+
+        created = Dashboard.objects.get(pk=imported["dashboard"]["id"])
+        new_replay = OCPNFlattenedReplayComponent.objects.get(dashboard=created)
+        new_alignment = OCAlignmentComponent.objects.get(dashboard=created)
+        self.assertEqual(new_replay.ocpn_asset_id, target_asset.pk)
+        self.assertEqual(new_alignment.model_asset_id, target_asset.pk)
+
+    def test_a_missing_ocpn_model_imports_unselected_and_warns(self):
+        source_asset = self._ocpn_asset(self.source, "Order net")
+        self._save(
+            [
+                {
+                    "component_name": "OCAlignmentComponent",
+                    "x": 0,
+                    "y": 0,
+                    "w": 6,
+                    "h": 6,
+                    "model_asset": source_asset.pk,
+                }
+            ]
+        )
+
+        imported = self._import(self._export())
+
+        self.assertEqual(
+            [w["code"] for w in imported["warnings"]], ["model_asset_missing"]
+        )
+        created = Dashboard.objects.get(pk=imported["dashboard"]["id"])
+        # No model rather than a wrong one, and the import still succeeded.
+        self.assertIsNone(
+            OCAlignmentComponent.objects.get(dashboard=created).model_asset_id
+        )
+
+    def test_a_missing_stored_query_keeps_the_sql_and_warns(self):
+        asset = self._query_asset(self.source, "Volumes", "SELECT c1, c2 FROM abc")
+        self._save(
+            [
+                {
+                    "component_name": "SqlQueryComponent",
+                    "x": 0,
+                    "y": 0,
+                    "w": 6,
+                    "h": 4,
+                    "query_asset": asset.pk,
+                }
+            ]
+        )
+        result = self._import(self._export())
+
+        component = SqlQueryComponent.objects.get(
+            dashboard_id=result["dashboard"]["id"]
+        )
+        self.assertIsNone(component.query_asset)
+        # The SQL has to survive, or the widget renders blank instead of
+        # showing the user the error they need to fix.
+        self.assertEqual(component.query, "SELECT c1, c2 FROM abc")
+
+        codes = [w["code"] for w in result["warnings"]]
+        self.assertEqual(codes, ["query_asset_missing"])
+        self.assertIn("Volumes", result["warnings"][0]["detail"])
+
+    def test_a_missing_image_asset_imports_empty_and_warns(self):
+        image = self._image_asset(self.source, "Logo")
+        self._save(
+            [
+                {
+                    "component_name": "ImageComponent",
+                    "x": 0,
+                    "y": 0,
+                    "w": 2,
+                    "h": 2,
+                    "image_asset": image.pk,
+                }
+            ]
+        )
+        result = self._import(self._export())
+
+        component = ImageComponent.objects.get(dashboard_id=result["dashboard"]["id"])
+        self.assertIsNone(component.image_asset)
+        self.assertEqual([w["code"] for w in result["warnings"]], ["image_asset_missing"])
+
+    def test_a_dotted_chart_is_rebound_to_the_target_log(self):
+        source_log = EventLog.objects.create(
+            project=self.source,
+            file=SimpleUploadedFile("src.json", b"{}", "application/json"),
+        )
+        target_log = EventLog.objects.create(
+            project=self.target,
+            file=SimpleUploadedFile("tgt.json", b"{}", "application/json"),
+        )
+        self._save(
+            [
+                {
+                    "component_name": "OCDottedChartComponent",
+                    "x": 0,
+                    "y": 0,
+                    "w": 6,
+                    "h": 6,
+                    "file_id": source_log.pk,
+                }
+            ]
+        )
+        result = self._import(self._export(), event_log=target_log.pk)
+
+        component = OCDottedChartComponent.objects.get(
+            dashboard_id=result["dashboard"]["id"]
+        )
+        self.assertEqual(component.file_id, target_log.pk)
+        self.assertEqual([w["code"] for w in result["warnings"]], ["event_log_rebound"])
+
+    def test_a_dotted_chart_without_a_log_imports_unbound(self):
+        self._save(
+            [
+                {
+                    "component_name": "OCDottedChartComponent",
+                    "x": 0,
+                    "y": 0,
+                    "w": 6,
+                    "h": 6,
+                }
+            ]
+        )
+        result = self._import(self._export(), event_log=None)
+        component = OCDottedChartComponent.objects.get(
+            dashboard_id=result["dashboard"]["id"]
+        )
+        self.assertIsNone(component.file_id)
+        self.assertEqual([w["code"] for w in result["warnings"]], ["event_log_missing"])
+
+    def test_a_foreign_event_log_is_refused_as_a_rebind_target(self):
+        foreign_log = EventLog.objects.create(
+            project=self.foreign,
+            file=SimpleUploadedFile("f.json", b"{}", "application/json"),
+        )
+        self._save(
+            [
+                {
+                    "component_name": "OCDottedChartComponent",
+                    "x": 0,
+                    "y": 0,
+                    "w": 6,
+                    "h": 6,
+                }
+            ]
+        )
+        result = self._import(self._export(), event_log=foreign_log.pk)
+        component = OCDottedChartComponent.objects.get(
+            dashboard_id=result["dashboard"]["id"]
+        )
+        self.assertIsNone(component.file_id)
+
+    def test_an_unknown_widget_is_skipped_without_failing_the_import(self):
+        bundle = {
+            "schema": DASHBOARD_BUNDLE_SCHEMA,
+            "version": DASHBOARD_BUNDLE_VERSION,
+            "dashboard": {"name": "Ops"},
+            "components": [
+                {
+                    "component_name": "TotemMinerComponent",
+                    "x": 0,
+                    "y": 0,
+                    "w": 4,
+                    "h": 4,
+                },
+                {
+                    "component_name": "TimeTravelComponent",
+                    "x": 4,
+                    "y": 0,
+                    "w": 4,
+                    "h": 4,
+                },
+            ],
+        }
+        result = self._import(bundle)
+        imported = Dashboard.objects.get(pk=result["dashboard"]["id"])
+        self.assertEqual(imported.components.count(), 1)
+        self.assertEqual([w["code"] for w in result["warnings"]], ["component_unknown"])
+        self.assertIn("TimeTravelComponent", result["warnings"][0]["detail"])
+
+    # -- import: dashboard links ------------------------------------------
+
+    def _text_box_linking_to(self, target_name_or_id):
+        attrs = (
+            {"dashboardId": target_name_or_id}
+            if isinstance(target_name_or_id, int)
+            else {"dashboardName": target_name_or_id}
+        )
+        return {
+            "component_name": "TextBoxComponent",
+            "x": 0,
+            "y": 0,
+            "w": 4,
+            "h": 2,
+            "rich_text": {
+                "type": "doc",
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "go there",
+                                "marks": [{"type": "dashboardLink", "attrs": attrs}],
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+
+    def test_a_link_survives_a_same_project_reimport(self):
+        sibling = Dashboard.objects.create(
+            project=self.source, name="Sibling", order_in_project=1
+        )
+        self._save([self._text_box_linking_to(sibling.pk)])
+        result = self._import(self._export(), project=self.source)
+
+        box = TextBoxComponent.objects.get(dashboard_id=result["dashboard"]["id"])
+        marks = box.rich_text["content"][0]["content"][0]["marks"]
+        self.assertEqual(marks[0]["attrs"]["dashboardId"], sibling.pk)
+        self.assertEqual(result["warnings"], [])
+
+    def test_a_link_to_another_project_is_dropped_and_the_text_kept(self):
+        sibling = Dashboard.objects.create(
+            project=self.source, name="Sibling", order_in_project=1
+        )
+        self._save([self._text_box_linking_to(sibling.pk)])
+        result = self._import(self._export(), project=self.target)
+
+        box = TextBoxComponent.objects.get(dashboard_id=result["dashboard"]["id"])
+        self.assertEqual(box.rich_text["content"][0]["content"][0].get("marks", []), [])
+        self.assertEqual(box.rich_text["content"][0]["content"][0]["text"], "go there")
+        self.assertEqual(
+            [w["code"] for w in result["warnings"]], ["dashboard_link_dropped"]
+        )
+
+    def test_a_raw_id_in_a_hand_edited_file_never_becomes_a_link(self):
+        """The reason links travel as names.
+
+        A file written against another database can carry an id that happens to
+        name a real dashboard of the target project. Resolving ids would point
+        the link at a dashboard the author never chose.
+        """
+        decoy = Dashboard.objects.create(
+            project=self.target, name="Decoy", order_in_project=1
+        )
+        bundle = {
+            "schema": DASHBOARD_BUNDLE_SCHEMA,
+            "version": DASHBOARD_BUNDLE_VERSION,
+            "dashboard": {"name": "Ops"},
+            "components": [self._text_box_linking_to(decoy.pk)],
+        }
+        result = self._import(bundle)
+
+        box = TextBoxComponent.objects.get(dashboard_id=result["dashboard"]["id"])
+        self.assertEqual(box.rich_text["content"][0]["content"][0].get("marks", []), [])
+
+    def test_a_self_link_points_at_the_imported_copy(self):
+        self._save([self._text_box_linking_to(self.dashboard.pk)])
+        result = self._import(self._export(), project=self.source)
+
+        new_id = result["dashboard"]["id"]
+        box = TextBoxComponent.objects.get(dashboard_id=new_id)
+        marks = box.rich_text["content"][0]["content"][0]["marks"]
+        self.assertEqual(marks[0]["attrs"]["dashboardId"], new_id)
+        self.assertNotEqual(new_id, self.dashboard.pk)
+
+    # -- import: naming ----------------------------------------------------
+
+    def test_a_name_clash_is_suffixed_never_overwritten(self):
+        self._save(
+            [{"component_name": "TotemMinerComponent", "x": 0, "y": 0, "w": 4, "h": 4}]
+        )
+        bundle = self._export()
+
+        first = self._import(bundle)
+        self.assertEqual(first["dashboard"]["name"], "Ops")
+        second = self._import(bundle)
+        self.assertEqual(second["dashboard"]["name"], "Ops (imported)")
+        third = self._import(bundle)
+        self.assertEqual(third["dashboard"]["name"], "Ops (2)")
+        self.assertEqual(Dashboard.objects.filter(project=self.target).count(), 3)
+
+    def test_a_long_name_still_fits_after_a_suffix(self):
+        limit = Dashboard._meta.get_field("name").max_length
+        long_name = "x" * limit
+        Dashboard.objects.create(
+            project=self.target, name=long_name, order_in_project=0
+        )
+        name = unique_dashboard_name(self.target, long_name)
+        self.assertLessEqual(len(name), limit)
+        self.assertTrue(name.endswith(" (imported)"))
+
+    def test_an_overlong_name_is_truncated_to_the_column(self):
+        limit = Dashboard._meta.get_field("name").max_length
+        name = unique_dashboard_name(self.target, "y" * (limit + 50))
+        self.assertEqual(len(name), limit)
+
+    # -- import: refusals --------------------------------------------------
+
+    def test_a_non_numeric_project_is_refused_without_a_server_error(self):
+        """The id comes from a body a user can hand-write.
+
+        Straight into `filter(pk=...)` it makes the ORM raise, which DRF turns
+        into a 500 — on the one endpoint whose whole job is reading a file.
+        """
+        before = Dashboard.objects.count()
+        for project in ("abc", {}, [], 1.5):
+            with self.subTest(project=project):
+                response = self.client.post(
+                    "/api/dashboard/import/",
+                    {"project": project, "bundle": self._export()},
+                    format="json",
+                )
+                self.assertEqual(response.status_code, 400, response.data)
+        self.assertEqual(Dashboard.objects.count(), before)
+
+    def test_a_non_numeric_event_log_imports_unbound(self):
+        """Same outcome as a log of another project: unbound, and said so."""
+        self._save(
+            [{"component_name": "OCDottedChartComponent",
+              "x": 0, "y": 0, "w": 6, "h": 6}]
+        )
+        response = self.client.post(
+            "/api/dashboard/import/",
+            {"project": self.target.pk, "event_log": "nope",
+             "bundle": self._export()},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertIn(
+            "event_log_missing", [w["code"] for w in response.data["warnings"]]
+        )
+
+    def test_a_bad_field_value_is_a_four_hundred_not_a_five_hundred(self):
+        """`_replace_components` validates many fields, but not all of them.
+
+        Both of these reach `objects.create()` and are rejected by the model
+        itself — a ValueError and a Django ValidationError, neither of which
+        DRF translates on its own.
+        """
+        before = Dashboard.objects.count()
+        for component, why in (
+            ({"component_name": "ProcessAreaComponent",
+              "x": 0, "y": 0, "w": 2, "h": 2, "alpha": "x"}, "float field"),
+            ({"component_name": "OCDottedChartComponent",
+              "x": 0, "y": 0, "w": 2, "h": 2, "show_minimap": "maybe"}, "bool field"),
+        ):
+            with self.subTest(why=why):
+                response = self._import(
+                    {
+                        "schema": DASHBOARD_BUNDLE_SCHEMA,
+                        "version": DASHBOARD_BUNDLE_VERSION,
+                        "dashboard": {"name": "Bad"},
+                        "components": [component],
+                    },
+                    expect=400,
+                )
+                self.assertIn("error", response)
+        # The atomic block rolled back: no half-built dashboard survives.
+        self.assertEqual(Dashboard.objects.count(), before)
+
+    def test_rename_rejects_a_name_over_the_field_limit(self):
+        """`rename` bypasses the serializer, so nothing else enforces this.
+
+        SQLite stores an over-long name silently; Postgres raises DataError,
+        which is a 500.
+        """
+        limit = Dashboard._meta.get_field("name").max_length
+        response = self.client.patch(
+            f"/api/dashboard/{self.dashboard.pk}/rename/",
+            {"name": "x" * (limit + 1)},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+        self.dashboard.refresh_from_db()
+        self.assertEqual(self.dashboard.name, "Ops")
+
+    def test_rename_accepts_a_name_at_the_limit(self):
+        limit = Dashboard._meta.get_field("name").max_length
+        response = self.client.patch(
+            f"/api/dashboard/{self.dashboard.pk}/rename/",
+            {"name": "y" * limit},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+
+    def test_an_ambiguous_link_target_resolves_to_the_oldest_and_warns(self):
+        """Dashboard names are not unique within a project.
+
+        Resolving a link through a plain {name: pk} dict let an unordered
+        queryset decide which row it landed on, so the same file could import
+        differently twice.
+        """
+        first = Dashboard.objects.create(
+            project=self.target, name="Twin", order_in_project=1
+        )
+        Dashboard.objects.create(
+            project=self.target, name="Twin", order_in_project=2
+        )
+        bundle = {
+            "schema": DASHBOARD_BUNDLE_SCHEMA,
+            "version": DASHBOARD_BUNDLE_VERSION,
+            "dashboard": {"name": "Linker"},
+            "components": [
+                {
+                    "component_name": "TextBoxComponent",
+                    "x": 0, "y": 0, "w": 4, "h": 2,
+                    "text": "see twin",
+                    "rich_text": {
+                        "type": "doc",
+                        "content": [{"type": "paragraph", "content": [{
+                            "type": "text", "text": "twin",
+                            "marks": [{"type": "dashboardLink",
+                                       "attrs": {"dashboardName": "Twin"}}],
+                        }]}],
+                    },
+                }
+            ],
+        }
+
+        imported = self._import(bundle)
+        self.assertIn(
+            "dashboard_link_ambiguous",
+            [w["code"] for w in imported["warnings"]],
+        )
+        created = Dashboard.objects.get(pk=imported["dashboard"]["id"])
+        box = TextBoxComponent.objects.get(dashboard=created)
+        self.assertIn(f'"dashboardId": {first.pk}', json.dumps(box.rich_text))
+
+    def test_log_coupled_settings_are_reported_once_for_the_whole_import(self):
+        """Advisory, and about a class of widget — so not one row per widget."""
+        self._save(
+            [
+                {"component_name": "VariantsComponent", "x": 0, "y": 0, "w": 4, "h": 4,
+                 "leading_object_type": "Order"},
+                {"component_name": "OCCNComponent", "x": 4, "y": 0, "w": 4, "h": 4,
+                 "object_types": "Order,Item"},
+            ]
+        )
+        warnings = self._import(self._export())["warnings"]
+        coupled = [w for w in warnings if w["code"] == "log_coupled_settings"]
+        self.assertEqual(len(coupled), 1, warnings)
+        self.assertIn("VariantsComponent", coupled[0]["detail"])
+        self.assertIn("OCCNComponent", coupled[0]["detail"])
+
+    def test_an_untouched_widget_does_not_raise_the_log_coupled_warning(self):
+        self._save(
+            [{"component_name": "VariantsComponent", "x": 0, "y": 0, "w": 4, "h": 4}]
+        )
+        warnings = self._import(self._export())["warnings"]
+        self.assertEqual(
+            [w for w in warnings if w["code"] == "log_coupled_settings"], []
+        )
+
+    def test_cannot_import_into_a_foreign_project(self):
+        self._save(
+            [{"component_name": "TotemMinerComponent", "x": 0, "y": 0, "w": 4, "h": 4}]
+        )
+        self._import(self._export(), project=self.foreign, expect=400)
+        self.assertFalse(Dashboard.objects.filter(project=self.foreign).exists())
+
+    def test_a_malformed_bundle_creates_nothing(self):
+        before = Dashboard.objects.count()
+        for bundle in (
+            {"schema": "totem", "version": 1},
+            {"schema": DASHBOARD_BUNDLE_SCHEMA, "version": 99, "dashboard": {}},
+            "not an object",
+        ):
+            response = self._import(bundle, expect=400)
+            self.assertIn("error", response)
+        self.assertEqual(Dashboard.objects.count(), before)
+class DashboardBundleReviewFixTests(TestCase):
+    """Follow-ups from the second review of the export/import branch."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="bundle-review")
+        self.source = Project.objects.create(name="ReviewSource")
+        self.source.users.add(self.user)
+        self.target = Project.objects.create(name="ReviewTarget")
+        self.target.users.add(self.user)
+        self.dashboard = Dashboard.objects.create(
+            project=self.source, name="Ops", order_in_project=0
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def _export(self):
+        response = self.client.get(f"/api/dashboard/{self.dashboard.pk}/export/")
+        self.assertEqual(response.status_code, 200, response.data)
+        return response.data
+
+    def _import(self, bundle, project):
+        response = self.client.post(
+            "/api/dashboard/import/",
+            {"project": project.pk, "event_log": None, "bundle": bundle},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        return response.data
+
+    def test_version_zero_is_reported_as_corrupt_not_newer(self):
+        bundle = {
+            "schema": DASHBOARD_BUNDLE_SCHEMA,
+            "version": 0,
+            "dashboard": {"name": "D"},
+            "components": [],
+        }
+        with self.assertRaisesMessage(ValueError, "may be corrupt"):
+            validate_dashboard_bundle_dict(bundle)
+
+    def test_a_legacy_number_of_events_row_survives_export_and_import(self):
+        NumberofEventsComponent.objects.create(
+            dashboard=self.dashboard,
+            x=0, y=0, w=2, h=2,
+            component_name="NumberofEventsComponent",
+            color="#00ff00",
+        )
+        bundle = self._export()
+        self.assertEqual(
+            bundle["components"][0]["component_name"], "NumberOfEventsComponent"
+        )
+        # An older file still carries the legacy spelling.
+        bundle["components"][0]["component_name"] = "NumberofEventsComponent"
+        result = self._import(bundle, self.target)
+        self.assertEqual(result["warnings"], [])
+        row = NumberofEventsComponent.objects.get(
+            dashboard_id=result["dashboard"]["id"]
+        )
+        self.assertEqual(row.component_name, "NumberOfEventsComponent")
+        self.assertEqual(row.color, "#00ff00")
+
+    def test_save_layout_keeps_a_legacy_number_of_events_widget(self):
+        response = self.client.post(
+            f"/api/dashboard/{self.dashboard.pk}/save_layout/",
+            {"layout": [{"component_name": "NumberofEventsComponent",
+                         "x": 0, "y": 0, "w": 2, "h": 2, "color": "red"}]},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(
+            list(self.dashboard.components.values_list("component_name", flat=True)),
+            ["NumberOfEventsComponent"],
+        )
+
+    def test_get_layout_downcasts_every_row_in_few_queries(self):
+        for i in range(6):
+            NumberofEventsComponent.objects.create(
+                dashboard=self.dashboard, x=i, y=0, w=1, h=1,
+                component_name="NumberOfEventsComponent", color="red",
+            )
+        TextBoxComponent.objects.create(
+            dashboard=self.dashboard, x=0, y=1, w=2, h=2,
+            component_name="TextBoxComponent", text="hi",
+        )
+        # Dashboard lookup, base rows, then one per concrete type — not one
+        # per row, which was 2 + 7 before.
+        with self.assertNumQueries(4):
+            response = self.client.get(
+                f"/api/dashboard/{self.dashboard.pk}/get_layout/"
+            )
+        self.assertEqual(response.status_code, 200)
+        colours = [c.get("color") for c in response.data if "color" in c]
+        self.assertEqual(colours, ["red"] * 6)
+
+    def test_alignment_execution_id_raises_the_log_coupled_warning(self):
+        OCAlignmentComponent.objects.create(
+            dashboard=self.dashboard, x=0, y=0, w=4, h=4,
+            component_name="OCAlignmentComponent", execution_id="exec-17",
+        )
+        warnings = self._import(self._export(), self.target)["warnings"]
+        coupled = [w for w in warnings if w["code"] == "log_coupled_settings"]
+        self.assertEqual(len(coupled), 1, warnings)
+        self.assertIn("OCAlignmentComponent", coupled[0]["detail"])
+
+    def test_the_name_fallback_never_returns_a_taken_name(self):
+        names = ["X", "X (imported)"] + [f"X ({n})" for n in range(2, 101)]
+        Dashboard.objects.bulk_create(
+            Dashboard(project=self.target, name=n, order_in_project=i)
+            for i, n in enumerate(names)
+        )
+        self.assertEqual(unique_dashboard_name(self.target, "X"), "X (101)")
+
+
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp(prefix="totem-test-bundle-image-"))
+class DashboardBundleLegacyImageTests(TestCase):
+    """A picture uploaded straight to the widget, not through the asset store."""
+
+    def setUp(self):
+        from django.conf import settings as dj_settings
+
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="bundle-image")
+        self.source = Project.objects.create(name="ImgSource")
+        self.source.users.add(self.user)
+        self.target = Project.objects.create(name="ImgTarget")
+        self.target.users.add(self.user)
+        self.dashboard = Dashboard.objects.create(
+            project=self.source, name="Pics", order_in_project=0
+        )
+        project_dir = os.path.join(dj_settings.MEDIA_ROOT, self.source.name)
+        os.makedirs(project_dir, exist_ok=True)
+        with open(os.path.join(project_dir, "logo.png"), "wb") as fh:
+            fh.write(b"\x89PNG\r\n\x1a\n")
+        ImageComponent.objects.create(
+            dashboard=self.dashboard, x=0, y=0, w=2, h=2,
+            component_name="ImageComponent", image=f"{self.source.name}/logo.png",
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def _round_trip(self, project):
+        bundle = self.client.get(
+            f"/api/dashboard/{self.dashboard.pk}/export/"
+        ).data
+        self.assertTrue(bundle["components"][0].get("image"))
+        response = self.client.post(
+            "/api/dashboard/import/",
+            {"project": project.pk, "event_log": None, "bundle": bundle},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        row = ImageComponent.objects.get(dashboard_id=response.data["dashboard"]["id"])
+        return row, response.data["warnings"]
+
+    def test_a_same_project_round_trip_keeps_the_picture(self):
+        row, warnings = self._round_trip(self.source)
+        self.assertEqual(row.image.name, f"{self.source.name}/logo.png")
+        self.assertEqual(warnings, [])
+
+    def test_another_project_imports_empty_and_says_so(self):
+        row, warnings = self._round_trip(self.target)
+        self.assertFalse(row.image)
+        self.assertEqual([w["code"] for w in warnings], ["image_asset_missing"])
+
+
+class HostingLimitsTests(TestCase):
+    """TOTEM_MAX_UPLOAD_MB and TOTEM_MAX_PROJECTS_PER_USER."""
+
+    def setUp(self):
+        self.user = User.objects.create_user("limited", password="pw")
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+        self.media = tempfile.TemporaryDirectory()
+        self.addCleanup(self.media.cleanup)
+        override = override_settings(MEDIA_ROOT=self.media.name)
+        override.enable()
+        self.addCleanup(override.disable)
+
+    def _own_project(self):
+        project = Project.objects.create(name="existing")
+        project.users.add(self.user)
+        return project
+
+    def _upload(self, size=10):
+        upload = SimpleUploadedFile("log.duckdb", b"x" * size)
+        with patch("api.views.event_log._build_ocel_db_from_path"), patch(
+            "api.views.event_log._object_types_with_counts", return_value=[]
+        ), patch("api.views.event_log._log_time_window", return_value=None):
+            return self.client.post("/api/files/", {"file": upload}, format="multipart")
+
+    def test_no_limits_by_default(self):
+        self._own_project()
+        self.assertEqual(self._upload(2 * 1024 * 1024).status_code, 201)
+
+    @override_settings(MAX_UPLOAD_BYTES=1024 * 1024)
+    def test_file_over_the_size_limit_is_rejected(self):
+        response = self._upload(1024 * 1024 + 1)
+        self.assertEqual(response.status_code, 413)
+        self.assertIn("1 MB", response.data["detail"])
+        self.assertIn("totem-tool.com", response.data["detail"])
+        self.assertFalse(Project.objects.filter(users=self.user).exists())
+
+    @override_settings(MAX_UPLOAD_BYTES=1024 * 1024)
+    def test_file_at_the_size_limit_is_accepted(self):
+        self.assertEqual(self._upload(1024 * 1024).status_code, 201)
+
+    @override_settings(MAX_PROJECTS_PER_USER=1)
+    def test_upload_at_the_project_limit_is_rejected(self):
+        self._own_project()
+        response = self._upload()
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("limit of 1 project.", response.data["detail"])
+        self.assertIn("totem-tool.com", response.data["detail"])
+        self.assertEqual(Project.objects.filter(users=self.user).count(), 1)
+
+    @override_settings(MAX_PROJECTS_PER_USER=1)
+    def test_project_limit_counts_per_user(self):
+        other = User.objects.create_user("other", password="pw")
+        Project.objects.create(name="theirs").users.add(other)
+        self.assertEqual(self._upload().status_code, 201)
+
+    @override_settings(MAX_PROJECTS_PER_USER=1)
+    def test_create_project_enforces_the_limit(self):
+        self._own_project()
+        with self.assertRaises(ProjectLimitReached):
+            create_project("another", self.user)
+
+    @override_settings(MAX_UPLOAD_BYTES=2097152, MAX_PROJECTS_PER_USER=3)
+    def test_upload_limits_endpoint(self):
+        self._own_project()
+        self.assertEqual(
+            self.client.get("/api/upload-limits/").data,
+            {"max_upload_bytes": 2097152, "max_projects_per_user": 3, "project_count": 1},
+        )
+
+
+# ---------------------------------------------------------------------------
+# Layout preferences of OC-DFG views (dashboard widgets and projects)
+# ---------------------------------------------------------------------------
+
+_PREFS = {"version": 1, "options": {"edgeStyle": "orthogonal", "selfLoopStyle": "badge"}}
+
+
+class DashboardLocalFilterTests(TestCase):
+    """Per-widget local filters: stored by save_layout and by the view-mode
+    PATCH, which finds the widget by grid position (ids change on save)."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="filter-owner")
+        self.other = User.objects.create_user(username="filter-other")
+        self.project = Project.objects.create(name="Filters")
+        self.project.users.add(self.user)
+        self.dashboard = Dashboard.objects.create(project=self.project, name="D", order_in_project=0)
+        self.client.force_authenticate(user=self.user)
+
+    def _save(self, layout):
+        return self.client.post(
+            f"/api/dashboard/{self.dashboard.pk}/save_layout/", {"layout": layout}, format="json"
+        )
+
+    def _layout(self):
+        return self.client.get(f"/api/dashboard/{self.dashboard.pk}/get_layout/").json()
+
+    def _patch(self, body):
+        return self.client.patch(
+            f"/api/dashboard/{self.dashboard.pk}/local_filter/", body, format="json"
+        )
+
+    def _widgets(self):
+        return [
+            {"x": 0, "y": 0, "w": 4, "h": 4, "component_name": "LogStatisticsComponent",
+             "local_filter_params": {"activities": "a", "after": "", "before": None}},
+            {"x": 4, "y": 0, "w": 4, "h": 4, "component_name": "KpiComponent"},
+        ]
+
+    def test_save_layout_stores_cleaned_params(self):
+        self.assertEqual(self._save(self._widgets()).status_code, 200)
+        self.assertEqual(
+            [c["local_filter_params"] for c in self._layout()], [{"activities": "a"}, None]
+        )
+
+    def test_patch_by_position_survives_a_layout_save(self):
+        self._save(self._widgets())
+        self._save(self._widgets())  # recreates components with new ids
+        response = self._patch({"x": 4, "y": 0, "local_filter_params": {"activities": "b"}})
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(
+            [c["local_filter_params"] for c in self._layout()],
+            [{"activities": "a"}, {"activities": "b"}],
+        )
+        self.assertEqual(self._patch({"x": 0, "y": 0, "local_filter_params": None}).status_code, 204)
+        self.assertEqual(self._layout()[0]["local_filter_params"], None)
+
+    def test_patch_validates_and_404s(self):
+        self._save(self._widgets())
+        self.assertEqual(self._patch({"x": "0", "y": 0, "local_filter_params": {}}).status_code, 400)
+        self.assertEqual(self._patch({"x": 0, "y": 0, "local_filter_params": "a"}).status_code, 400)
+        self.assertEqual(self._patch({"x": 9, "y": 9, "local_filter_params": {}}).status_code, 404)
+        self.client.force_authenticate(user=self.other)
+        self.assertEqual(self._patch({"x": 0, "y": 0, "local_filter_params": {}}).status_code, 404)
+
+
+class OcdfgDashboardLayoutTests(TestCase):
+    """layout_options of NewOCDFGComponent: save_layout, get_layout and the
+    view-mode PATCH that finds a widget by its grid position."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="layout-owner")
+        self.other = User.objects.create_user(username="layout-other")
+        self.project = Project.objects.create(name="Layouts")
+        self.project.users.add(self.user)
+        self.dashboard = Dashboard.objects.create(project=self.project, name="D", order_in_project=0)
+        self.client.force_authenticate(user=self.user)
+
+    def _save(self, layout):
+        return self.client.post(
+            f"/api/dashboard/{self.dashboard.pk}/save_layout/", {"layout": layout}, format="json"
+        )
+
+    def _layout(self):
+        return self.client.get(f"/api/dashboard/{self.dashboard.pk}/get_layout/").json()
+
+    def _widget(self, **extra):
+        return {"x": 2, "y": 4, "w": 6, "h": 8, "component_name": "NewOCDFGVariantsComponent", **extra}
+
+    def _patch(self, body):
+        return self.client.patch(
+            f"/api/dashboard/{self.dashboard.pk}/ocdfg_layout/", body, format="json"
+        )
+
+    def test_save_and_get_layout_keep_layout_options(self):
+        self.assertEqual(self._save([self._widget(layout_options=_PREFS)]).status_code, 200)
+        self.assertEqual(self._layout()[0]["layout_options"], _PREFS)
+
+    def test_missing_or_invalid_layout_options_are_stored_as_null(self):
+        self._save([self._widget(), self._widget(x=8, layout_options="not an object")])
+        self.assertEqual([c["layout_options"] for c in self._layout()], [None, None])
+
+    def test_patch_by_position_updates_and_resets(self):
+        self._save([self._widget(), {"x": 0, "y": 0, "w": 2, "h": 2, "component_name": "TextBoxComponent", "text": "t"}])
+        response = self._patch({"x": 2, "y": 4, "layout_options": _PREFS})
+        self.assertEqual(response.status_code, 200)
+        ocdfg = [c for c in self._layout() if c["component_name"] == "NewOCDFGVariantsComponent"][0]
+        self.assertEqual(ocdfg["layout_options"], _PREFS)
+
+        self.assertEqual(self._patch({"x": 2, "y": 4, "layout_options": None}).status_code, 200)
+        ocdfg = [c for c in self._layout() if c["component_name"] == "NewOCDFGVariantsComponent"][0]
+        self.assertIsNone(ocdfg["layout_options"])
+
+    def test_patch_without_widget_at_position_is_404(self):
+        self._save([self._widget()])
+        self.assertEqual(self._patch({"x": 0, "y": 0, "layout_options": _PREFS}).status_code, 404)
+        # A non-OC-DFG widget at the position is no match either.
+        self._save([{"x": 2, "y": 4, "w": 2, "h": 2, "component_name": "TextBoxComponent", "text": "t"}])
+        self.assertEqual(self._patch({"x": 2, "y": 4, "layout_options": _PREFS}).status_code, 404)
+
+    def test_patch_rejects_bad_input(self):
+        self._save([self._widget()])
+        for body in (
+            {"x": "2", "y": 4, "layout_options": _PREFS},
+            {"x": True, "y": 4, "layout_options": _PREFS},
+            {"x": 2, "y": 4},
+            {"x": 2, "y": 4, "layout_options": ["a"]},
+            {"x": 2, "y": 4, "layout_options": {"blob": "x" * 20000}},
+        ):
+            self.assertEqual(self._patch(body).status_code, 400, body)
+
+    def test_patch_on_foreign_dashboard_is_404(self):
+        self._save([self._widget()])
+        self.client.force_authenticate(user=self.other)
+        self.assertEqual(self._patch({"x": 2, "y": 4, "layout_options": _PREFS}).status_code, 404)
+
+
+class ProjectViewSettingsTests(TestCase):
+    """GET/PUT /api/projects/<id>/view-settings/<key>/."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="settings-owner")
+        self.other = User.objects.create_user(username="settings-other")
+        self.project = Project.objects.create(name="Settings")
+        self.project.users.add(self.user)
+        self.client.force_authenticate(user=self.user)
+
+    def _url(self, key="ocdfg-variants", project=None):
+        return f"/api/projects/{(project or self.project).pk}/view-settings/{key}/"
+
+    def test_get_without_entry_returns_null(self):
+        response = self.client.get(self._url())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"key": "ocdfg-variants", "value": None})
+
+    def test_put_get_and_remove(self):
+        self.assertEqual(self.client.put(self._url(), {"value": _PREFS}, format="json").status_code, 200)
+        self.assertEqual(self.client.get(self._url()).json()["value"], _PREFS)
+        # Another key does not touch the first one.
+        self.client.put(self._url("ocdfg-arc-weight"), {"value": {"version": 1, "options": {}}}, format="json")
+        self.assertEqual(self.client.get(self._url()).json()["value"], _PREFS)
+
+        self.assertEqual(self.client.put(self._url(), {"value": None}, format="json").status_code, 200)
+        self.assertIsNone(self.client.get(self._url()).json()["value"])
+        self.project.refresh_from_db()
+        self.assertEqual(list(self.project.view_settings), ["ocdfg-arc-weight"])
+
+    def test_rejects_bad_keys_and_values(self):
+        self.assertEqual(self.client.get(self._url("Bad Key")).status_code, 400)
+        self.assertEqual(self.client.get(self._url("x" * 65)).status_code, 400)
+        for body in ({}, {"value": [1, 2]}, {"value": "x"}, {"value": {"blob": "x" * 20000}}):
+            self.assertEqual(self.client.put(self._url(), body, format="json").status_code, 400, body)
+
+    def test_other_users_project_is_404(self):
+        self.client.force_authenticate(user=self.other)
+        self.assertEqual(self.client.get(self._url()).status_code, 404)
+        self.assertEqual(self.client.put(self._url(), {"value": _PREFS}, format="json").status_code, 404)
+        self.project.refresh_from_db()
+        self.assertEqual(self.project.view_settings, {})
