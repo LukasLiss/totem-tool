@@ -8,7 +8,8 @@ The TOTeM Tool is an object-centric Process Analysis Tool that enables easy to u
 
 Each linked page gives a short introduction to the feature with a screenshot.
 
-* OCEL 2.0 File import (SQLite, XML, JSON)
+* OCEL 2.0 File import (SQLite, XML, JSON, CSV)
+* [Case-centric log import (XES, CSV)](docs/user-guide/case-centric-import.md) through a column-mapping dialog
 * Analysis
    * [Process Area Discovery](docs/user-guide/process-area-discovery.md)
    * [TOTeM Discovery](docs/user-guide/totem-discovery.md)

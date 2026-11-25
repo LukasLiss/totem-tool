@@ -53,6 +53,13 @@ import duckdb
 import ijson
 import pyarrow as pa
 
+from .flat_log import (
+    FlatLogMapping,
+    detect_delimiter,
+    detect_encoding,
+    flat_log_format,
+    stage_flat_log,
+)
 from .ocel_duckdb import OcelDuckDB, create_ocel_indexes, create_ocel_schema
 from .validation import OCELValidationException, validate_ocel
 
@@ -88,9 +95,11 @@ def import_ocel_db(
     graceful_import: bool = True,
     strict_mode: bool = False,
     progress: Optional[ProgressCallback] = None,
+    mapping=None,
+    import_report: Optional[dict] = None,
 ) -> OcelDuckDB:
     """
-    Import an OCEL 2.0 file directly into a DuckDB database.
+    Import an OCEL 2.0 file (or a mapped flat log) directly into a DuckDB database.
 
     Usage example::
 
@@ -139,12 +148,25 @@ def import_ocel_db(
         progress:               Optional ``callback(fraction, message)`` invoked as
                                 the import advances (``fraction`` in ``[0, 1]``).
                                 Raising inside the callback aborts the import.
+        mapping:                Column mapping for a case-centric ("flat") log —
+                                an XES file or a plain CSV/TSV table — as a
+                                ``flat_log.FlatLogMapping`` or its dict form
+                                (see :mod:`.flat_log`). Required for a plain
+                                CSV; an XES file without one gets the mapping
+                                the import dialog would suggest
+                                (``case:concept:name`` → case object, ...).
+        import_report:          Optional dict filled with what a mapped (flat)
+                                import kept and skipped — see
+                                ``flat_log.stage_flat_log`` — so callers can
+                                tell the user about rows that were left out.
 
     Returns:
         OcelDuckDB instance backed by the populated database.
     """
     _, ext = os.path.splitext(file_path)
     fmt = ext.lower().lstrip(".")
+    if flat_log_format(file_path) == "xes":
+        fmt = "xes"  # also "log.xes.gz", whatever Django renamed it to
 
     if fmt == "duckdb":
         return OcelDuckDB.load(file_path)
@@ -154,7 +176,23 @@ def import_ocel_db(
         "json": _stage_json,
         "xml": _stage_xml,
         "csv": _stage_csv,
+        "tsv": _stage_csv,
+        "txt": _stage_csv,
+        "xes": _stage_flat,
     }
+    if mapping is not None or fmt == "xes":
+        if mapping is None:
+            flat_mapping = FlatLogMapping.suggested(file_path)
+        elif isinstance(mapping, FlatLogMapping):
+            mapping.validate()
+            flat_mapping = mapping
+        else:
+            flat_mapping = FlatLogMapping.from_dict(mapping)
+        if fmt in ("csv", "tsv", "txt", "xes"):
+            readers[fmt] = lambda path, stage, report, _t: _stage_flat(
+                path, stage, report, flat_mapping, import_report
+            )
+
     if fmt not in readers:
         raise ValueError(
             f"Unsupported format '{ext}'. "
@@ -1191,10 +1229,17 @@ def _stage_csv(file_path: str, stage: _Staging, report: _Reporter, _threshold) -
     size = os.path.getsize(file_path)
     seen_objs: dict[str, str] = {}  # obj_id → obj_type, in first-seen order
 
-    # utf-8-sig strips the UTF-8 BOM (U+FEFF) that some tools add to CSV files
-    with open(file_path, newline="", encoding="utf-8-sig") as f:
+    # The encoding and separator are detected the way the import dialog's
+    # preview detects them (flat_log), which is what told the client this is
+    # an OCEL 2.0 CSV: a semicolon-separated Excel export or a .tsv imports
+    # too. utf-8-sig strips the UTF-8 BOM (U+FEFF) that some tools add.
+    with open(file_path, "rb") as probe:
+        encoding = detect_encoding(probe.read(1024 * 1024))
+    with open(file_path, newline="", encoding=encoding, errors="replace") as f:
+        delimiter = detect_delimiter(f.readline())
+        f.seek(0)
         tick = _FileProgress(f, size, report, 0.0, 0.5, "Reading CSV")
-        reader = csv.DictReader(f)
+        reader = csv.DictReader(f, delimiter=delimiter)
         fieldnames = reader.fieldnames or []
         ot_cols = [c for c in fieldnames if c.startswith("ot:")]
         ea_cols = [c for c in fieldnames if c.startswith("ea:")]
@@ -1238,6 +1283,22 @@ def _stage_csv(file_path: str, stage: _Staging, report: _Reporter, _threshold) -
         buffers.maybe_flush()
     buffers.flush()
     report(0.5, "Reading CSV")
+
+
+# ---------------------------------------------------------------------------
+# Flat (case-centric) logs: XES, plain CSV — see flat_log.py
+# ---------------------------------------------------------------------------
+
+def _stage_flat(file_path: str, stage: _Staging, report: _Reporter, mapping, import_report=None) -> None:
+    buffers = _RowBuffers(stage)
+    size = os.path.getsize(file_path)
+    with open(file_path, "rb") as raw:
+        tick = _FileProgress(raw, size, report, 0.0, 0.5, "Reading event log")
+        report(0.0, "Reading event log")
+        counts = stage_flat_log(file_path, mapping, buffers, tick=tick, raw=raw)
+    if import_report is not None:
+        import_report.update(counts)
+    report(0.5, "Reading event log")
 
 
 # ---------------------------------------------------------------------------

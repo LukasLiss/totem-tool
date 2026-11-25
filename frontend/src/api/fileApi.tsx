@@ -1,16 +1,158 @@
 import axios, { type AxiosProgressEvent } from "axios";
 import { filterRequestConfig } from "@/store/filterStore";
+import { xesPreviewSample } from "./xesSample";
 
 export async function uploadFile(
   file: File,
-  onUploadProgress?: (progressEvent: AxiosProgressEvent) => void
+  onUploadProgress?: (progressEvent: AxiosProgressEvent) => void,
+  mapping?: FlatLogMapping,
 ) {
   const formData = new FormData();
   formData.append("file", file);
+  if (mapping) formData.append("mapping", JSON.stringify(mapping));
   const { data } = await axios.post("/api/files/", formData, {
     _skipGlobalFilter: true,
     onUploadProgress,
   });
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// Case-centric ("flat") logs: XES and plain CSV, imported through a column
+// mapping. See totem_lib/src/totem_lib/ocel/flat_log.py.
+// ---------------------------------------------------------------------------
+
+export type FlatLogRole =
+  | "object_id"
+  | "resource"
+  | "activity"
+  | "timestamp"
+  | "event_attribute"
+  | "object_attribute"
+  | "ignore";
+
+export interface FlatColumnMapping {
+  column: string;
+  role: FlatLogRole;
+  /** object_id / resource: the object type the ids belong to. */
+  object_type?: string;
+  /** timestamp: "auto", "unix_s", "unix_ms" or a pattern like "dd.MM.yyyy HH:mm". */
+  format?: string;
+  /** timestamp: IANA zone ("Europe/Berlin") for values without an offset; UTC by default. */
+  timezone?: string;
+  /** object_attribute: the object id column whose objects get the attribute. */
+  target?: string;
+}
+
+export interface FlatLogMapping {
+  columns: FlatColumnMapping[];
+  delimiter?: string | null;
+  /** CSV text encoding ("utf-8", "windows-1252", ...); detected when absent. */
+  encoding?: string | null;
+}
+
+export interface FlatLogPreviewColumn {
+  name: string;
+  suggestion: Omit<FlatColumnMapping, "column">;
+  empty: number;
+  distinct: number;
+}
+
+export interface FlatLogPreview {
+  format: "xes" | "csv";
+  /** "ocel_csv": an OCEL 2.0 CSV, which imports without a mapping. */
+  kind: "flat" | "ocel_csv";
+  columns: FlatLogPreviewColumn[];
+  rows: string[][];
+  delimiter: string | null;
+  /** CSV only: the encoding used to read the sample (detected or chosen). */
+  encoding: string | null;
+  truncated: boolean;
+  timestamp_presets: string[];
+  encodings: string[];
+}
+
+/** File names that may hold a case-centric log, by format. */
+export function flatLogFormat(fileName: string): "xes" | "csv" | null {
+  const name = fileName.toLowerCase();
+  if (name.endsWith(".xes") || name.endsWith(".xes.gz")) return "xes";
+  if (name.endsWith(".csv") || name.endsWith(".tsv") || name.endsWith(".txt")) return "csv";
+  return null;
+}
+
+/** Bytes sent for a preview: enough for the first 100 events of most logs. */
+const PREVIEW_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Columns, suggested roles and first rows of a flat log.
+ *
+ * Only the start of the file is sent, so a large log is not uploaded twice;
+ * the real upload follows once the user has mapped the columns.
+ */
+export async function previewFlatLog(
+  file: File,
+  delimiter?: string | null,
+  encoding?: string | null,
+): Promise<FlatLogPreview> {
+  // XES: the first traces, wherever they start (see xesSample.ts). CSV: the
+  // first bytes, since a CSV header is one line.
+  const sample =
+    flatLogFormat(file.name) === "xes"
+      ? await xesPreviewSample(file, PREVIEW_BYTES)
+      : { blob: file.slice(0, PREVIEW_BYTES), name: file.name, truncated: file.size > PREVIEW_BYTES };
+  const formData = new FormData();
+  formData.append("file", sample.blob, "preview");
+  formData.append("filename", sample.name);
+  formData.append("truncated", sample.truncated ? "true" : "false");
+  if (delimiter) formData.append("delimiter", delimiter);
+  if (encoding) formData.append("encoding", encoding);
+  const { data } = await axios.post("/api/files/preview/", formData, { _skipGlobalFilter: true });
+  return data;
+}
+
+/** What a mapped import kept and skipped (`import_report` of the upload response). */
+export interface FlatLogImportReport {
+  rows: number;
+  events: number;
+  skipped_no_activity: number;
+  skipped_no_object: number;
+  skipped_bad_timestamp: number;
+  bad_timestamp_example: string | null;
+  timestamp_format: string;
+  timezone: string;
+  /** Columns stored under another name because theirs was taken (case-insensitively). */
+  renamed_attributes?: Record<string, string>;
+  /** XES keys missing from the previewed sample, kept as attributes under these names. */
+  unlisted_attributes?: Record<string, string>;
+}
+
+/** Another format that also reads every sample value, but differently. */
+export interface TimestampAmbiguity {
+  format: string;
+  /** A sample value the two formats disagree on, and both readings (ISO). */
+  value: string;
+  as_chosen: string;
+  as_other: string;
+}
+
+export interface TimestampCheck {
+  /** The format the import will use; "auto" resolves to one for the column. */
+  format: string;
+  results: (string | null)[];
+  ambiguous_with: TimestampAmbiguity[];
+}
+
+/** Parse sample values with a timestamp format, exactly as the import will. */
+export async function parseTimestamps(
+  values: string[],
+  format: string,
+  timezone?: string,
+): Promise<TimestampCheck> {
+  const { data } = await axios.post(
+    "/api/files/parse-timestamps/",
+    { values, format, timezone },
+    { _skipGlobalFilter: true },
+  );
   return data;
 }
 

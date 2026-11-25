@@ -20,6 +20,10 @@ pulp_solver_files = [
     or f'/cbc/{_cbc_platform}/' in dest.replace('\\', '/') + '/'
 ]
 
+# zoneinfo reads the IANA time zone database from the `tzdata` package where
+# the OS has none (Windows); the import dialog's time zone option needs it.
+tzdata_files = collect_data_files('tzdata')
+
 a = Analysis(
     ['backend/manage.py'],
     pathex=[],
@@ -30,8 +34,8 @@ a = Analysis(
         # runtime relative to sys._MEIPASS, which is what this destination is
         # relative to as well.
         ('backend/sample_data/container_logistics.duckdb', 'sample_data'),
-    ] + pulp_solver_files,
-    hiddenimports=simplejwt_hidden_imports + whitenoise_hidden_imports,
+    ] + pulp_solver_files + tzdata_files,
+    hiddenimports=simplejwt_hidden_imports + whitenoise_hidden_imports + ['tzdata'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
