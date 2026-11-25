@@ -19,6 +19,7 @@ import {
   ConformanceComponent,
   DashboardContext,
 } from "@/contexts/DashboardContext"
+import { TOUR_IDS } from "@/tour/tourIds"
 import { CausalNetAlert, CircleDotAlert, WorkflowAlert } from "./icons/totem-icons"
 
 const conformanceItems: {
@@ -46,6 +47,7 @@ export function NavConformance() {
               <SidebarMenuButton
                 tooltip="Conformance"
                 data-active={viewMode.type === "conformance"}
+                data-tour-id={TOUR_IDS.NAV_CONFORMANCE}
               >
                 <TriangleAlert />
                 <span>Conformance</span>
@@ -75,3 +77,4 @@ export function NavConformance() {
     </SidebarGroup>
   )
 }
+

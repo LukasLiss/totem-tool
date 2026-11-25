@@ -135,6 +135,7 @@ if os.environ.get('RAILWAY_STATIC_URL') or os.environ.get('RAILWAY_ENVIRONMENT')
 # Application definition
 
 INSTALLED_APPS = [
+    'daphne',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -142,11 +143,15 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     # 'django_extensions',  # seems not to be needed anymore
+    'channels',
     'rest_framework',
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'api',
     'authentification',
+    'assistant',
+    'agent',
+    'mcp_server',
 ]
 
 MIDDLEWARE = [
@@ -184,6 +189,7 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'totem_backend.wsgi.application'
+ASGI_APPLICATION = 'totem_backend.asgi.application'
 
 
 # Database
@@ -274,6 +280,8 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
     "x-totem-job-id",
     "authorization",
     "content-type",
+    "x-llm-key",
+    "x-llm-provider",
 ]
 
 cors_origins_env = os.environ.get('CORS_ALLOWED_ORIGINS', '')
@@ -425,3 +433,20 @@ OAUTH_PROVIDERS = {
 }
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000').rstrip('/')
 OAUTH_REDIRECT_BASE_URL = os.environ.get('OAUTH_REDIRECT_BASE_URL', '').rstrip('/')
+
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels.layers.InMemoryChannelLayer',
+    },
+}
+
+# AI assistant. Users normally bring their own key (sent per request in the
+# X-LLM-Key header); these server-side keys are an optional fallback.
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
+ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
+ASSISTANT_MODEL = os.environ.get('ASSISTANT_MODEL', 'gemini-3.5-flash')  # Gemini model
+ANTHROPIC_MODEL = os.environ.get('ANTHROPIC_MODEL', 'claude-opus-5-5')
+OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-5.6-luna')
+# Reasoning effort for Claude models that support it: low | medium | high | xhigh | max
+ASSISTANT_EFFORT = os.environ.get('ASSISTANT_EFFORT', 'medium')

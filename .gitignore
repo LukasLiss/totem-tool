@@ -22,6 +22,8 @@ totem_lib/evaluation/results/*.json
 !docs/Quality_Assurance_Report.md
 !docs/user-guide/*.md
 !totem_lib/test_data/edge_cases/README.md
+!.claude/**/*.md
+!backend/assistant/knowledge/*.md
 *.txt
 !*requirements*.txt
 !backend/requirements.txt
@@ -217,6 +219,7 @@ $RECYCLE.BIN/
 # Temporary folders
 tmp/
 temp/
+.mimosa/
 
 # Log files
 *.log
@@ -287,3 +290,11 @@ Claude_design
 
 # Benchmark run folders - copy a run elsewhere (or git add -f) to keep it in git
 totem_lib/evaluation/results/runs/
+
+# Assistant evaluation: keep its README and tests (repo-wide rules ignore *.md and tests/);
+# run outputs stay local (copy a summary out explicitly to keep it)
+!evaluation/assistant_eval/README.md
+!evaluation/assistant_eval/BASELINE.md
+!frontend/e2e/README.md
+!evaluation/assistant_eval/tests/
+evaluation/assistant_eval/results/

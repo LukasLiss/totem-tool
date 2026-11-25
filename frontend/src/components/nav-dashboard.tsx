@@ -1,5 +1,7 @@
 import { ChevronRight, FileStack, Settings2, Plus, Upload } from "lucide-react"
-import { useContext, useRef, useState } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
+import { TOUR_IDS } from "@/tour/tourIds"
+import { useOptionalTourController } from "@/tour/TourController"
 import {
   Collapsible,
   CollapsibleContent,
@@ -98,6 +100,33 @@ export function NavDashboard({
     warnings: DashboardImportWarning[];
   }>(null);
 
+  const tour = useOptionalTourController();
+  const currentTourId = tour?.state.active ? tour.state.currentTourId : null;
+  const [isCollapsibleOpen, setIsCollapsibleOpen] = useState(false);
+
+  useEffect(() => {
+    if (
+      currentTourId === TOUR_IDS.DASHBOARD_ADD_BTN ||
+      currentTourId === TOUR_IDS.DASHBOARD_NAME_INPUT ||
+      currentTourId === TOUR_IDS.DASHBOARD_SAVE_BTN
+    ) {
+      setIsCollapsibleOpen(true);
+    }
+    if (
+      currentTourId === TOUR_IDS.DASHBOARD_NAME_INPUT ||
+      currentTourId === TOUR_IDS.DASHBOARD_SAVE_BTN
+    ) {
+      setOpen(true);
+    }
+    if (
+      (currentTourId === TOUR_IDS.DASHBOARD_ADD_CARD || currentTourId === TOUR_IDS.DASHBOARD_GRID) &&
+      viewMode.type !== 'dashboard' &&
+      dashboards.length > 0
+    ) {
+      setViewMode({ type: 'dashboard', id: dashboards[0].id });
+    }
+  }, [currentTourId, viewMode, dashboards, setViewMode]);
+
 
 
   const { selectedFile } = useContext(SelectedFileContext);
@@ -132,11 +161,15 @@ export function NavDashboard({
     if (!beginSubmit()) return;
 
     try {
-      await addDashboard(name, selectedFile.project);
+      const newDash = await addDashboard(name, selectedFile.project);
       await refreshDashboards();
+      if (newDash?.id) {
+        setViewMode({ type: 'dashboard', id: newDash.id });
+      }
       setOpen(false);
       setDashboardname("");
-    } catch {
+    } catch (error: unknown) {
+      console.error("Dashboard creation failed:", error);
       toast.error("Dashboard could not be created");
     } finally {
       endSubmit();
@@ -270,13 +303,19 @@ export function NavDashboard({
     <div>
       <SidebarGroup>
         <SidebarMenu>
-          <Collapsible asChild className="group/collapsible">
+          <Collapsible
+            open={isCollapsibleOpen}
+            onOpenChange={setIsCollapsibleOpen}
+            asChild
+            className="group/collapsible"
+          >
             <SidebarMenuItem>
               {/* Main permanent button */}
               <CollapsibleTrigger asChild>
                 <SidebarMenuButton
                   tooltip="Dashboards"
                   data-active={viewMode.type === 'dashboard'}
+                  data-tour-id={TOUR_IDS.NAV_DASHBOARD}
                 >
                   <FileStack />
                   <span>Dashboards</span>
@@ -351,6 +390,7 @@ export function NavDashboard({
                   <SidebarMenuSubItem>
                     <Dialog
                       open={open}
+                      modal={!tour?.state.active}
                       onOpenChange={(next) => {
                         if (isSubmitting) return;
                         setOpen(next);
@@ -358,7 +398,7 @@ export function NavDashboard({
                         if (next) setDashboardname("");
                       }}
                     >
-                      <SidebarMenuSubButton asChild className="cursor-pointer">
+                      <SidebarMenuSubButton asChild className="cursor-pointer" data-tour-id={TOUR_IDS.DASHBOARD_ADD_BTN}>
                         <DialogTrigger>
                           <Plus className="w-4 h-4 shrink-0" />
                           <span className="truncate">Add Dashboard</span>
@@ -383,6 +423,7 @@ export function NavDashboard({
                                 <Input
                                   id="new-dashboard-name"
                                   name="name"
+                                  data-tour-id={TOUR_IDS.DASHBOARD_NAME_INPUT}
                                   value={dashboardname}
                                   onChange={(e) => setDashboardname(e.target.value)}
                                   placeholder="Dashboard Name"
@@ -399,6 +440,7 @@ export function NavDashboard({
                               </DialogClose>
                               <Button
                                 type="submit"
+                                data-tour-id={TOUR_IDS.DASHBOARD_SAVE_BTN}
                                 disabled={isSubmitting || !dashboardname.trim()}
                               >
                                 {isSubmitting ? "Creating…" : "Save changes"}

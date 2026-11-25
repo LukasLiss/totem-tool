@@ -19,7 +19,7 @@ from ._ocel_db import (
     _with_ocel_db,
 )
 from ._filters import _effective_object_types, _parse_filter_params, _should_use_cache
-from ._process_view import _parse_process_area_params, _process_area_cache_params
+from ._process_view import _parse_process_area_params, _process_area_cache_params, _serialize_mlpa
 from .assets import ImageAssetViewSet, ProjectAssetViewSet
 from .dashboards import DashboardViewSet
 from .event_log import EventLogViewSet

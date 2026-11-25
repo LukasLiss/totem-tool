@@ -66,6 +66,13 @@ export function setBypassCache(enabled) {
 }
 
 axios.interceptors.request.use((config) => {
+  const token = localStorage.getItem("access_token");
+  if (token && token !== "null" && token !== "undefined") {
+    config.headers = config.headers || {};
+    if (!config.headers["Authorization"]) {
+      config.headers["Authorization"] = `Bearer ${token}`;
+    }
+  }
   if (bypassCacheEnabled) {
     config.params = { ...(config.params || {}), bypass_cache: 1 };
   }
@@ -104,6 +111,25 @@ async function performRefresh() {
     localStorage.setItem("refresh_token", response.data.refresh);
   }
   return newAccess;
+}
+
+/**
+ * Refresh the access token for callers that bypass axios (e.g. fetch-based
+ * streaming). Shares the in-flight refresh with the interceptor; in local
+ * mode falls back to re-authenticating as Guest. Resolves to the new token.
+ */
+export async function refreshAccessToken() {
+  if (!refreshInFlight) {
+    refreshInFlight = performRefresh().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  try {
+    return await refreshInFlight;
+  } catch (err) {
+    if (import.meta.env.VITE_LOCAL_MODE) return guestReAuth();
+    throw err;
+  }
 }
 
 async function guestReAuth() {

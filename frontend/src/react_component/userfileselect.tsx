@@ -26,6 +26,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { ChevronsUpDownIcon, CheckIcon } from "lucide-react";
+import { TOUR_IDS } from "@/tour/tourIds";
 import { prepareLargeLogFilter } from "@/store/applyGlobalFilter";
 
 /** What the user named the project, falling back to the event log's file name.
@@ -83,6 +84,7 @@ function UserFileSelect() {
         <Popover open={open} onOpenChange={setOpen}>
           <PopoverTrigger asChild>
             <Button
+              data-tour-id={TOUR_IDS.FILE_SELECTOR}
               variant="outline"
               role="combobox"
               aria-expanded={open}

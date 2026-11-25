@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import axios from "axios";
 import { Login } from "./react_component/login";
 import { Logout } from "./react_component/logout";
@@ -13,6 +13,10 @@ import { DeleteView } from "./DeleteView";
 import { SettingsView } from "./SettingsView";
 import { Toaster, toast } from "sonner";
 import { SplashAnimation } from "./components/SplashAnimation";
+import { TourController } from "./tour/TourController";
+import { AgentBridge } from "./components/chat/AgentBridge";
+import { ChatWidget } from "./components/chat/ChatWidget";
+import { useAssistantContext } from "./components/chat/useAssistantContext";
 import { setBypassCache } from "./interceptors/axios";
 import { getUserSettings } from "./api/settingsApi";
 import { LOCAL_MODE } from "./lib/env";
@@ -45,6 +49,26 @@ function markSplashSeen() {
   } catch {
     /* storage unavailable — the splash just plays again next load */
   }
+}
+
+/** Pages where nobody is signed in yet: no assistant, no live-wire socket. */
+const PUBLIC_PATHS = new Set(["/login", "/oauth/callback", "/title", "/logout"]);
+
+/**
+ * AI assistant drawer, guided tours and the agent socket. Rendered inside the
+ * file and dashboard providers because the assistant reads both.
+ */
+function AssistantLayer({ children }: { children: React.ReactNode }) {
+  const assistantContext = useAssistantContext();
+  const { pathname } = useLocation();
+  const signedInArea = !PUBLIC_PATHS.has(pathname);
+  return (
+    <TourController>
+      {signedInArea && <AgentBridge />}
+      {children}
+      {signedInArea && <ChatWidget context={assistantContext} />}
+    </TourController>
+  );
 }
 
 function AppRoutes({ selectedFile, setSelectedFile }) {
@@ -133,6 +157,7 @@ function AppRoutes({ selectedFile, setSelectedFile }) {
       ) : (
         <SelectedFileContext.Provider value={{ selectedFile, setSelectedFile }}>
           <DashboardProvider>
+            <AssistantLayer>
             <Toaster position="top-center" richColors />
             <Routes>
               {/* Old landing page; kept as a redirect for existing links. */}
@@ -160,6 +185,7 @@ function AppRoutes({ selectedFile, setSelectedFile }) {
                 }
               />
             </Routes>
+            </AssistantLayer>
           </DashboardProvider>
         </SelectedFileContext.Provider>
       )}
@@ -196,3 +222,4 @@ function App() {
 }
 
 export default App;
+

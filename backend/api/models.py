@@ -444,6 +444,10 @@ class NewOCDFGComponent(DashboardComponent):
     # ({"version": 1, "options": {...}}); null means the defaults.
     layout_options = models.JSONField(null=True, blank=True, default=None)
 
+
+# Backward compatibility alias for the old OCDFG component
+OCDFGComponent = NewOCDFGComponent
+
 class PieChartComponent(DashboardComponent):
     query = models.TextField(default="SELECT * FROM events LIMIT 10")
     query_asset = _query_asset_field()

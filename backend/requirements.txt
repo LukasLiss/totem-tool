@@ -18,3 +18,8 @@ dj-database-url==2.1.0
 psycopg2-binary==2.9.10
 python-dotenv==1.2.4
 certifi>=2024.2.2
+daphne==4.2.3
+channels==4.3.2
+requests==2.34.2
+anthropic==2.13.0
+jsonschema==4.26.0
