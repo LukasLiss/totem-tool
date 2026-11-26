@@ -1,5 +1,5 @@
 /**
- * Column mapping for case-centric logs (XES, plain CSV), shown on import.
+ * Column mapping for case-centric logs (XES, plain CSV, Excel), shown on import.
  *
  * A flat log does not say which column is the case, the activity or the
  * time, so — like Disco's import screen — the first rows are shown as a
@@ -38,7 +38,14 @@ import {
   type FlatLogRole,
   type TimestampAmbiguity,
 } from "@/api/fileApi";
-import { carryOverMapping, defaultObjectType, formatLabel, initialMapping, mappingProblems } from "./flatLogMapping";
+import {
+  carryOverMapping,
+  defaultObjectType,
+  formatLabel,
+  initialMapping,
+  mappingProblems,
+  SINGLE_ROLES,
+} from "./flatLogMapping";
 
 const ROLE_INFO: Record<FlatLogRole, { label: string; hint: string; tone: string; cell: string }> = {
   object_id: {
@@ -58,6 +65,18 @@ const ROLE_INFO: Record<FlatLogRole, { label: string; hint: string; tone: string
     hint: "When the event happened. Pick the format the values are written in.",
     tone: "border-amber-500 bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-100",
     cell: "bg-amber-50/70 dark:bg-amber-950/40",
+  },
+  end_timestamp: {
+    label: "End timestamp",
+    hint: "When the activity ended, for logs with a start and an end time per row. The event happens at the Timestamp (the start); this is kept as the attribute \"end_timestamp\", read with the Timestamp's format and time zone.",
+    tone: "border-orange-500 bg-orange-50 text-orange-900 dark:bg-orange-950 dark:text-orange-100",
+    cell: "bg-orange-50/60 dark:bg-orange-950/30",
+  },
+  lifecycle: {
+    label: "Lifecycle",
+    hint: "Says whether a row starts or completes an activity (start / complete). Each start and its completion become one event at the start time; the completion time is kept as \"end_timestamp\". Other values (schedule, …) stay separate events.",
+    tone: "border-rose-500 bg-rose-50 text-rose-900 dark:bg-rose-950 dark:text-rose-100",
+    cell: "bg-rose-50/60 dark:bg-rose-950/30",
   },
   resource: {
     label: "Resource",
@@ -89,11 +108,15 @@ const ROLE_ORDER: FlatLogRole[] = [
   "object_id",
   "activity",
   "timestamp",
+  "end_timestamp",
+  "lifecycle",
   "resource",
   "event_attribute",
   "object_attribute",
   "ignore",
 ];
+
+const FORMAT_NAMES = { xes: "XES", csv: "CSV", xlsx: "Excel" } as const;
 
 const SPECIAL_FORMATS: { value: string; label: string }[] = [
   { value: "auto", label: "Detect automatically (ISO 8601, …)" },
@@ -152,8 +175,10 @@ export function FlatLogMappingDialog({ open, file, preview: initialPreview, onCa
     setColumns((prev) =>
       prev.map((c) => {
         if (c.column !== column) {
-          // Only one timestamp: choosing another demotes the old one.
-          if (patch.role === "timestamp" && c.role === "timestamp") return { ...c, role: "event_attribute" };
+          // Only one timestamp (end timestamp, lifecycle): choosing another demotes the old one.
+          if (patch.role && SINGLE_ROLES.includes(patch.role) && c.role === patch.role) {
+            return { ...c, role: "event_attribute" };
+          }
           return c;
         }
         const next = { ...c, ...patch };
@@ -171,8 +196,8 @@ export function FlatLogMappingDialog({ open, file, preview: initialPreview, onCa
   // Object attributes point at an id column that may have changed role since.
   const idColumns = columns.filter((c) => c.role === "object_id" || c.role === "resource");
 
-  /** Read the file again with another separator or encoding. */
-  const reload = async (options: { delimiter?: string; encoding?: string }) => {
+  /** Read the file again with another separator, encoding or worksheet. */
+  const reload = async (options: { delimiter?: string; encoding?: string; sheet?: string }) => {
     if (!file || !preview) return;
     setReloading(true);
     setReloadError(null);
@@ -181,6 +206,7 @@ export function FlatLogMappingDialog({ open, file, preview: initialPreview, onCa
         file,
         options.delimiter ?? preview.delimiter,
         options.encoding ?? preview.encoding,
+        options.sheet ?? preview.sheet,
       );
       setPreview(next);
       // Keep what the user already chose for columns that are still there.
@@ -264,6 +290,45 @@ export function FlatLogMappingDialog({ open, file, preview: initialPreview, onCa
     };
   }, [open, tsSamples, tsFormat, tsZone]);
 
+  // ---- end timestamp check: same format and zone as the timestamp -------
+  const endColumn = columns.find((c) => c.role === "end_timestamp");
+  const endIndex = preview && endColumn ? preview.columns.findIndex((c) => c.name === endColumn.column) : -1;
+  const endSamples = useMemo(
+    () =>
+      preview && endIndex >= 0
+        ? preview.rows.map((r) => (r[endIndex] ?? "").trim()).filter((v) => v !== "")
+        : [],
+    [preview, endIndex],
+  );
+  // The format "auto" settled on for the start column, so both are read alike.
+  const endFormat = tsCheck?.format ?? tsFormat;
+  const [endCheck, setEndCheck] = useState<{ ok: number; total: number; firstBad?: string } | null>(null);
+  useEffect(() => {
+    if (!open || endSamples.length === 0 || !tsColumn) {
+      setEndCheck(null);
+      return;
+    }
+    let cancelled = false;
+    const handle = window.setTimeout(async () => {
+      try {
+        const check = await parseTimestamps(endSamples, endFormat, tsZone);
+        if (cancelled) return;
+        const bad = check.results.findIndex((r) => r === null);
+        setEndCheck({
+          ok: check.results.filter((r) => r !== null).length,
+          total: check.results.length,
+          firstBad: bad >= 0 ? endSamples[bad] : undefined,
+        });
+      } catch {
+        if (!cancelled) setEndCheck(null);
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(handle);
+    };
+  }, [open, endSamples, endFormat, tsZone, tsColumn]);
+
   const problems = mappingProblems(columns);
   if (tsError) problems.push({ level: "error", text: tsError });
   if (tsCheck && tsCheck.total > 0 && tsCheck.ok === 0) {
@@ -281,6 +346,12 @@ export function FlatLogMappingDialog({ open, file, preview: initialPreview, onCa
       text: `The timestamps also fit “${formatLabel(alt.format)}”: check that “${alt.value}” means ${formatIso(alt.as_chosen)} and not ${formatIso(alt.as_other)}.`,
     });
   }
+  if (endCheck && endCheck.ok < endCheck.total) {
+    problems.push({
+      level: "warning",
+      text: `${endCheck.total - endCheck.ok} of ${endCheck.total} sample end times do not match the Timestamp's format (e.g. “${endCheck.firstBad}”); those events get no end time.`,
+    });
+  }
   const blocking = problems.some((p) => p.level === "error");
 
   const confirm = () => {
@@ -288,6 +359,7 @@ export function FlatLogMappingDialog({ open, file, preview: initialPreview, onCa
     onConfirm({
       delimiter: preview.format === "csv" ? preview.delimiter : null,
       encoding: preview.format === "csv" ? preview.encoding : null,
+      sheet: preview.format === "xlsx" ? preview.sheet ?? null : null,
       columns: columns.map((c) => {
         const out: FlatColumnMapping = { column: c.column, role: c.role };
         if (c.role === "object_id" || c.role === "resource") out.object_type = c.object_type?.trim();
@@ -316,7 +388,7 @@ export function FlatLogMappingDialog({ open, file, preview: initialPreview, onCa
         <DialogHeader>
           <DialogTitle>Map the columns of {file?.name ?? "the event log"}</DialogTitle>
           <DialogDescription>
-            This is a case-centric log ({preview?.format === "xes" ? "XES" : "CSV"}): tell TOTeM what each
+            This is a case-centric log ({FORMAT_NAMES[preview?.format ?? "csv"]}): tell TOTeM what each
             column holds. Click a column to configure it. You need at least one object (case) id, an
             activity and a timestamp.
           </DialogDescription>
@@ -365,8 +437,31 @@ export function FlatLogMappingDialog({ open, file, preview: initialPreview, onCa
 
           {/* Role options; a fixed height so the table below does not jump. */}
           <div className="flex flex-wrap items-end gap-4 min-h-[3.25rem]">
-            {(selectedMapping.role === "event_attribute" || selectedMapping.role === "ignore" || selectedMapping.role === "activity") && (
-              <p className="text-xs text-muted-foreground self-center">{ROLE_INFO[selectedMapping.role].hint}</p>
+            {(selectedMapping.role === "event_attribute" || selectedMapping.role === "ignore" || selectedMapping.role === "activity"
+              || selectedMapping.role === "lifecycle") && (
+              <p className="text-xs text-muted-foreground self-center max-w-[60rem]">{ROLE_INFO[selectedMapping.role].hint}</p>
+            )}
+
+            {selectedMapping.role === "end_timestamp" && (
+              <div className="flex flex-col gap-1 text-xs" data-testid="end-timestamp-check">
+                <span className="text-muted-foreground max-w-[44rem]">
+                  {tsColumn
+                    ? <>Read like “{tsColumn.column}” ({formatLabel(endFormat)}, {tsZone}). The event happens at that start time; this end time is stored as “end_timestamp”.</>
+                    : <>Choose the Timestamp (start) column first: the end is read with its format.</>}
+                </span>
+                {endCheck && (
+                  endCheck.ok === endCheck.total ? (
+                    <span className="text-emerald-700 dark:text-emerald-400 flex items-center gap-1">
+                      <CheckCircle2 className="h-3.5 w-3.5" /> All {endCheck.total} sample end times parse
+                    </span>
+                  ) : (
+                    <span className="text-amber-700 dark:text-amber-400 flex items-center gap-1">
+                      <AlertTriangle className="h-3.5 w-3.5" /> {endCheck.ok} of {endCheck.total} sample end times parse
+                      {endCheck.firstBad && <> — “{endCheck.firstBad}” does not</>}
+                    </span>
+                  )
+                )}
+              </div>
             )}
 
             {(selectedMapping.role === "object_id" || selectedMapping.role === "resource") && (
@@ -540,6 +635,21 @@ export function FlatLogMappingDialog({ open, file, preview: initialPreview, onCa
             {reloadError && <li className="text-red-600">{reloadError}</li>}
           </ul>
           <div className="flex items-center gap-3 text-muted-foreground">
+            {preview?.format === "xlsx" && (preview.sheets?.length ?? 0) > 1 && (
+              <label className="flex items-center gap-2">
+                Sheet
+                <Select value={preview.sheet ?? ""} onValueChange={(sheet) => reload({ sheet })} disabled={reloading}>
+                  <SelectTrigger size="sm" className="w-48" aria-label="Sheet">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(preview.sheets ?? []).map((name) => (
+                      <SelectItem key={name} value={name}>{name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
+            )}
             {preview?.format === "csv" && (
               <label className="flex items-center gap-2">
                 Separator

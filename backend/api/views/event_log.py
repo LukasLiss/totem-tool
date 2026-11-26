@@ -497,7 +497,7 @@ class EventLogViewSet(OCAlignmentActionsMixin, viewsets.ModelViewSet):
             upload_name = serializer.validated_data["file"].name
             if flat_log_format(upload_name) is None:
                 return Response(
-                    {"error": "A column mapping only applies to XES and CSV files."},
+                    {"error": "A column mapping only applies to XES, CSV and Excel files."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
@@ -589,47 +589,64 @@ class EventLogViewSet(OCAlignmentActionsMixin, viewsets.ModelViewSet):
 
     # Enough rows for the mapping dialog; the client sends only this much.
     PREVIEW_MAX_BYTES = 8 * 1024 * 1024
+    # An Excel file is a zip archive and cannot be read in part, so the
+    # client sends all of it; beyond this the preview refuses.
+    PREVIEW_MAX_XLSX_BYTES = 200 * 1024 * 1024
     PREVIEW_MAX_ROWS = 100
 
     @action(detail=False, methods=["post"], url_path="preview")
     def preview(self, request):
-        """Columns and first rows of a case-centric log (XES or plain CSV).
+        """Columns and first rows of a case-centric log (XES, CSV or Excel).
 
         The client sends only the start of the file (``file``), the real
         file name (``filename``) and whether it cut the file (``truncated``),
-        so a large log is not uploaded twice. Nothing is stored. The answer
-        is ``totem_lib.ocel.flat_log.preview_flat_log``'s: columns with a
-        suggested role each, the first rows, and ``kind`` — ``"ocel_csv"``
-        when the CSV is an OCEL 2.0 one that needs no mapping.
+        so a large log is not uploaded twice; an Excel file comes whole,
+        with the worksheet to show (``sheet``, optional). Nothing is stored.
+        The answer is ``totem_lib.ocel.flat_log.preview_flat_log``'s: columns
+        with a suggested role each, the first rows, and ``kind`` —
+        ``"ocel_csv"`` when the CSV is an OCEL 2.0 one that needs no mapping.
         """
         upload = request.FILES.get("file")
         if upload is None:
             return Response({"error": "No file was uploaded."}, status=status.HTTP_400_BAD_REQUEST)
         file_name = request.data.get("filename") or upload.name
-        if flat_log_format(file_name) is None:
+        fmt = flat_log_format(file_name)
+        if fmt is None:
             return Response(
-                {"error": "Only XES and CSV files can be previewed."},
+                {"error": "Only XES, CSV and Excel (.xlsx) files can be previewed."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        data = upload.read(self.PREVIEW_MAX_BYTES + 1)
-        truncated = (
-            str(request.data.get("truncated", "")).lower() in ("1", "true", "yes")
-            or len(data) > self.PREVIEW_MAX_BYTES
-        )
+        if fmt == "xlsx":
+            data = upload.read(self.PREVIEW_MAX_XLSX_BYTES + 1)
+            if len(data) > self.PREVIEW_MAX_XLSX_BYTES:
+                return Response(
+                    {"error": "This Excel file is too large to preview. Save the sheet as CSV and import that."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            truncated = False
+        else:
+            data = upload.read(self.PREVIEW_MAX_BYTES + 1)
+            truncated = (
+                str(request.data.get("truncated", "")).lower() in ("1", "true", "yes")
+                or len(data) > self.PREVIEW_MAX_BYTES
+            )
+            data = data[: self.PREVIEW_MAX_BYTES]
         delimiter = request.data.get("delimiter") or None
         if delimiter is not None and len(delimiter) != 1:
             return Response({"error": "The delimiter must be a single character."}, status=status.HTTP_400_BAD_REQUEST)
         encoding = request.data.get("encoding") or None
+        sheet = request.data.get("sheet") or None
         try:
             result = preview_flat_log(
-                data[: self.PREVIEW_MAX_BYTES],
+                data,
                 file_name,
                 max_rows=self.PREVIEW_MAX_ROWS,
                 truncated=truncated,
                 delimiter=delimiter,
                 encoding=encoding,
+                sheet=sheet,
             )
-        except FlatLogMappingError as e:  # an unknown encoding
+        except FlatLogMappingError as e:  # an unknown encoding or sheet, a broken workbook
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:  # malformed XML, undecodable gzip, ...
             return Response(

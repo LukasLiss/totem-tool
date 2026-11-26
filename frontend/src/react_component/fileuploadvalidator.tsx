@@ -109,14 +109,20 @@ export function FileUploadValidator() {
     // Case-centric XES logs (plain or gzipped); imported through the column
     // mapping dialog.
     const isXes = flatLogFormat(file.name) === "xes";
+    // Excel workbooks (.xlsx); also through the dialog. Old binary .xls is
+    // not supported: Excel saves it as .xlsx in one step.
+    const isXlsx = flatLogFormat(file.name) === "xlsx";
     // The `file-type` library has no DuckDB signature, so `type?.ext` is
     // undefined for valid DuckDB files. Fall back to filename matching, in
     // line with how isJson / isCsv are handled.
     const isDuckDB =
       file.name.toLowerCase().endsWith(".duckdb");
 
-    if (!(isJson || isXml || isSqlite || isCsv || isXes || isDuckDB || isProjectBundle(file))){
-        toast.error("Invalid file type", {description:"Please choose a TOTeM project (.totem) or an event log ('json', 'xml', 'sqlite', 'csv', 'xes', or 'duckdb')."});
+    if (!(isJson || isXml || isSqlite || isCsv || isXes || isXlsx || isDuckDB || isProjectBundle(file))){
+        const xls = file.name.toLowerCase().endsWith(".xls");
+        toast.error("Invalid file type", {description: xls
+          ? "Old Excel files (.xls) cannot be read. Open the file in Excel and save it as .xlsx."
+          : "Please choose a TOTeM project (.totem) or an event log ('json', 'xml', 'sqlite', 'csv', 'xes', 'xlsx', or 'duckdb')."});
         return false;
     }
 
@@ -367,7 +373,7 @@ export function FileUploadValidator() {
                 style={{ opacity: 0 }}
               />
               <input  {...getInputProps()} />
-              <p className="text-lg text-primary">Click or drag and drop an OCEL file, a case-centric log (.xes, .csv) or a TOTeM project (.totem) here to start a new project</p>
+              <p className="text-lg text-primary">Click or drag and drop an OCEL file, a case-centric log (.xes, .csv, .xlsx) or a TOTeM project (.totem) here to start a new project</p>
             </div>
 
         <CardFooter className="flex-col gap-6 text-sm w-full mt-6 p-0">

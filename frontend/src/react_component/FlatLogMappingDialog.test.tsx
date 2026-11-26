@@ -3,7 +3,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { FlatLogMapping, FlatLogPreview } from "@/api/fileApi";
+import { flatLogFormat, type FlatLogMapping, type FlatLogPreview } from "@/api/fileApi";
 
 const parseTimestamps = vi.fn();
 vi.mock("@/api/fileApi", async (importOriginal) => {
@@ -254,5 +254,127 @@ describe("FlatLogMappingDialog", () => {
     });
     expect((screen.getByTestId("start-import") as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByTestId("mapping-problems").textContent).toMatch(/No sample timestamp matches/);
+  });
+});
+
+describe("Excel and start/end times", () => {
+  const base = {
+    rows: 10, events: 8, skipped_no_activity: 0, skipped_no_object: 0, skipped_bad_timestamp: 0,
+    bad_timestamp_example: null, timestamp_format: "auto", timezone: "UTC",
+  };
+
+  it("recognises Excel workbooks but not old .xls files", () => {
+    expect(flatLogFormat("Orders.XLSX")).toBe("xlsx");
+    expect(flatLogFormat("orders.xlsm")).toBe("xlsx");
+    expect(flatLogFormat("orders.xls")).toBeNull();
+  });
+
+  it("allows one end timestamp or one lifecycle column, not both", () => {
+    const complete = [
+      { column: "c", role: "object_id" as const, object_type: "case" },
+      { column: "a", role: "activity" as const },
+      { column: "t", role: "timestamp" as const },
+    ];
+    expect(mappingProblems([...complete, { column: "e", role: "end_timestamp" }])).toEqual([]);
+    const texts = mappingProblems([
+      ...complete, { column: "e", role: "end_timestamp" }, { column: "l", role: "lifecycle" },
+    ]).map((p) => p.text);
+    expect(texts.join(" ")).toMatch(/not both/);
+  });
+
+  it("keeps the user's end timestamp over a new suggestion", () => {
+    const carried = carryOverMapping(
+      [{ column: "Ende", role: "end_timestamp" }],
+      [{ column: "Ende", role: "event_attribute" }, { column: "Finished", role: "end_timestamp" }],
+    );
+    expect(carried.map((c) => c.role)).toEqual(["end_timestamp", "event_attribute"]);
+  });
+
+  it("explains merged start/complete pairs and unreadable end times", () => {
+    const summary = skippedRowsSummary({
+      ...base, end_attribute: "end_timestamp", lifecycle_merged: 2, lifecycle_open_starts: 1,
+      lifecycle_other: 1, end_unparsed: 0,
+    });
+    expect(summary?.title).toBe("Imported 8 events");
+    expect(summary?.lines).toEqual([
+      "Merged 2 start/complete pairs into one event each; the completion time is in “end_timestamp”",
+      "1 start without a completion, imported without an end time",
+      "1 row with another lifecycle transition (e.g. schedule), kept as “activity - transition”",
+    ]);
+    const ends = skippedRowsSummary({ ...base, end_unparsed: 3, end_unparsed_example: "soon" });
+    expect(ends?.lines).toEqual([
+      "3 end times did not match the timestamp format (e.g. “soon”); those events have no end time",
+    ]);
+  });
+
+  const EXCEL: FlatLogPreview = {
+    format: "xlsx",
+    kind: "flat",
+    delimiter: null,
+    encoding: null,
+    encodings: [],
+    sheet: "Log",
+    sheets: ["Info", "Log"],
+    truncated: false,
+    timestamp_presets: ["yyyy-MM-dd HH:mm:ss"],
+    columns: [
+      { name: "Case", suggestion: { role: "object_id", object_type: "case" }, empty: 0, distinct: 1 },
+      { name: "Activity", suggestion: { role: "activity" }, empty: 0, distinct: 2 },
+      { name: "Start", suggestion: { role: "timestamp", format: "auto" }, empty: 0, distinct: 2 },
+      { name: "End", suggestion: { role: "end_timestamp" }, empty: 0, distinct: 2 },
+      { name: "Finished", suggestion: { role: "event_attribute" }, empty: 0, distinct: 2 },
+    ],
+    rows: [
+      ["c1", "Register", "2024-03-01 09:00:00", "2024-03-01 09:20:00", "2024-03-01 09:20:00"],
+      ["c1", "Approve", "2024-03-01 10:00:00", "2024-03-01 10:45:00", "2024-03-01 10:45:00"],
+    ],
+  };
+
+  function renderExcel(onConfirm = vi.fn()) {
+    render(
+      <FlatLogMappingDialog open file={new File(["x"], "log.xlsx")} preview={EXCEL} onCancel={vi.fn()} onConfirm={onConfirm} />,
+    );
+    return onConfirm;
+  }
+
+  it("offers the sheets of a workbook and submits the one shown, with the end timestamp", async () => {
+    const onConfirm = renderExcel();
+    expect(screen.getByLabelText("Sheet")).toBeTruthy();
+    expect(screen.queryByLabelText("Encoding")).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    fireEvent.click(screen.getByTestId("start-import"));
+    const mapping = onConfirm.mock.calls[0][0] as FlatLogMapping;
+    expect(mapping.sheet).toBe("Log");
+    expect(mapping.columns.find((c) => c.column === "End")).toEqual({ column: "End", role: "end_timestamp" });
+  });
+
+  it("checks the end times with the timestamp's format and zone", async () => {
+    renderExcel();
+    fireEvent.click(screen.getAllByText("End")[0]);
+    // Once the start column's check settled "auto" on a format, the end
+    // times are read with that one.
+    for (let step = 0; step < 2; step++) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+    }
+    expect(parseTimestamps).toHaveBeenLastCalledWith(
+      ["2024-03-01 09:20:00", "2024-03-01 10:45:00"], "iso", "UTC",
+    );
+    expect(screen.getByTestId("end-timestamp-check").textContent).toMatch(/All 2 sample end times parse/);
+  });
+
+  it("keeps a single end timestamp column", async () => {
+    const onConfirm = renderExcel();
+    fireEvent.click(screen.getAllByText("Finished")[0]);
+    fireEvent.click(screen.getByRole("radio", { name: "End timestamp" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    fireEvent.click(screen.getByTestId("start-import"));
+    const roles = Object.fromEntries((onConfirm.mock.calls[0][0] as FlatLogMapping).columns.map((c) => [c.column, c.role]));
+    expect(roles).toMatchObject({ End: "event_attribute", Finished: "end_timestamp" });
   });
 });

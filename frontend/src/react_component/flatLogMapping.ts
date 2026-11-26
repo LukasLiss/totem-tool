@@ -5,17 +5,21 @@ export function initialMapping(preview: FlatLogPreview): FlatColumnMapping[] {
   return preview.columns.map((c) => ({ column: c.name, ...c.suggestion }));
 }
 
+/** Roles only one column can have. */
+export const SINGLE_ROLES: FlatLogRole[] = ["timestamp", "end_timestamp", "lifecycle"];
+
 /**
- * The mapping for a re-read file (another separator or encoding): columns
- * that are still there keep what the user chose, new ones get suggestions.
- * A suggested timestamp gives way to one the user already picked.
+ * The mapping for a re-read file (another separator, encoding or sheet):
+ * columns that are still there keep what the user chose, new ones get
+ * suggestions. A suggested timestamp (or end timestamp, or lifecycle) gives
+ * way to one the user already picked.
  */
 export function carryOverMapping(previous: FlatColumnMapping[], suggested: FlatColumnMapping[]): FlatColumnMapping[] {
   const byName = new Map(previous.map((c) => [c.column, c]));
   const carried = suggested.map((c) => byName.get(c.column) ?? c);
-  const keptTimestamp = carried.some((c) => byName.has(c.column) && c.role === "timestamp");
+  const kept = new Set(carried.filter((c) => byName.has(c.column)).map((c) => c.role));
   return carried.map((c) =>
-    keptTimestamp && c.role === "timestamp" && !byName.has(c.column) ? { ...c, role: "event_attribute" } : c,
+    SINGLE_ROLES.includes(c.role) && kept.has(c.role) && !byName.has(c.column) ? { ...c, role: "event_attribute" } : c,
   );
 }
 
@@ -53,6 +57,11 @@ export function mappingProblems(columns: FlatColumnMapping[]): MappingProblem[] 
   if (count("activity") === 0) problems.push({ level: "error", text: "Choose at least one Activity column." });
   if (count("timestamp") === 0) problems.push({ level: "error", text: "Choose a Timestamp column." });
   if (count("timestamp") > 1) problems.push({ level: "error", text: "Choose only one Timestamp column." });
+  if (count("end_timestamp") > 1) problems.push({ level: "error", text: "Choose only one End timestamp column." });
+  if (count("lifecycle") > 1) problems.push({ level: "error", text: "Choose only one Lifecycle column." });
+  if (count("end_timestamp") > 0 && count("lifecycle") > 0) {
+    problems.push({ level: "error", text: "Use either an End timestamp column or a Lifecycle column, not both." });
+  }
   for (const c of columns) {
     if ((c.role === "object_id" || c.role === "resource") && !c.object_type?.trim()) {
       problems.push({ level: "error", text: `Name the object type of “${c.column}”.` });
@@ -74,7 +83,13 @@ export function skippedRowsSummary(
   const skipped = report.skipped_bad_timestamp + report.skipped_no_object + report.skipped_no_activity;
   const renamed = Object.entries(report.renamed_attributes ?? {});
   const unlisted = Object.entries(report.unlisted_attributes ?? {});
-  if (skipped === 0 && renamed.length === 0 && unlisted.length === 0) return null;
+  const merged = report.lifecycle_merged ?? 0;
+  const openStarts = report.lifecycle_open_starts ?? 0;
+  const otherTransitions = report.lifecycle_other ?? 0;
+  const endUnparsed = report.end_unparsed ?? 0;
+  const endName = report.end_attribute ?? "end_timestamp";
+  const notes = merged + openStarts + otherTransitions + endUnparsed;
+  if (skipped === 0 && renamed.length === 0 && unlisted.length === 0 && notes === 0) return null;
   const lines: string[] = [];
   if (report.skipped_bad_timestamp > 0) {
     const example = report.bad_timestamp_example ? ` (e.g. “${report.bad_timestamp_example}”)` : "";
@@ -86,6 +101,20 @@ export function skippedRowsSummary(
   }
   if (report.skipped_no_activity > 0) {
     lines.push(`${plural(report.skipped_no_activity, "row")} without an activity`);
+  }
+  // Start/complete pairs: one event at the start, the completion as an attribute.
+  if (merged > 0) {
+    lines.push(`Merged ${plural(merged, "start/complete pair")} into one event each; the completion time is in “${endName}”`);
+  }
+  if (openStarts > 0) {
+    lines.push(`${plural(openStarts, "start")} without a completion, imported without an end time`);
+  }
+  if (otherTransitions > 0) {
+    lines.push(`${plural(otherTransitions, "row")} with another lifecycle transition (e.g. schedule), kept as “activity - transition”`);
+  }
+  if (endUnparsed > 0) {
+    const example = report.end_unparsed_example ? ` (e.g. “${report.end_unparsed_example}”)` : "";
+    lines.push(`${plural(endUnparsed, "end time")} did not match the timestamp format${example}; those events have no end time`);
   }
   // Names the database cannot hold twice (it ignores case) were renamed.
   for (const [column, stored] of renamed) {

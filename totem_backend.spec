@@ -35,7 +35,8 @@ a = Analysis(
         # relative to as well.
         ('backend/sample_data/container_logistics.duckdb', 'sample_data'),
     ] + pulp_solver_files + tzdata_files,
-    hiddenimports=simplejwt_hidden_imports + whitenoise_hidden_imports + ['tzdata'],
+    # openpyxl is imported lazily, only when an Excel log is read (flat_log.py).
+    hiddenimports=simplejwt_hidden_imports + whitenoise_hidden_imports + ['tzdata', 'openpyxl'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

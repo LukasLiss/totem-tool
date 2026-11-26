@@ -1,17 +1,17 @@
-# Importing Case-Centric Logs (XES, CSV)
+# Importing Case-Centric Logs (XES, CSV, Excel)
 
 [← Back to the README](../../README.md#-features)
 
 Most process mining tools export **case-centric** event logs: one table with one row per event,
-where every event belongs to exactly one case. XES files (`.xes`, `.xes.gz`) and plain CSV
-exports are the usual examples. Unlike an OCEL 2.0 file, such a log does not say which column
+where every event belongs to exactly one case. XES files (`.xes`, `.xes.gz`), plain CSV
+exports and Excel workbooks (`.xlsx`) are the usual examples. Unlike an OCEL 2.0 file, such a log does not say which column
 is the case, the activity or the time, so TOTeM asks you on import.
 
 ![The column-mapping dialog for an XES log, with the timestamp column selected](images/import-xes-mapping.png)
 
 ## Importing a log
 
-1. Drag the `.xes`, `.xes.gz`, `.csv` or `.tsv` file onto **Upload a new file** and click
+1. Drag the `.xes`, `.xes.gz`, `.csv`, `.tsv` or `.xlsx` file onto **Upload a new file** and click
    **Validate & Upload**.
 2. The **column-mapping dialog** opens with the first rows of the file as a table. Every column
    already has a suggested role, shown in its header.
@@ -28,6 +28,8 @@ imported directly, without the dialog.
 | **Object ID (case)** | Every distinct value becomes an object of the type you name (`case`, `order`, ...). At least one is required. Mark several id columns, say *Order ID* and *Item ID*, and each becomes its own object type, which turns a flat table into an object-centric log. |
 | **Activity** | The name of the event. Several activity columns are joined with ` - ` (for example *Register order - complete*). At least one is required. |
 | **Timestamp** | When the event happened, read with the format you pick. Exactly one is required. |
+| **End timestamp** | For logs with a start and an end time per row: when the activity ended. Read with the Timestamp's format and time zone and kept as the event attribute `end_timestamp`; the event itself happens at the start. Optional, at most one. |
+| **Lifecycle** | For logs that record the start and the completion of an activity as two rows (XES `lifecycle:transition`): each start and its completion become **one** event. See [Start and end times](#start-and-end-times). Optional, at most one. |
 | **Resource** | Who did it. Stored as an object (type `resource` by default), so [Handover of Work](handover-of-work.md) and [Resource Profiling](resource-profiling.md) can use it. |
 | **Event attribute** | Kept as an attribute of each event. |
 | **Object attribute** | An attribute of the object in an id column, for example the customer of a case. Pick which id column it belongs to. |
@@ -35,7 +37,7 @@ imported directly, without the dialog.
 
 For XES files the standard keys are mapped for you: `case:concept:name` becomes the case
 object, `concept:name` the activity, `time:timestamp` the timestamp and `org:resource` the
-resource. Trace attributes appear as `case:<key>` columns and become attributes of the case
+resource. `lifecycle:transition` becomes the Lifecycle column when the log has start events. Trace attributes appear as `case:<key>` columns and become attributes of the case
 object.
 
 The dialog lists the attributes of the events it shows. An XES attribute that first appears
@@ -85,6 +87,41 @@ match:
 With the right one, every sample value parses and the dialog shows how the first is read:
 
 ![A German CSV export mapped by hand: ticket number, status, changed-on date and assignee](images/import-csv-mapping.png)
+
+## Start and end times
+
+An event in TOTeM has one timestamp, so for an activity that takes a while TOTeM uses the time it
+**started** and keeps the time it ended as the event attribute `end_timestamp`. Logs record the
+two times in one of two ways:
+
+* **Two columns per row**, such as *Start Time* and *End Time* (or *Beginn* and *Ende*). Set the
+  start to **Timestamp** and the end to **End timestamp**. TOTeM suggests this when the column
+  names say which is which. The dialog checks the end times against the Timestamp's format.
+* **Two rows per activity**, a `start` and a `complete` row, as in many XES logs (BPI Challenge
+  2012, for example). Set the transition column to **Lifecycle**. Each start is paired with the
+  next completion of the same activity in the same case, and the pair becomes one event at the
+  start time with the completion time in `end_timestamp`. Without this, every activity would be
+  counted twice and the process maps would show loops that never happened. Whoever completed
+  the activity is linked to the event as well, if it was someone else.
+
+  A completion without a start (logs that record only completions for some activities) is an
+  event at the time of the completion. A start that is never completed keeps no end time. Rows
+  with another transition, such as `schedule`, stay events of their own named
+  `<activity> - <transition>`. After the import TOTeM says how many pairs it merged.
+
+## Excel files
+
+An `.xlsx` (or `.xlsm`) workbook imports directly, without saving it as CSV first, so there is
+no separator or encoding to get wrong. TOTeM reads one worksheet: by default the largest one, so
+a small cover or info sheet is skipped, and you can pick another under **Sheet** next to the
+status line. The first non-empty row is the header.
+
+Cells Excel stores as dates arrive as `2024-03-05 10:00:00`, which **Detect automatically**
+reads. Excel does not store a time zone, so set the one the times were recorded in. Whole
+numbers keep no `.0` (`45001022`). Old `.xls` files cannot be read; save them as `.xlsx` in
+Excel.
+
+![An Excel workbook mapped by hand, with a Beginn (start) and an Ende (end) column](images/import-xlsx-start-end.png)
 
 ## CSV files
 

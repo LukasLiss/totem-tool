@@ -18,7 +18,7 @@ export async function uploadFile(
 }
 
 // ---------------------------------------------------------------------------
-// Case-centric ("flat") logs: XES and plain CSV, imported through a column
+// Case-centric ("flat") logs: XES, plain CSV and Excel, imported through a column
 // mapping. See totem_lib/src/totem_lib/ocel/flat_log.py.
 // ---------------------------------------------------------------------------
 
@@ -27,6 +27,10 @@ export type FlatLogRole =
   | "resource"
   | "activity"
   | "timestamp"
+  /** When the activity ended; stored as the event attribute "end_timestamp". */
+  | "end_timestamp"
+  /** start / complete per row (XES lifecycle:transition); pairs become one event. */
+  | "lifecycle"
   | "event_attribute"
   | "object_attribute"
   | "ignore";
@@ -49,6 +53,8 @@ export interface FlatLogMapping {
   delimiter?: string | null;
   /** CSV text encoding ("utf-8", "windows-1252", ...); detected when absent. */
   encoding?: string | null;
+  /** Excel worksheet; the default one when absent. */
+  sheet?: string | null;
 }
 
 export interface FlatLogPreviewColumn {
@@ -59,7 +65,7 @@ export interface FlatLogPreviewColumn {
 }
 
 export interface FlatLogPreview {
-  format: "xes" | "csv";
+  format: FlatLogFormat;
   /** "ocel_csv": an OCEL 2.0 CSV, which imports without a mapping. */
   kind: "flat" | "ocel_csv";
   columns: FlatLogPreviewColumn[];
@@ -67,16 +73,22 @@ export interface FlatLogPreview {
   delimiter: string | null;
   /** CSV only: the encoding used to read the sample (detected or chosen). */
   encoding: string | null;
+  /** Excel only: the worksheet shown, and all worksheets to choose from. */
+  sheet?: string | null;
+  sheets?: string[];
   truncated: boolean;
   timestamp_presets: string[];
   encodings: string[];
 }
 
+export type FlatLogFormat = "xes" | "csv" | "xlsx";
+
 /** File names that may hold a case-centric log, by format. */
-export function flatLogFormat(fileName: string): "xes" | "csv" | null {
+export function flatLogFormat(fileName: string): FlatLogFormat | null {
   const name = fileName.toLowerCase();
   if (name.endsWith(".xes") || name.endsWith(".xes.gz")) return "xes";
   if (name.endsWith(".csv") || name.endsWith(".tsv") || name.endsWith(".txt")) return "csv";
+  if (name.endsWith(".xlsx") || name.endsWith(".xlsm")) return "xlsx";
   return null;
 }
 
@@ -93,19 +105,25 @@ export async function previewFlatLog(
   file: File,
   delimiter?: string | null,
   encoding?: string | null,
+  sheet?: string | null,
 ): Promise<FlatLogPreview> {
   // XES: the first traces, wherever they start (see xesSample.ts). CSV: the
-  // first bytes, since a CSV header is one line.
+  // first bytes, since a CSV header is one line. Excel: all of it, since a
+  // zip archive cannot be read in part.
+  const format = flatLogFormat(file.name);
   const sample =
-    flatLogFormat(file.name) === "xes"
+    format === "xes"
       ? await xesPreviewSample(file, PREVIEW_BYTES)
-      : { blob: file.slice(0, PREVIEW_BYTES), name: file.name, truncated: file.size > PREVIEW_BYTES };
+      : format === "xlsx"
+        ? { blob: file as Blob, name: file.name, truncated: false }
+        : { blob: file.slice(0, PREVIEW_BYTES), name: file.name, truncated: file.size > PREVIEW_BYTES };
   const formData = new FormData();
   formData.append("file", sample.blob, "preview");
   formData.append("filename", sample.name);
   formData.append("truncated", sample.truncated ? "true" : "false");
   if (delimiter) formData.append("delimiter", delimiter);
   if (encoding) formData.append("encoding", encoding);
+  if (sheet) formData.append("sheet", sheet);
   const { data } = await axios.post("/api/files/preview/", formData, { _skipGlobalFilter: true });
   return data;
 }
@@ -124,6 +142,17 @@ export interface FlatLogImportReport {
   renamed_attributes?: Record<string, string>;
   /** XES keys missing from the previewed sample, kept as attributes under these names. */
   unlisted_attributes?: Record<string, string>;
+  /** Event attribute holding end times (end timestamp or lifecycle column), else null. */
+  end_attribute?: string | null;
+  /** End times the timestamp format did not read; those events have no end. */
+  end_unparsed?: number;
+  end_unparsed_example?: string | null;
+  /** start/complete pairs made into one event each. */
+  lifecycle_merged?: number;
+  /** Starts no completion followed (the event has no end). */
+  lifecycle_open_starts?: number;
+  /** Rows with another transition (schedule, ...), kept as "<activity> - <transition>". */
+  lifecycle_other?: number;
 }
 
 /** Another format that also reads every sample value, but differently. */
