@@ -1,10 +1,11 @@
-"""Importing case-centric logs (XES, plain CSV) through a column mapping.
+"""Importing case-centric logs (XES, plain CSV, Excel) through a column mapping.
 
 Covers the three endpoints the import dialog uses: ``files/preview/`` (the
 columns and first rows of the file), ``files/parse-timestamps/`` (does a
 timestamp format fit) and ``files/`` with a ``mapping``.
 """
 
+import io
 import json
 import os
 import shutil
@@ -227,3 +228,99 @@ class FlatLogImportTests(TestCase):
     def test_mapping_on_a_non_flat_format_is_rejected(self):
         response = self._upload("log.json", b"{}", CSV_MAPPING)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # -- Excel and start/end times -------------------------------------------
+
+    @staticmethod
+    def _xlsx(sheets):
+        from datetime import datetime
+
+        import openpyxl
+
+        book = openpyxl.Workbook()
+        book.remove(book.active)
+        for title, rows in sheets.items():
+            ws = book.create_sheet(title)
+            for row in rows:
+                ws.append([datetime.fromisoformat(v) if isinstance(v, str) and v[:2] == "20" else v
+                           for v in row])
+        out = io.BytesIO()
+        book.save(out)
+        return out.getvalue()
+
+    XLSX_SHEETS = {
+        "Info": [["exported", "2024-03-03 12:00:00"]],
+        "Log": [
+            ["Case ID", "Activity", "Start Time", "End Time", "Resource"],
+            ["c1", "Register", "2024-03-01 09:00:00", "2024-03-01 09:20:00", "Alice"],
+            ["c1", "Approve", "2024-03-01 10:00:00", "2024-03-01 10:45:00", "Bob"],
+        ],
+    }
+
+    def test_preview_of_an_excel_file_and_its_sheets(self):
+        content = self._xlsx(self.XLSX_SHEETS)
+        response = self.client.post(
+            "/api/files/preview/",
+            {"file": SimpleUploadedFile("blob", content), "filename": "log.xlsx", "sheet": "Log"},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(response.data["format"], "xlsx")
+        self.assertEqual(response.data["sheets"], ["Info", "Log"])
+        self.assertEqual(response.data["sheet"], "Log")
+        roles = {c["name"]: c["suggestion"]["role"] for c in response.data["columns"]}
+        self.assertEqual(roles["Start Time"], "timestamp")
+        self.assertEqual(roles["End Time"], "end_timestamp")
+
+    def test_preview_of_an_unknown_sheet_is_rejected(self):
+        content = self._xlsx(self.XLSX_SHEETS)
+        response = self.client.post(
+            "/api/files/preview/",
+            {"file": SimpleUploadedFile("blob", content), "filename": "log.xlsx", "sheet": "Nope"},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Nope", response.data["error"])
+
+    def test_excel_upload_keeps_the_end_time_as_an_attribute(self):
+        mapping = {
+            "sheet": "Log",
+            "columns": [
+                {"column": "Case ID", "role": "object_id", "object_type": "Claim"},
+                {"column": "Activity", "role": "activity"},
+                {"column": "Start Time", "role": "timestamp", "format": "auto", "timezone": "Europe/Berlin"},
+                {"column": "End Time", "role": "end_timestamp"},
+                {"column": "Resource", "role": "resource"},
+            ],
+        }
+        response = self._upload("claims.xlsx", self._xlsx(self.XLSX_SHEETS), mapping)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.data["import_report"]["end_attribute"], "end_timestamp")
+        db = _OCEL_DB_REGISTRY[int(response.data["id"])]
+        self.assertEqual(
+            db.conn.execute("SELECT activity, timestamp_unix, end_timestamp FROM events ORDER BY event_id").fetchall(),
+            [
+                ("Register", 1709280000, "2024-03-01T09:20:00+01:00"),
+                ("Approve", 1709283600, "2024-03-01T10:45:00+01:00"),
+            ],
+        )
+
+    def test_lifecycle_upload_merges_start_and_complete(self):
+        content = (
+            "case;activity;lifecycle;time\n"
+            "c1;Check;start;01.03.2024 09:00\n"
+            "c1;Check;complete;01.03.2024 09:45\n"
+        ).encode()
+        mapping = {
+            "delimiter": ";",
+            "columns": [
+                {"column": "case", "role": "object_id", "object_type": "case"},
+                {"column": "activity", "role": "activity"},
+                {"column": "lifecycle", "role": "lifecycle"},
+                {"column": "time", "role": "timestamp", "format": "dd.MM.yyyy HH:mm"},
+            ],
+        }
+        response = self._upload("checks.csv", content, mapping)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        report = response.data["import_report"]
+        self.assertEqual((report["events"], report["lifecycle_merged"]), (1, 1))

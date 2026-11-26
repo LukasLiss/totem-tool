@@ -1,4 +1,4 @@
-"""Case-centric ("flat") logs: XES and plain CSV with a column mapping."""
+"""Case-centric ("flat") logs: XES, plain CSV and Excel with a column mapping."""
 
 import gzip
 import shutil
@@ -653,3 +653,299 @@ def test_type_prefixed_object_ids_never_merge_with_real_ones(tmp_path):
         assert _rows(db, "SELECT obj_type FROM objects WHERE obj_id = '42'") == [("resource",)]
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# Excel workbooks
+# ---------------------------------------------------------------------------
+
+def _xlsx(tmp_path, sheets, active=0, name="log.xlsx"):
+    """A workbook with ``sheets`` = {title: [row, ...]}; rows are lists."""
+    openpyxl = pytest.importorskip("openpyxl")
+    book = openpyxl.Workbook()
+    book.remove(book.active)
+    for title, rows in sheets.items():
+        ws = book.create_sheet(title)
+        for row in rows:
+            ws.append(row)
+    book.active = active
+    path = tmp_path / name
+    book.save(path)
+    return str(path)
+
+
+def test_xlsx_format_detection():
+    assert flat_log_format("log.xlsx") == "xlsx"
+    assert flat_log_format("Log.XLSM") == "xlsx"
+    assert flat_log_format("log.xls") is None  # old binary Excel
+
+
+def test_xlsx_preview_converts_cells_like_a_csv_export(tmp_path):
+    from datetime import date, datetime
+    path = _xlsx(tmp_path, {"Log": [
+        ["Case ID", "Activity", "Timestamp", "Amount", "Paid", "Due"],
+        [45001022, "Register", datetime(2024, 3, 1, 9, 0), 12.5, True, date(2024, 4, 1)],  # Excel stores dates as datetimes
+        [45001022, "Check", datetime(2024, 3, 1, 10, 30, 0, 250000), 7.0, False, None],
+    ]})
+    preview = preview_flat_log(open(path, "rb").read(), "log.xlsx")
+    assert preview["format"] == "xlsx"
+    assert preview["sheet"] == "Log" and preview["sheets"] == ["Log"]
+    assert preview["rows"][0] == ["45001022", "Register", "2024-03-01 09:00:00", "12.5", "true", "2024-04-01 00:00:00"]
+    assert preview["rows"][1][2] == "2024-03-01 10:30:00.250000"
+    assert preview["rows"][1][3] == "7"  # Excel's 7.0
+    roles = {c["name"]: c["suggestion"]["role"] for c in preview["columns"]}
+    assert roles["Case ID"] == "object_id" and roles["Activity"] == "activity"
+    assert roles["Timestamp"] == "timestamp"
+
+
+def test_xlsx_picks_a_sheet_with_data_and_honours_a_chosen_one(tmp_path):
+    path = _xlsx(tmp_path, {
+        "Cover": [],
+        "Orders": [["case", "activity", "time"], ["o1", "Create", "2024-03-01 09:00:00"]],
+        "Items": [["item id", "step", "when"], ["i1", "Pick", "2024-03-02 09:00:00"]],
+    }, active=0)
+    data = open(path, "rb").read()
+    preview = preview_flat_log(data, "log.xlsx")
+    assert preview["sheet"] == "Orders"  # the active sheet is empty
+    assert preview["sheets"] == ["Cover", "Orders", "Items"]
+    items = preview_flat_log(data, "log.xlsx", sheet="Items")
+    assert items["rows"] == [["i1", "Pick", "2024-03-02 09:00:00"]]
+    with pytest.raises(FlatLogMappingError, match="no sheet named"):
+        preview_flat_log(data, "log.xlsx", sheet="Nope")
+
+
+def test_xlsx_prefers_the_log_over_a_small_cover_sheet(tmp_path):
+    path = _xlsx(tmp_path, {
+        "Info": [["Export of the purchasing system"], ["exported", "2024-04-02"]],
+        "Log": [["case", "activity", "time"]] + [["o1", f"Step {i}", "2024-03-01 09:00:00"] for i in range(5)],
+    }, active=0)
+    assert preview_flat_log(open(path, "rb").read(), "log.xlsx")["sheet"] == "Log"
+
+
+def test_xlsx_header_may_follow_empty_rows_and_trailing_empty_columns_are_dropped(tmp_path):
+    path = _xlsx(tmp_path, {"Log": [
+        [],
+        ["case", "activity", "time", None, None],
+        ["c1", "A", "2024-03-01 09:00:00", None, None],
+        [None, None, None],
+        ["c1", "B", "2024-03-01 10:00:00"],
+    ]})
+    preview = preview_flat_log(open(path, "rb").read(), "log.xlsx")
+    assert [c["name"] for c in preview["columns"]] == ["case", "activity", "time"]
+    assert len(preview["rows"]) == 2
+
+
+def test_xlsx_import_with_a_chosen_sheet(tmp_path):
+    path = _xlsx(tmp_path, {
+        "Orders": [["case", "activity", "time"], ["o1", "Create", "2024-03-01 09:00:00"]],
+        "Items": [["item", "step", "when"], ["i1", "Pick", "01.03.2024 10:00"], ["i1", "Pack", "01.03.2024 11:00"]],
+    })
+    mapping = FlatLogMapping.from_dict({"sheet": "Items", "columns": [
+        {"column": "item", "role": "object_id", "object_type": "item"},
+        {"column": "step", "role": "activity"},
+        {"column": "when", "role": "timestamp", "format": "dd.MM.yyyy HH:mm", "timezone": "Europe/Berlin"},
+    ]})
+    report = {}
+    db = import_ocel_db(path, mapping=mapping, import_report=report)
+    try:
+        assert _rows(db, "SELECT activity, timestamp_unix FROM events ORDER BY event_id") == [
+            ("Pick", 1709283600), ("Pack", 1709287200),
+        ]
+        assert report["events"] == 2
+    finally:
+        db.close()
+
+
+def test_xlsx_imports_without_a_mapping(tmp_path):
+    from datetime import datetime
+    path = _xlsx(tmp_path, {"Log": [
+        ["Case ID", "Activity", "Timestamp"],
+        ["c1", "A", datetime(2024, 3, 1, 9, 0)],
+        ["c1", "B", datetime(2024, 3, 1, 10, 0)],
+    ]})
+    db = import_ocel_db(path)
+    try:
+        assert _rows(db, "SELECT COUNT(*) FROM events") == [(2,)]
+    finally:
+        db.close()
+
+
+def test_a_broken_xlsx_is_reported():
+    with pytest.raises(FlatLogMappingError, match="could not be read"):
+        preview_flat_log(b"not a zip archive", "log.xlsx")
+
+
+# ---------------------------------------------------------------------------
+# Start and end times
+# ---------------------------------------------------------------------------
+
+def test_start_and_end_columns_are_suggested(tmp_path):
+    path = _csv(tmp_path, (
+        "case,activity,Complete Timestamp,Start Timestamp\n"
+        "c1,A,2024-03-01 09:30:00,2024-03-01 09:00:00\n"
+    ))
+    roles = {c["name"]: c["suggestion"]["role"]
+             for c in preview_flat_log(open(path, "rb").read(), "log.csv")["columns"]}
+    # The event happens at the start, whichever column comes first.
+    assert roles["Start Timestamp"] == "timestamp"
+    assert roles["Complete Timestamp"] == "end_timestamp"
+
+
+def test_begin_and_end_columns_are_suggested(tmp_path):
+    # German "Beginn" / "Ende": the end must not pass for the start.
+    path = _csv(tmp_path, "Fall;Vorgang;Beginn;Ende\nc1;A;2024-03-01 09:00:00;2024-03-01 09:30:00\n")
+    roles = {c["name"]: c["suggestion"]["role"]
+             for c in preview_flat_log(open(path, "rb").read(), "log.csv")["columns"]}
+    assert roles["Beginn"] == "timestamp" and roles["Ende"] == "end_timestamp"
+
+
+def test_a_single_time_column_is_the_timestamp_whatever_its_name(tmp_path):
+    path = _csv(tmp_path, "case,activity,End Time\nc1,A,2024-03-01 09:30:00\n")
+    roles = {c["name"]: c["suggestion"]["role"]
+             for c in preview_flat_log(open(path, "rb").read(), "log.csv")["columns"]}
+    assert roles["End Time"] == "timestamp"
+
+
+def test_end_timestamp_is_stored_as_an_attribute(tmp_path):
+    path = _csv(tmp_path, (
+        "case,act,start,end,end_timestamp\n"
+        "c1,A,01.03.2024 09:00,01.03.2024 09:45,user column\n"
+        "c1,B,01.03.2024 10:00,,\n"
+        "c1,C,01.03.2024 11:00,soon,\n"
+    ))
+    mapping = FlatLogMapping.from_dict({"columns": [
+        {"column": "case", "role": "object_id"},
+        {"column": "act", "role": "activity"},
+        {"column": "start", "role": "timestamp", "format": "dd.MM.yyyy HH:mm", "timezone": "Europe/Berlin"},
+        {"column": "end", "role": "end_timestamp"},
+        {"column": "end_timestamp", "role": "event_attribute"},
+    ]})
+    report = {}
+    db = import_ocel_db(path, mapping=mapping, import_report=report)
+    try:
+        assert _rows(db, "SELECT activity, timestamp_unix, end_timestamp FROM events ORDER BY event_id") == [
+            ("A", 1709280000, "2024-03-01T09:45:00+01:00"),  # read in the start's zone
+            ("B", 1709283600, None),
+            ("C", 1709287200, None),
+        ]
+        # A data column of that name moves aside, and is reported.
+        assert report["renamed_attributes"] == {"end_timestamp": "end_timestamp_2"}
+        assert report["end_attribute"] == "end_timestamp"
+        assert report["end_unparsed"] == 1 and report["end_unparsed_example"] == "soon"
+    finally:
+        db.close()
+
+
+LIFECYCLE_XES = """<?xml version="1.0" encoding="UTF-8"?>
+<log xmlns="http://www.xes-standard.org/">
+  <trace>
+    <string key="concept:name" value="c1"/>
+    {events}
+  </trace>
+</log>"""
+
+
+def _lifecycle_xes(tmp_path, events):
+    body = "".join(
+        f'<event><string key="concept:name" value="{a}"/>'
+        f'<string key="lifecycle:transition" value="{t}"/>'
+        f'<date key="time:timestamp" value="2024-01-01T{hm}:00+00:00"/>'
+        f'<string key="org:resource" value="{r}"/>'
+        + (f'<string key="note" value="{note}"/>' if note else "")
+        + "</event>"
+        for a, t, hm, r, note in events
+    )
+    path = tmp_path / "lifecycle.xes"
+    path.write_text(LIFECYCLE_XES.format(events=body), encoding="utf-8")
+    return str(path)
+
+
+def test_lifecycle_column_is_suggested_only_with_starts(tmp_path):
+    with_starts = _lifecycle_xes(tmp_path, [("A", "start", "09:00", "u1", None), ("A", "complete", "09:10", "u1", None)])
+    roles = {c["name"]: c["suggestion"]["role"]
+             for c in preview_flat_log(open(with_starts, "rb").read(), "log.xes")["columns"]}
+    assert roles["lifecycle:transition"] == "lifecycle"
+
+    only_complete = _lifecycle_xes(tmp_path, [("A", "complete", "09:10", "u1", None)])
+    roles = {c["name"]: c["suggestion"]["role"]
+             for c in preview_flat_log(open(only_complete, "rb").read(), "log.xes")["columns"]}
+    assert roles["lifecycle:transition"] == "event_attribute"
+
+
+def test_start_and_complete_become_one_event_at_the_start(tmp_path):
+    path = _lifecycle_xes(tmp_path, [
+        ("Submit", "complete", "08:00", "u1", None),       # no start: an event at its time
+        ("Check", "SCHEDULE", "08:30", "u1", None),        # another transition: its own event
+        ("Check", "START", "09:00", "u1", "first"),
+        ("Check", "COMPLETE", "09:45", "u2", "done"),      # completed by someone else
+        ("Check", "start", "10:00", "u1", None),           # the activity again
+        ("Check", "complete", "10:20", "u1", None),
+        ("Approve", "start", "11:00", "u3", None),         # never completed
+    ])
+    report = {}
+    db = import_ocel_db(path, import_report=report)  # the suggested mapping pairs them
+    try:
+        assert _rows(db, "SELECT activity, timestamp_unix, end_timestamp FROM events ORDER BY event_id") == [
+            ("Submit", 1704096000, None),
+            ("Check - SCHEDULE", 1704097800, None),
+            ("Check", 1704099600, "2024-01-01T09:45:00+00:00"),
+            ("Check", 1704103200, "2024-01-01T10:20:00+00:00"),
+            ("Approve", 1704106800, None),
+        ]
+        # Both people who worked on it; the start's attributes win.
+        assert _rows(db, "SELECT obj_id FROM event_object WHERE event_id = 'e0000000003' ORDER BY obj_id") == [
+            ("c1",), ("u1",), ("u2",),
+        ]
+        assert _rows(db, "SELECT note FROM events WHERE event_id = 'e0000000003'") == [("first",)]
+        assert report["rows"] == 7 and report["events"] == 5
+        assert report["lifecycle_merged"] == 2
+        assert report["lifecycle_open_starts"] == 1
+        assert report["lifecycle_other"] == 1
+    finally:
+        db.close()
+
+
+def test_a_completion_before_its_start_is_not_paired(tmp_path):
+    path = _lifecycle_xes(tmp_path, [
+        ("A", "start", "10:00", "u1", None),
+        ("A", "complete", "09:00", "u1", None),  # earlier than the start: bad data
+    ])
+    report = {}
+    db = import_ocel_db(path, import_report=report)
+    try:
+        assert _rows(db, "SELECT COUNT(*) FROM events") == [(2,)]
+        assert report["lifecycle_merged"] == 0
+    finally:
+        db.close()
+
+
+def test_pairs_are_matched_per_case(tmp_path):
+    path = _csv(tmp_path, (
+        "case,activity,lifecycle,time\n"
+        "c1,A,start,2024-03-01 09:00:00\n"
+        "c2,A,start,2024-03-01 09:05:00\n"
+        "c2,A,complete,2024-03-01 09:10:00\n"
+        "c1,A,complete,2024-03-01 09:30:00\n"
+    ))
+    preview = preview_flat_log(open(path, "rb").read(), "log.csv")
+    assert {c["name"]: c["suggestion"]["role"] for c in preview["columns"]}["lifecycle"] == "lifecycle"
+    db = import_ocel_db(path, mapping=FlatLogMapping.suggested(path))
+    try:
+        assert _rows(db, """
+            SELECT o.obj_id, e.end_timestamp FROM events e JOIN event_object o USING (event_id)
+            ORDER BY o.obj_id""") == [
+            ("c1", "2024-03-01T09:30:00+00:00"),
+            ("c2", "2024-03-01T09:10:00+00:00"),
+        ]
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("extra,message", [
+    ([{"column": "e1", "role": "end_timestamp"}, {"column": "e2", "role": "end_timestamp"}], "at most one end"),
+    ([{"column": "l1", "role": "lifecycle"}, {"column": "l2", "role": "lifecycle"}], "at most one lifecycle"),
+    ([{"column": "e1", "role": "end_timestamp"}, {"column": "l1", "role": "lifecycle"}], "not both"),
+])
+def test_invalid_end_and_lifecycle_mappings_are_rejected(extra, message):
+    with pytest.raises(FlatLogMappingError, match=message):
+        FlatLogMapping.from_dict({"columns": BASE_COLS + extra})

@@ -165,8 +165,9 @@ def import_ocel_db(
     """
     _, ext = os.path.splitext(file_path)
     fmt = ext.lower().lstrip(".")
-    if flat_log_format(file_path) == "xes":
-        fmt = "xes"  # also "log.xes.gz", whatever Django renamed it to
+    if flat_log_format(file_path) in ("xes", "xlsx"):
+        # Also "log.xes.gz" (whatever Django renamed it to) and ".xlsm".
+        fmt = flat_log_format(file_path)
 
     if fmt == "duckdb":
         return OcelDuckDB.load(file_path)
@@ -179,8 +180,11 @@ def import_ocel_db(
         "tsv": _stage_csv,
         "txt": _stage_csv,
         "xes": _stage_flat,
+        "xlsx": _stage_flat,
     }
-    if mapping is not None or fmt == "xes":
+    # XES and Excel are always flat logs: without a mapping they get the one
+    # the dialog would suggest. A CSV without one is an OCEL 2.0 CSV.
+    if mapping is not None or fmt in ("xes", "xlsx"):
         if mapping is None:
             flat_mapping = FlatLogMapping.suggested(file_path)
         elif isinstance(mapping, FlatLogMapping):
@@ -188,7 +192,7 @@ def import_ocel_db(
             flat_mapping = mapping
         else:
             flat_mapping = FlatLogMapping.from_dict(mapping)
-        if fmt in ("csv", "tsv", "txt", "xes"):
+        if fmt in ("csv", "tsv", "txt", "xes", "xlsx"):
             readers[fmt] = lambda path, stage, report, _t: _stage_flat(
                 path, stage, report, flat_mapping, import_report
             )

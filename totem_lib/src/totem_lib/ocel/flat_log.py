@@ -1,5 +1,6 @@
 """
-Case-centric ("flat") event logs: XES files and plain CSV/TSV tables.
+Case-centric ("flat") event logs: XES files, plain CSV/TSV tables and Excel
+workbooks (``.xlsx``).
 
 A flat log is one table with one row per event. Unlike an OCEL 2.0 file it
 does not say which column holds what, so the user maps the columns first —
@@ -13,6 +14,15 @@ the same way Disco or ProM ask for it on import:
 * **activity** columns name the event (several are joined with ``" - "``),
 * the **timestamp** column (exactly one) is parsed with a format the user
   picks, or detected automatically,
+* an optional **end timestamp** column (a log with a start and an end time
+  per row) is read with the same format and stored as the event attribute
+  ``end_timestamp``; the event itself happens at the start,
+* an optional **lifecycle** column (XES ``lifecycle:transition``) says
+  whether a row starts or completes an activity. Each start is paired with
+  the next completion of the same activity in the same case, and the pair
+  becomes one event at the start time with the completion time as
+  ``end_timestamp``. Rows with other transitions (``schedule``, ...) stay
+  events of their own, named ``<activity> - <transition>``,
 * **event attribute** and **object attribute** columns are copied over,
 * everything else is ignored.
 
@@ -27,6 +37,11 @@ convention pm4py and most tools use), event attributes under their own key.
 ``<global>`` defaults, classifiers and log-level attributes are not data and
 are skipped; nested (meta) attributes are ignored, list/container values are
 left out.
+
+Excel specifics: one worksheet is read (the user picks it; by default the
+largest one with data, since exports often open on a small cover sheet). Its first non-empty row is the header.
+Cells Excel stores as dates come out as ISO 8601 text, so "auto" reads them;
+whole numbers lose Excel's ``.0`` (``45001022``, not ``45001022.0``).
 """
 
 from __future__ import annotations
@@ -40,7 +55,8 @@ import re
 import xml.etree.ElementTree as ET
 import zlib
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, tzinfo
+from collections import deque
+from datetime import date, datetime, time, timezone, tzinfo
 from functools import lru_cache
 from typing import Iterable, Iterator, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -49,6 +65,8 @@ ROLE_OBJECT_ID = "object_id"
 ROLE_RESOURCE = "resource"
 ROLE_ACTIVITY = "activity"
 ROLE_TIMESTAMP = "timestamp"
+ROLE_END_TIMESTAMP = "end_timestamp"
+ROLE_LIFECYCLE = "lifecycle"
 ROLE_EVENT_ATTRIBUTE = "event_attribute"
 ROLE_OBJECT_ATTRIBUTE = "object_attribute"
 ROLE_IGNORE = "ignore"
@@ -58,6 +76,8 @@ ROLES = (
     ROLE_RESOURCE,
     ROLE_ACTIVITY,
     ROLE_TIMESTAMP,
+    ROLE_END_TIMESTAMP,
+    ROLE_LIFECYCLE,
     ROLE_EVENT_ATTRIBUTE,
     ROLE_OBJECT_ATTRIBUTE,
     ROLE_IGNORE,
@@ -72,6 +92,12 @@ FORMAT_UNIX_S = "unix_s"
 FORMAT_UNIX_MS = "unix_ms"
 
 ACTIVITY_SEPARATOR = " - "
+# The event attribute that holds when an activity ended (end timestamp
+# column, or the completion paired with a start).
+END_TIMESTAMP_ATTRIBUTE = "end_timestamp"
+# Lifecycle values, lower-cased. Anything else is "another transition".
+_LIFECYCLE_START = frozenset({"start", "started", "begin"})
+_LIFECYCLE_COMPLETE = frozenset({"complete", "completed", "end", "finish", "finished"})
 DEFAULT_OBJECT_TYPE = "case"
 DEFAULT_RESOURCE_TYPE = "resource"
 # Initial object attribute values in OCEL 2.0 carry the epoch as their time.
@@ -114,13 +140,16 @@ class FlatLogMappingError(ValueError):
 # ---------------------------------------------------------------------------
 
 def flat_log_format(file_name: str) -> Optional[str]:
-    """``"xes"`` / ``"csv"`` for a file name a flat log can have, else None."""
+    """``"xes"`` / ``"csv"`` / ``"xlsx"`` for a file name a flat log can
+    have, else None."""
     name = file_name.lower()
     # Django de-duplicates "log.xes.gz" as "log.xes_AbC123.gz".
     if name.endswith(".xes") or (name.endswith(".gz") and ".xes" in name):
         return "xes"
     if name.endswith(".csv") or name.endswith(".tsv") or name.endswith(".txt"):
         return "csv"
+    if name.endswith(".xlsx") or name.endswith(".xlsm"):
+        return "xlsx"
     return None
 
 
@@ -532,6 +561,114 @@ def _is_gz(file_path: str) -> bool:
     return file_path.lower().endswith(".gz")
 
 
+def _xlsx_cell(value) -> str:
+    """An Excel cell as the text a CSV export of it would hold."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, datetime):
+        # Naive, like the cell: the time zone the user picks applies.
+        return value.isoformat(sep=" ")
+    if isinstance(value, (date, time)):
+        return value.isoformat()
+    if isinstance(value, float):
+        # Excel keeps every number as a float: 45001022 is 45001022.0.
+        return str(int(value)) if value.is_integer() and abs(value) < 1e16 else repr(value)
+    return str(value).strip() if isinstance(value, str) else str(value)
+
+
+def _row_is_empty(values) -> bool:
+    return all(v is None or (isinstance(v, str) and not v.strip()) for v in values)
+
+
+class _Workbook:
+    """A read-only Excel workbook; close it (or use ``with``) when done."""
+
+    def __init__(self, source):
+        try:
+            import openpyxl
+        except ImportError as e:  # pragma: no cover - a declared dependency
+            raise FlatLogMappingError("Reading Excel files needs the 'openpyxl' package.") from e
+        try:
+            # data_only: the values Excel computed, not the formulas.
+            self.book = openpyxl.load_workbook(source, read_only=True, data_only=True)
+        except Exception as e:
+            raise FlatLogMappingError(f"The Excel file could not be read: {e}") from e
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+    def close(self) -> None:
+        self.book.close()
+
+    @property
+    def sheet_names(self) -> list[str]:
+        return [ws.title for ws in self.book.worksheets]
+
+    def pick(self, sheet: Optional[str]):
+        """The worksheet named ``sheet``; by default the largest one with
+        data (an export often opens on a small cover or info sheet), the
+        active one on a tie."""
+        sheets = self.book.worksheets
+        if not sheets:
+            raise FlatLogMappingError("The Excel file has no worksheets.")
+        if sheet:
+            for ws in sheets:
+                if ws.title == sheet:
+                    return ws
+            raise FlatLogMappingError(f"The Excel file has no sheet named '{sheet}'.")
+        active = self.book.active
+        candidates = ([active] if active in sheets else []) + [ws for ws in sheets if ws is not active]
+        # The size the file states, read before _first_row resets it; files
+        # that state none count as 0 and leave the order to decide.
+        size = {id(ws): (ws.max_row or 0) * (ws.max_column or 0) for ws in candidates}
+        with_data = [ws for ws in candidates if self._first_row(ws) is not None]
+        if not with_data:
+            return candidates[0]
+        return max(with_data, key=lambda ws: size[id(ws)])  # first wins a tie
+
+    @staticmethod
+    def _rows(ws):
+        # Files from other tools often state a wrong sheet size; read it all.
+        if hasattr(ws, "reset_dimensions"):
+            ws.reset_dimensions()
+        return ws.iter_rows(values_only=True)
+
+    @classmethod
+    def _first_row(cls, ws):
+        for values in cls._rows(ws):
+            if not _row_is_empty(values):
+                return values
+        return None
+
+    def rows(self, ws) -> tuple[list[str], Iterator[dict]]:
+        """Header and rows of ``ws``, like :func:`_iter_csv`."""
+        it = self._rows(ws)
+        header = None
+        for values in it:
+            if not _row_is_empty(values):
+                header = list(values)
+                break
+        if header is None:
+            return [], iter(())
+        # Formatting can stretch a sheet far to the right of its data.
+        while header and _row_is_empty(header[-1:]):
+            header.pop()
+        columns = _unique_names([_xlsx_cell(v) for v in header])
+
+        def rows() -> Iterator[dict]:
+            for values in it:
+                if values is None or _row_is_empty(values):
+                    continue
+                yield {col: _xlsx_cell(values[i]) for i, col in enumerate(columns) if i < len(values)}
+
+        return columns, rows()
+
+
 # ---------------------------------------------------------------------------
 # Preview
 # ---------------------------------------------------------------------------
@@ -549,6 +686,22 @@ def _object_type_from_column(name: str) -> str:
     if not base or _norm(base) in ("case", "caseconceptname", "trace"):
         return DEFAULT_OBJECT_TYPE
     return base
+
+
+def _lifecycle_kind(value: Optional[str]) -> Optional[str]:
+    """``"start"``, ``"complete"``, another transition (lower case) or None."""
+    text = (value or "").strip().lower()
+    if not text:
+        return None
+    if text in _LIFECYCLE_START:
+        return "start"
+    if text in _LIFECYCLE_COMPLETE:
+        return "complete"
+    return text
+
+
+def _has_lifecycle_starts(values: Iterable[str]) -> bool:
+    return any(_lifecycle_kind(v) == "start" for v in values)
 
 
 def _suggest_roles(columns: list[str], rows: list[dict], fmt: str) -> dict[str, dict]:
@@ -578,7 +731,12 @@ def _suggest_roles(columns: list[str], rows: list[dict], fmt: str) -> dict[str, 
                 have_ts = True
             elif col == "org:resource":
                 object_role(col, ROLE_RESOURCE, DEFAULT_RESOURCE_TYPE)
+            elif col == "lifecycle:transition" and _has_lifecycle_starts(samples[col]):
+                # Only with starts in it: a log of completions alone needs
+                # no pairing, and keeps the column as an attribute.
+                out[col] = {"role": ROLE_LIFECYCLE}
     else:
+        ts_candidates: list[tuple[str, str]] = []  # (column, format)
         for col in columns:
             n = _norm(col)
             if first_object is None and (
@@ -591,13 +749,32 @@ def _suggest_roles(columns: list[str], rows: list[dict], fmt: str) -> dict[str, 
             ):
                 out[col] = {"role": ROLE_ACTIVITY}
                 have_activity = True
-            elif not have_ts and any(k in n for k in ("timestamp", "time", "date", "completed", "start")):
-                suggestion = suggest_timestamp_format(samples[col][:50])
-                if suggestion:
-                    out[col] = {"role": ROLE_TIMESTAMP, "format": suggestion}
-                    have_ts = True
+            elif any(k in n for k in ("timestamp", "time", "date", "completed", "start", "begin", "end", "finish")) and (
+                suggestion := suggest_timestamp_format(samples[col][:50])
+            ):
+                ts_candidates.append((col, suggestion))
             elif n in ("resource", "orgresource", "user", "performer", "employee", "agent", "originator"):
                 object_role(col, ROLE_RESOURCE, DEFAULT_RESOURCE_TYPE)
+            elif ("lifecycle" in n or n == "transition") and _has_lifecycle_starts(samples[col]):
+                out[col] = {"role": ROLE_LIFECYCLE}
+        if ts_candidates:
+            # A start and an end column: the event happens at the start, the
+            # end is kept as an attribute. One time column is the timestamp
+            # whatever its name.
+            def named(*words):
+                return next((c for c in ts_candidates if any(w in _norm(c[0]) for w in words)), None)
+
+            start = named("start", "begin")
+            ts = start or ts_candidates[0]
+            out[ts[0]] = {"role": ROLE_TIMESTAMP, "format": ts[1]}
+            have_ts = True
+            end = next(
+                (c for c in ts_candidates
+                 if c is not ts and any(w in _norm(c[0]) for w in ("end", "complete", "finish", "stop"))),
+                None,
+            )
+            if end is not None:
+                out[end[0]] = {"role": ROLE_END_TIMESTAMP}
 
     for col in columns:
         if col in out:
@@ -630,28 +807,37 @@ def preview_flat_log(
     truncated: bool = False,
     delimiter: Optional[str] = None,
     encoding: Optional[str] = None,
+    sheet: Optional[str] = None,
 ) -> dict:
     """Describe the first rows of a flat log for the mapping dialog.
 
     ``data`` may be only the first part of the file (``truncated=True``):
     the last, possibly cut-off CSV line is dropped and an XML parse error at
-    the end of an XES sample is tolerated.
+    the end of an XES sample is tolerated. An Excel file is a zip archive,
+    which cannot be read in part: ``data`` must be all of it.
 
-    ``encoding`` overrides the detected text encoding of a CSV.
+    ``encoding`` overrides the detected text encoding of a CSV; ``sheet``
+    chooses the worksheet of an Excel file.
 
     Returns ``{"format", "kind", "columns", "rows", "delimiter", "encoding",
-    "truncated", "timestamp_presets", "encodings"}`` where ``kind`` is ``"flat"`` or ``"ocel_csv"`` (an
-    OCEL 2.0 CSV, which needs no mapping) and every column is
-    ``{"name", "suggestion": {...}, "empty": int, "distinct": int}``.
+    "sheet", "sheets", "truncated", "timestamp_presets", "encodings"}`` where
+    ``kind`` is ``"flat"`` or ``"ocel_csv"`` (an OCEL 2.0 CSV, which needs no
+    mapping) and every column is ``{"name", "suggestion": {...}, "empty":
+    int, "distinct": int}``.
     """
     fmt = flat_log_format(file_name)
     if fmt is None:
-        raise ValueError(f"'{file_name}' is not an XES or CSV file.")
+        raise ValueError(f"'{file_name}' is not an XES, CSV or Excel file.")
 
     rows: list[dict] = []
     columns: list[str] = []
     used_delimiter: Optional[str] = None
     used_encoding: Optional[str] = None
+
+    if fmt == "xlsx":
+        if truncated:
+            raise FlatLogMappingError("Only part of the Excel file arrived; it has to be read whole.")
+        return _preview_xlsx(io.BytesIO(data), max_rows, sheet)
 
     if fmt == "xes":
         if _is_gz(file_name):
@@ -681,11 +867,24 @@ def preview_flat_log(
     return _describe_preview(fmt, columns, rows, used_delimiter, used_encoding, truncated)
 
 
+def _preview_xlsx(source, max_rows: int, sheet: Optional[str]) -> dict:
+    with _Workbook(source) as book:
+        ws = book.pick(sheet)
+        columns, row_iter = book.rows(ws)
+        rows = list(itertools.islice(row_iter, max_rows))
+        more = next(row_iter, None) is not None
+        preview = _describe_preview("xlsx", columns, rows, None, None, more)
+        preview["sheet"] = ws.title
+        preview["sheets"] = book.sheet_names
+    return preview
+
+
 def preview_flat_log_file(
     file_path: str,
     max_rows: int = 100,
     delimiter: Optional[str] = None,
     encoding: Optional[str] = None,
+    sheet: Optional[str] = None,
 ) -> dict:
     """:func:`preview_flat_log` for a file on disk, read as a stream.
 
@@ -695,7 +894,9 @@ def preview_flat_log_file(
     """
     fmt = flat_log_format(file_path)
     if fmt is None:
-        raise ValueError(f"'{file_path}' is not an XES or CSV file.")
+        raise ValueError(f"'{file_path}' is not an XES, CSV or Excel file.")
+    if fmt == "xlsx":
+        return _preview_xlsx(file_path, max_rows, sheet)
     used_delimiter = used_encoding = None
     if fmt == "csv":
         with open(file_path, "rb") as handle:
@@ -735,6 +936,9 @@ def _describe_preview(fmt, columns, rows, used_delimiter, used_encoding, truncat
         "rows": [[r.get(c, "") for c in columns] for r in rows],
         "delimiter": used_delimiter,
         "encoding": _display_encoding(used_encoding),
+        # Excel only: the worksheet shown, and every worksheet to choose from.
+        "sheet": None,
+        "sheets": [],
         "truncated": truncated,
         "timestamp_presets": list(TIMESTAMP_PRESETS),
         "encodings": list(ENCODINGS),
@@ -757,18 +961,25 @@ def iter_flat_rows(
     delimiter: Optional[str] = None,
     raw=None,
     encoding: Optional[str] = None,
+    sheet: Optional[str] = None,
 ) -> Iterator[dict]:
-    """Every event row of an XES or CSV file, as ``{column: value}``.
+    """Every event row of an XES, CSV or Excel file, as ``{column: value}``.
 
     ``raw`` is an optional binary handle on ``file_path`` to read from; the
     caller can follow ``raw.tell()`` for progress (for ``.xes.gz`` it is the
-    position in the compressed file).
+    position in the compressed file, for Excel roughly the position in the
+    zip archive). ``sheet`` picks the worksheet of an Excel file.
     """
     fmt = flat_log_format(file_path)
     own = raw is None
     if own:
         raw = open(file_path, "rb")
     try:
+        if fmt == "xlsx":
+            with _Workbook(raw) as book:
+                _, rows = book.rows(book.pick(sheet))
+                yield from rows
+            return
         if fmt == "xes":
             source = gzip.GzipFile(fileobj=raw) if _is_gz(file_path) else raw
             yield from _iter_xes(source)
@@ -813,6 +1024,7 @@ class FlatLogMapping:
     columns: list[ColumnMapping] = field(default_factory=list)
     delimiter: Optional[str] = None
     encoding: Optional[str] = None  # CSV text encoding; detected when None
+    sheet: Optional[str] = None     # Excel worksheet; the default one when None
 
     # -- construction -------------------------------------------------------
 
@@ -845,7 +1057,10 @@ class FlatLogMapping:
         encoding = data.get("encoding") or None
         if encoding is not None and not isinstance(encoding, str):
             raise FlatLogMappingError("The encoding must be a string.")
-        mapping = cls(columns=cols, delimiter=delimiter, encoding=encoding)
+        sheet = data.get("sheet") or None
+        if sheet is not None and not isinstance(sheet, str):
+            raise FlatLogMappingError("The sheet must be a string.")
+        mapping = cls(columns=cols, delimiter=delimiter, encoding=encoding, sheet=sheet)
         mapping.validate()
         return mapping
 
@@ -860,7 +1075,8 @@ class FlatLogMapping:
                 column=col["name"], role=s.get("role", ROLE_IGNORE),
                 object_type=s.get("object_type"), format=s.get("format"), target=s.get("target"),
             ))
-        mapping = cls(columns=cols, delimiter=preview["delimiter"], encoding=preview["encoding"])
+        mapping = cls(columns=cols, delimiter=preview["delimiter"], encoding=preview["encoding"],
+                      sheet=preview["sheet"])
         mapping.validate()
         return mapping
 
@@ -883,6 +1099,15 @@ class FlatLogMapping:
                 resolve_timezone(c.timezone)
             except FlatLogMappingError as e:
                 problems.append(str(e))
+        end = self.by_role(ROLE_END_TIMESTAMP)
+        lifecycle = self.by_role(ROLE_LIFECYCLE)
+        if len(end) > 1:
+            problems.append("Choose at most one end timestamp column.")
+        if len(lifecycle) > 1:
+            problems.append("Choose at most one lifecycle column.")
+        if end and lifecycle:
+            # Both would set the end of the same event.
+            problems.append("Use either an end timestamp column or a lifecycle column, not both.")
         try:
             normalize_encoding(self.encoding)
         except FlatLogMappingError as e:
@@ -946,9 +1171,18 @@ def stage_flat_log(file_path: str, mapping: FlatLogMapping, buffers, tick=None, 
     Returns what happened, for the user: ``{"rows", "events",
     "skipped_no_activity", "skipped_no_object", "skipped_bad_timestamp",
     "bad_timestamp_example", "timestamp_format", "timezone",
-    "renamed_attributes", "unlisted_attributes"}`` (the last two map a
-    column to the name it is stored under: renamed because its own was
-    taken, or an XES key the mapping did not list, kept as an attribute).
+    "renamed_attributes", "unlisted_attributes", "end_attribute",
+    "end_unparsed", "end_unparsed_example", "lifecycle_merged",
+    "lifecycle_open_starts", "lifecycle_other"}``. ``renamed_attributes``
+    and ``unlisted_attributes`` map a column to the name it is stored under:
+    renamed because its own was taken, or an XES key the mapping did not
+    list, kept as an attribute. ``end_attribute`` is the event attribute end
+    times went to (None without an end or lifecycle column);
+    ``end_unparsed`` counts end times the timestamp format did not read
+    (the event is kept, without an end). ``lifecycle_merged`` counts
+    start/complete pairs made into one event, ``lifecycle_open_starts``
+    starts no completion followed, ``lifecycle_other`` rows with another
+    transition, kept as events of their own.
     Raises
     ``FlatLogMappingError`` when no row at all could be imported, with the
     reason that hit most.
@@ -966,6 +1200,10 @@ def stage_flat_log(file_path: str, mapping: FlatLogMapping, buffers, tick=None, 
     ]
     first_object_col = mapping.by_role(ROLE_OBJECT_ID)[0].column
     case_cols = {c.column for c in mapping.by_role(ROLE_OBJECT_ID)}
+    end_cols = mapping.by_role(ROLE_END_TIMESTAMP)
+    end_col = end_cols[0].column if end_cols else None
+    lifecycle_cols = mapping.by_role(ROLE_LIFECYCLE)
+    lifecycle_col = lifecycle_cols[0].column if lifecycle_cols else None
 
     def object_attr_name(c: ColumnMapping) -> str:
         # "case:customer" is the customer *of the case*; on the object the
@@ -981,7 +1219,13 @@ def stage_flat_log(file_path: str, mapping: FlatLogMapping, buffers, tick=None, 
     fixed_event = {r.lower() for r in _RESERVED_EVENT_ATTRS}
     fixed_object = {r.lower() for r in _RESERVED_OBJECT_ATTRS}
     taken_event, taken_object = set(fixed_event), set(fixed_object)
-    stored_event = [_claim_attribute_name(w, fixed_event, taken_event) for w in wanted_event]
+    # Claimed first, so the end time has the same name in every log; a data
+    # column called "end_timestamp" is the one that moves (and is reported).
+    end_name = (
+        _claim_attribute_name(END_TIMESTAMP_ATTRIBUTE, fixed_event, taken_event)
+        if end_col or lifecycle_col else None
+    )
+    stored_event =[_claim_attribute_name(w, fixed_event, taken_event) for w in wanted_event]
     stored_object = [_claim_attribute_name(w, fixed_object, taken_object) for w in wanted_object]
 
     event_attrs = [(c.column, name) for c, name in zip(event_attr_cols, stored_event)]
@@ -1046,7 +1290,8 @@ def stage_flat_log(file_path: str, mapping: FlatLogMapping, buffers, tick=None, 
             key_taken.add(key)
         return key
 
-    rows = iter_flat_rows(file_path, mapping.delimiter, raw=raw, encoding=mapping.encoding)
+    rows = iter_flat_rows(file_path, mapping.delimiter, raw=raw, encoding=mapping.encoding,
+                          sheet=mapping.sheet)
     if ts_fmt == FORMAT_AUTO:
         # Settle "auto" on one format for the whole column, from the first
         # rows, so no two rows are read with different day/month orders.
@@ -1054,13 +1299,75 @@ def stage_flat_log(file_path: str, mapping: FlatLogMapping, buffers, tick=None, 
         ts_fmt = infer_timestamp_format(r.get(ts_col.column) for r in head) or FORMAT_AUTO
         rows = itertools.chain(head, rows)
 
+    def link_objects(event_id: str, linked, already: Optional[set] = None) -> dict:
+        obj_by_col = {}
+        for col, obj_type, obj_id in linked:
+            obj_by_col[col] = (obj_type, obj_id)
+            if (obj_type, obj_id) not in seen_objects:
+                seen_objects[(obj_type, obj_id)] = None
+                buffers.add_object(obj_id, obj_type)
+            if already is None or obj_id not in already:
+                buffers.add_event_object(event_id, obj_id, None)
+                if already is not None:
+                    already.add(obj_id)
+        return obj_by_col
+
+    def add_event_attrs(event_id: str, row: dict, already: Optional[set] = None) -> set:
+        """The row's event attributes, but none the event has already."""
+        if keep_unlisted:
+            for col in row:
+                if col not in listed:
+                    add_unlisted(col)
+        added = set()
+        for col, name in event_attrs:
+            value = (row.get(col) or "").strip()
+            if value and (already is None or name not in already):
+                buffers.add_event_attr(event_id, name, value)
+                added.add(name)
+        return added
+
+    def record_object_attrs(row: dict, obj_by_col: dict, ts_value: str) -> None:
+        ts_key = None
+        for col, target, name in object_attrs:
+            owner = obj_by_col.get(target)
+            value = (row.get(col) or "").strip()
+            if owner is None or not value:
+                continue
+            if ts_key is None:
+                ts_key = _sort_key(ts_value)
+            runs = obj_attr_runs.setdefault((owner[1], name), [])
+            last = runs[-1] if runs else None
+            if last is not None and last[4] == value and ts_key >= last[2]:
+                last[2], last[3] = ts_key, ts_value  # the same value, later
+            else:
+                runs.append([ts_key, ts_value, ts_key, ts_value, value])
+
+    # Starts waiting for their completion: (activity, case ids) → the
+    # started events, oldest first, as [event_id, start sort key, linked
+    # object ids, event attribute names set].
+    open_starts: dict[tuple, deque] = {}
+    lifecycle_counts = {"lifecycle_merged": 0, "lifecycle_other": 0}
+    end_unparsed = 0
+    first_bad_end: Optional[str] = None
+
     n = 0
+    total = 0
     for row in rows:
+        total += 1
         parts = [(row.get(c) or "").strip() for c in activity_cols]
         activity = ACTIVITY_SEPARATOR.join(p for p in parts if p)
         if not activity:
             counts["skipped_no_activity"] += 1
             continue
+        kind = None
+        if lifecycle_col is not None:
+            transition = (row.get(lifecycle_col) or "").strip()
+            kind = _lifecycle_kind(transition)
+            if kind not in (None, "start", "complete"):
+                # "schedule", "suspend", ...: an event of its own, named so
+                # that it does not pass for the activity itself.
+                lifecycle_counts["lifecycle_other"] += 1
+                activity = f"{activity}{ACTIVITY_SEPARATOR}{transition}"
         linked = []
         for col, obj_type in object_cols:
             cell = (row.get(col) or "").strip()
@@ -1080,38 +1387,52 @@ def stage_flat_log(file_path: str, mapping: FlatLogMapping, buffers, tick=None, 
                 first_bad_ts = raw_ts
             continue
 
+        pair_key = None
+        if kind in ("start", "complete"):
+            pair_key = (activity, tuple(sorted(oid for col, _, oid in linked if col in case_cols)))
+        if kind == "complete":
+            waiting = open_starts.get(pair_key)
+            ts_key = _sort_key(ts_value)
+            if waiting and ts_key >= waiting[0][1]:
+                # The completion of an open start: the end of that event.
+                event_id, _, objects, attrs = waiting.popleft()
+                if not waiting:
+                    del open_starts[pair_key]
+                lifecycle_counts["lifecycle_merged"] += 1
+                buffers.add_event_attr(event_id, end_name, ts_value)
+                # Whoever completed it (another resource) is linked too.
+                obj_by_col = link_objects(event_id, linked, already=objects)
+                attrs |= add_event_attrs(event_id, row, already=attrs)
+                record_object_attrs(row, obj_by_col, ts_value)
+                if buffers.size() >= BATCH_SIZE:
+                    buffers.flush()
+                    if tick is not None:
+                        tick()
+                continue
+            # A completion without a start (logs that only record
+            # completions for some activities): an event at that time.
+
         n += 1
         event_id = f"e{n:0{_EVENT_ID_DIGITS}d}"
         buffers.add_event(event_id, activity, ts_value)
-        if keep_unlisted:
-            for col in row:
-                if col not in listed:
-                    add_unlisted(col)
-        for col, name in event_attrs:
-            value = (row.get(col) or "").strip()
-            if value:
-                buffers.add_event_attr(event_id, name, value)
-        obj_by_col = {}
-        for col, obj_type, obj_id in linked:
-            obj_by_col[col] = (obj_type, obj_id)
-            if (obj_type, obj_id) not in seen_objects:
-                seen_objects[(obj_type, obj_id)] = None
-                buffers.add_object(obj_id, obj_type)
-            buffers.add_event_object(event_id, obj_id, None)
-        ts_key = None
-        for col, target, name in object_attrs:
-            owner = obj_by_col.get(target)
-            value = (row.get(col) or "").strip()
-            if owner is None or not value:
-                continue
-            if ts_key is None:
-                ts_key = _sort_key(ts_value)
-            runs = obj_attr_runs.setdefault((owner[1], name), [])
-            last = runs[-1] if runs else None
-            if last is not None and last[4] == value and ts_key >= last[2]:
-                last[2], last[3] = ts_key, ts_value  # the same value, later
-            else:
-                runs.append([ts_key, ts_value, ts_key, ts_value, value])
+        attrs = add_event_attrs(event_id, row)
+        obj_by_col = link_objects(event_id, linked)
+        record_object_attrs(row, obj_by_col, ts_value)
+        if kind == "start":
+            objects = {oid for _, _, oid in linked}
+            open_starts.setdefault(pair_key, deque()).append(
+                [event_id, _sort_key(ts_value), objects, attrs]
+            )
+        if end_col is not None:
+            raw_end = (row.get(end_col) or "").strip()
+            if raw_end:
+                end_value = parse_timestamp(raw_end, ts_fmt, ts_zone)
+                if end_value is not None:
+                    buffers.add_event_attr(event_id, end_name, end_value)
+                else:
+                    end_unparsed += 1
+                    if first_bad_end is None:
+                        first_bad_end = raw_end
 
         if buffers.size() >= BATCH_SIZE:
             buffers.flush()
@@ -1139,7 +1460,12 @@ def stage_flat_log(file_path: str, mapping: FlatLogMapping, buffers, tick=None, 
 
     buffers.flush()
     counts["events"] = n
-    counts["rows"] = n + counts["skipped_no_activity"] + counts["skipped_no_object"] + counts["skipped_bad_timestamp"]
+    counts["rows"] = total
+    counts["end_attribute"] = end_name
+    counts["end_unparsed"] = end_unparsed
+    counts["end_unparsed_example"] = first_bad_end
+    counts.update(lifecycle_counts)
+    counts["lifecycle_open_starts"] = sum(len(q) for q in open_starts.values())
     counts["bad_timestamp_example"] = first_bad_ts
     counts["timestamp_format"] = ts_fmt
     counts["timezone"] = ts_zone
@@ -1165,6 +1491,7 @@ def stage_flat_log(file_path: str, mapping: FlatLogMapping, buffers, tick=None, 
 
 
 __all__ = [
+    "END_TIMESTAMP_ATTRIBUTE",
     "ColumnMapping",
     "FlatLogMapping",
     "FlatLogMappingError",
